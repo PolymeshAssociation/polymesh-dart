@@ -128,6 +128,33 @@ pub fn get_account_curve_tree_parameters() -> &'static CurveTreeParameters<Accou
 #[cfg(feature = "std")]
 pub fn reset_account_curve_tree_parameters() {}
 
+/// Register the shared per-curve fixed-base MSM tables (Pallas, Vesta) with the native host MSM so
+/// that proof-verification MSMs offloaded to the host use them. Call once at node startup on the
+/// native side (after which every host MSM whose bases include these generators is computed as
+/// fixed-base table + variable batch-affine). `cap` bounds how many `G`/`H` generators are tabled;
+/// proofs whose `padded_n` exceeds `cap` fall back to the plain MSM. Only affects performance — the
+/// split result is identical to the plain MSM, so a node that never calls this stays correct.
+#[cfg(all(feature = "std", feature = "host_msm_tables"))]
+pub fn register_host_msm_tables(cap: u32) {
+    fn register_layer<P, D>(params: &SingleLayerProofParametersNew<P, D>, cap: u32)
+    where
+        P: SWCurveConfig<BaseField: PrimeField> + Copy,
+        D: DiscreteLogParameters,
+    {
+        let pc = params.pc_gens();
+        let bp = params.bp_gens();
+        let cap = cap.min(bp.gens_capacity);
+        let mut bases = Vec::with_capacity(2 + 2 * cap as usize);
+        bases.push(pc.B);
+        bases.push(pc.B_blinding);
+        bases.extend(bp.G(cap, 1).copied());
+        bases.extend(bp.H(cap, 1).copied());
+        ark_host_msm_impl::register_table::<P>(&bases);
+    }
+    register_layer(get_pallas_layer_parameters(), cap);
+    register_layer(get_vesta_layer_parameters(), cap);
+}
+
 #[allow(static_mut_refs)]
 #[cfg(not(feature = "std"))]
 pub fn set_pallas_layer_parameters(

@@ -302,6 +302,469 @@ fn leg_encryption_configs() {
 }
 
 #[test]
+fn batch_decrypt_values() {
+    let mut rng = rand::thread_rng();
+
+    let label = b"batch-decrypt-participant-test";
+    let sig_key_gen = hash_to_pallas(label, b"sig-key-g").into_affine();
+    let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into_affine();
+    let enc_gen = hash_to_pallas(label, b"enc-key-h").into_affine();
+
+    let (sk_s_e, pk_s_e) = keygen_enc(&mut rng, enc_key_gen);
+    let (sk_r_e, pk_r_e) = keygen_enc(&mut rng, enc_key_gen);
+
+    let enc_keys = (0..2)
+        .map(|_| keygen_enc(&mut rng, enc_key_gen).1.0)
+        .collect::<Vec<_>>();
+    let med_keys = (0..2)
+        .map(|_| keygen_sig(&mut rng, sig_key_gen).1.0)
+        .collect::<Vec<_>>();
+    let public_enc_keys = (0..1)
+        .map(|_| keygen_enc(&mut rng, enc_key_gen).1.0)
+        .collect::<Vec<_>>();
+
+    let cases: [(Balance, AssetId, bool, PartyVisibility); 5] = [
+        (100, 1, false, PartyVisibility::FullVisibility),
+        (250, 2, true, PartyVisibility::NoVisibility),
+        (0, 3, false, PartyVisibility::OnlySenderSeesReceiver),
+        (777, 4, true, PartyVisibility::OnlyReceiverSeesSender),
+        (65535, 5, false, PartyVisibility::FullVisibility),
+    ];
+
+    let leg_encs = cases
+        .iter()
+        .map(|&(amount, asset_id, reveal_asset_id, visibility)| {
+            let leg = Leg::new(
+                pk_s_e.0,
+                pk_r_e.0,
+                amount,
+                asset_id,
+                enc_keys.clone(),
+                med_keys.clone(),
+                public_enc_keys.clone(),
+            )
+            .unwrap();
+            let (leg_enc, _) = leg
+                .encrypt(
+                    &mut rng,
+                    LegEncConfig {
+                        visibility,
+                        reveal_asset_id,
+                    },
+                    enc_key_gen,
+                    enc_gen,
+                )
+                .unwrap();
+            leg_enc
+        })
+        .collect::<Vec<_>>();
+
+    let expected = cases
+        .iter()
+        .map(|&(amount, asset_id, ..)| (asset_id, amount))
+        .collect::<Vec<_>>();
+
+    let max_asset_id = 10;
+    let max_amount = 1 << 17;
+
+    // As sender.
+    let out = LegEncryption::batch_decrypt_values_as_participant(
+        &leg_encs,
+        true,
+        &sk_s_e.0,
+        enc_gen,
+        max_asset_id,
+        max_amount,
+    )
+    .unwrap();
+    assert_eq!(out, expected);
+
+    // As sender.
+    for (leg_enc, &(asset_id, amount)) in leg_encs.iter().zip(expected.iter()) {
+        let (_, _, a_id, amt) = leg_enc.decrypt_as_sender(&sk_s_e.0, enc_gen).unwrap();
+        assert_eq!((a_id, amt), (asset_id, amount));
+    }
+
+    // As receiver.
+    let out = LegEncryption::batch_decrypt_values_as_participant(
+        &leg_encs,
+        false,
+        &sk_r_e.0,
+        enc_gen,
+        max_asset_id,
+        max_amount,
+    )
+    .unwrap();
+    assert_eq!(out, expected);
+    for (leg_enc, &(asset_id, amount)) in leg_encs.iter().zip(expected.iter()) {
+        let (_, _, a_id, amt) = leg_enc.decrypt_as_receiver(&sk_r_e.0, enc_gen).unwrap();
+        assert_eq!((a_id, amt), (asset_id, amount));
+    }
+
+    // Empty batch.
+    let out = LegEncryption::<PallasA>::batch_decrypt_values_as_participant(
+        &[],
+        true,
+        &sk_s_e.0,
+        enc_gen,
+        max_asset_id,
+        max_amount,
+    )
+    .unwrap();
+    assert!(out.is_empty());
+
+    // A value outside the searched range fails the discrete-log solve.
+    let leg = Leg::new(
+        pk_s_e.0,
+        pk_r_e.0,
+        max_amount + 1,
+        1,
+        enc_keys.clone(),
+        med_keys.clone(),
+        public_enc_keys.clone(),
+    )
+    .unwrap();
+    let (leg_enc, _) = leg
+        .encrypt(
+            &mut rng,
+            LegEncConfig {
+                visibility: PartyVisibility::FullVisibility,
+                reveal_asset_id: false,
+            },
+            enc_key_gen,
+            enc_gen,
+        )
+        .unwrap();
+    assert!(
+        LegEncryption::batch_decrypt_values_as_participant(
+            &[leg_enc],
+            true,
+            &sk_s_e.0,
+            enc_gen,
+            max_asset_id,
+            max_amount,
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn batch_identify_role() {
+    let mut rng = rand::thread_rng();
+
+    let label = b"batch-identify-role-test";
+    let sig_key_gen = hash_to_pallas(label, b"sig-key-g").into_affine();
+    let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into_affine();
+    let enc_gen = hash_to_pallas(label, b"enc-key-h").into_affine();
+
+    // Three parties A, B, C.
+    let (sk_a, pk_a) = keygen_enc(&mut rng, enc_key_gen);
+    let (_, pk_b) = keygen_enc(&mut rng, enc_key_gen);
+    let (sk_c, pk_c) = keygen_enc(&mut rng, enc_key_gen);
+
+    let enc_keys = vec![keygen_enc(&mut rng, enc_key_gen).1.0];
+    let med_keys = vec![keygen_sig(&mut rng, sig_key_gen).1.0];
+
+    // (sender pk, receiver pk, visibility): A sends to B, B sends to A, B sends to C.
+    let legs_desc = [
+        (pk_a.0, pk_b.0, PartyVisibility::FullVisibility),
+        (pk_b.0, pk_a.0, PartyVisibility::NoVisibility),
+        (pk_b.0, pk_c.0, PartyVisibility::OnlySenderSeesReceiver),
+    ];
+
+    let legs = legs_desc
+        .iter()
+        .enumerate()
+        .map(|(i, &(pk_s, pk_r, visibility))| {
+            let leg = Leg::new(
+                pk_s,
+                pk_r,
+                100 + i as Balance,
+                1,
+                enc_keys.clone(),
+                med_keys.clone(),
+                vec![],
+            )
+            .unwrap();
+            leg.encrypt(
+                &mut rng,
+                LegEncConfig {
+                    visibility,
+                    reveal_asset_id: i % 2 == 0,
+                },
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap()
+            .0
+        })
+        .collect::<Vec<_>>();
+
+    let roles_a = LegEncryption::batch_identify_role(&legs, &sk_a.0, pk_a.0).unwrap();
+    assert_eq!(
+        roles_a,
+        vec![Some(Role::Sender), Some(Role::Receiver), None]
+    );
+
+    let roles_c = LegEncryption::batch_identify_role(&legs, &sk_c.0, pk_c.0).unwrap();
+    assert_eq!(roles_c, vec![None, None, Some(Role::Receiver)]);
+
+    // A party unrelated to every leg matches nothing.
+    let (sk_d, pk_d) = keygen_enc(&mut rng, enc_key_gen);
+    let roles_d = LegEncryption::batch_identify_role(&legs, &sk_d.0, pk_d.0).unwrap();
+    assert_eq!(roles_d, vec![None, None, None]);
+
+    // Empty batch.
+    let roles_empty = LegEncryption::<PallasA>::batch_identify_role(&[], &sk_a.0, pk_a.0).unwrap();
+    assert!(roles_empty.is_empty());
+}
+
+#[test]
+fn batch_decrypt_legs() {
+    let mut rng = rand::thread_rng();
+
+    let label = b"test";
+    let sig_key_gen = hash_to_pallas(label, b"sig-key-g").into_affine();
+    let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into_affine();
+    let enc_gen = hash_to_pallas(label, b"enc-key-h").into_affine();
+
+    let (sk_a, pk_a) = keygen_enc(&mut rng, enc_key_gen);
+    let (sk_b, pk_b) = keygen_enc(&mut rng, enc_key_gen);
+    let (_, pk_c) = keygen_enc(&mut rng, enc_key_gen);
+
+    let enc_keys = vec![keygen_enc(&mut rng, enc_key_gen).1.0];
+    let med_keys = vec![keygen_sig(&mut rng, sig_key_gen).1.0];
+
+    let n = 30;
+    assert_eq!(n % 3, 0);
+    let mut legs = Vec::with_capacity(n);
+    let mut expected = BTreeMap::new();
+    for i in 0..n {
+        let (pk_s, pk_r, role) = match i % 3 {
+            0 => (pk_a.0, pk_b.0, Some(Role::Sender)), // pk_a is sender
+            1 => (pk_b.0, pk_a.0, Some(Role::Receiver)), // pk_a is receiver
+            _ => (pk_b.0, pk_c.0, None),               // pk_a is not party to this
+        };
+        let asset_id = (i % 5) as AssetId;
+        let amount = 1000 + i as Balance;
+        let leg = Leg::new(
+            pk_s,
+            pk_r,
+            amount,
+            asset_id,
+            enc_keys.clone(),
+            med_keys.clone(),
+            vec![],
+        )
+        .unwrap();
+        let (leg_enc, _) = leg
+            .encrypt(
+                &mut rng,
+                LegEncConfig {
+                    visibility: PartyVisibility::FullVisibility,
+                    reveal_asset_id: i % 2 == 1,
+                },
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+        legs.push(leg_enc);
+        if let Some(role) = role {
+            expected.insert(i as u32, (role, asset_id, amount));
+        }
+    }
+
+    let max_asset_id = 10;
+    let max_amount = 1 << 17;
+
+    LegEncryption::batch_decrypt_legs(&legs, &sk_a.0, pk_a.0, enc_gen, max_asset_id, max_amount)
+        .unwrap();
+
+    let start = Instant::now();
+    let mut one_at_a_time = BTreeMap::new();
+    for (i, leg_enc) in legs.iter().enumerate() {
+        if let Some(role) = leg_enc.identify_role(&sk_a.0, pk_a.0).unwrap() {
+            let (asset_id, amount) = LegEncryption::batch_decrypt_values(
+                &[(leg_enc, role)],
+                &sk_a.0,
+                enc_gen,
+                max_asset_id,
+                max_amount,
+            )
+            .unwrap()[0];
+            one_at_a_time.insert(i as u32, (role, asset_id, amount));
+        }
+    }
+    let one_at_a_time_time = start.elapsed();
+
+    let start = Instant::now();
+    let scanned = LegEncryption::batch_decrypt_legs(
+        &legs,
+        &sk_a.0,
+        pk_a.0,
+        enc_gen,
+        max_asset_id,
+        max_amount,
+    )
+    .unwrap();
+    let batched_time = start.elapsed();
+
+    assert_eq!(scanned.len(), 2 * (n / 3));
+    assert_eq!(
+        scanned
+            .values()
+            .filter(|(role, ..)| role.is_sender())
+            .count(),
+        n / 3
+    );
+
+    println!(
+        "{n} legs, {} for this party: one at a time {one_at_a_time_time:?}, batched {batched_time:?}",
+        expected.len()
+    );
+    assert_eq!(one_at_a_time, expected);
+    assert_eq!(scanned, expected);
+
+    for (i, leg_enc) in legs.iter().enumerate() {
+        let role = leg_enc.identify_role(&sk_a.0, pk_a.0).unwrap();
+        assert_eq!(role, scanned.get(&(i as u32)).map(|(role, ..)| *role));
+        match scanned.get(&(i as u32)) {
+            Some(&(Role::Sender, asset_id, amount)) => {
+                let (_, _, a_id, amt) = leg_enc.decrypt_as_sender(&sk_a.0, enc_gen).unwrap();
+                assert_eq!((a_id, amt), (asset_id, amount));
+            }
+            Some(&(Role::Receiver, asset_id, amount)) => {
+                let (_, _, a_id, amt) = leg_enc.decrypt_as_receiver(&sk_a.0, enc_gen).unwrap();
+                assert_eq!((a_id, amt), (asset_id, amount));
+            }
+            None => (),
+        }
+    }
+
+    let scanned = LegEncryption::batch_decrypt_legs(
+        &legs,
+        &sk_b.0,
+        pk_b.0,
+        enc_gen,
+        max_asset_id,
+        max_amount,
+    )
+    .unwrap();
+    assert_eq!(scanned.len(), n);
+    assert_eq!(
+        scanned
+            .values()
+            .filter(|(role, ..)| role.is_sender())
+            .count(),
+        2 * (n / 3)
+    );
+
+    for (i, (role, asset_id, amount)) in &scanned {
+        let expected_role = if i % 3 == 0 {
+            Role::Receiver
+        } else {
+            Role::Sender
+        };
+        assert_eq!(*role, expected_role);
+        assert_eq!(
+            (*asset_id, *amount),
+            ((i % 5) as AssetId, 1000 + *i as Balance)
+        );
+    }
+
+    // Not party of any leg
+    let (sk_d, pk_d) = keygen_enc(&mut rng, enc_key_gen);
+    let scanned = LegEncryption::batch_decrypt_legs(
+        &legs,
+        &sk_d.0,
+        pk_d.0,
+        enc_gen,
+        max_asset_id,
+        max_amount,
+    )
+    .unwrap();
+    assert!(scanned.is_empty());
+
+    let scanned_empty = LegEncryption::<PallasA>::batch_decrypt_legs(
+        &[],
+        &sk_a.0,
+        pk_a.0,
+        enc_gen,
+        max_asset_id,
+        max_amount,
+    )
+    .unwrap();
+    assert!(scanned_empty.is_empty());
+}
+
+#[test]
+fn batch_decrypt_values_mixed_roles() {
+    let mut rng = rand::thread_rng();
+
+    let label = b"batch-decrypt-values-mixed-roles-test";
+    let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into_affine();
+    let enc_gen = hash_to_pallas(label, b"enc-key-h").into_affine();
+
+    let (sk_a, pk_a) = keygen_enc(&mut rng, enc_key_gen);
+    let (_, pk_b) = keygen_enc(&mut rng, enc_key_gen);
+
+    let n = 8usize;
+    let mut legs = Vec::with_capacity(n);
+    let mut roles = Vec::with_capacity(n);
+    let mut expected = Vec::with_capacity(n);
+    for i in 0..n {
+        let (pk_s, pk_r, role) = if i % 2 == 0 {
+            (pk_a.0, pk_b.0, Role::Sender)
+        } else {
+            (pk_b.0, pk_a.0, Role::Receiver)
+        };
+        let asset_id = (i % 3) as AssetId;
+        let amount = 500 + i as Balance;
+        let leg = Leg::new(pk_s, pk_r, amount, asset_id, vec![], vec![], vec![]).unwrap();
+        let (leg_enc, _) = leg
+            .encrypt(
+                &mut rng,
+                LegEncConfig {
+                    visibility: PartyVisibility::FullVisibility,
+                    reveal_asset_id: i % 4 == 1,
+                },
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+        legs.push(leg_enc);
+        roles.push(role);
+        expected.push((asset_id, amount));
+    }
+
+    let with_roles = legs
+        .iter()
+        .zip(roles.iter())
+        .map(|(leg, role)| (leg, *role))
+        .collect::<Vec<_>>();
+    let out =
+        LegEncryption::batch_decrypt_values(&with_roles, &sk_a.0, enc_gen, 10, 1 << 17).unwrap();
+    assert_eq!(out, expected);
+
+    // The wrong role for a leg decrypts to a point with no discrete log in range.
+    let flipped = legs
+        .iter()
+        .zip(roles.iter())
+        .map(|(leg, role)| {
+            (
+                leg,
+                if role.is_sender() {
+                    Role::Receiver
+                } else {
+                    Role::Sender
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+    assert!(LegEncryption::batch_decrypt_values(&flipped, &sk_a.0, enc_gen, 10, 1 << 17).is_err());
+}
+
+#[test]
 fn leg_verification() {
     let mut rng = rand::thread_rng();
 

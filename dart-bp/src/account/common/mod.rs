@@ -134,6 +134,9 @@ pub struct CommonStateChangeProver<
     pub t_bp_randomness_relations: SchnorrCommitment<Affine<G0>>,
     pub comm_bp_blinding: F0,
     pub sk_enc_inv_blinding: F0,
+    /// `sk_enc^-1` in solo mode, `None` in host mode. Computed in the T-value phase and reused by
+    /// the response phase.
+    pub sk_enc_inv: Option<F0>,
     pub old_balance_blinding: F0,
     pub new_balance_blinding: F0,
     /// Amount blindings of the balance-changed legs, shared with `BalanceChangeProver` so the
@@ -391,6 +394,7 @@ impl<
             t_null,
             t_leg_link,
             t_bp_randomness_relations,
+            sk_enc_inv,
         ) = generate_sigma_t_values_for_common_state_change(
             rng,
             legs,
@@ -448,6 +452,7 @@ impl<
             t_bp_randomness_relations,
             comm_bp_blinding,
             sk_enc_inv_blinding,
+            sk_enc_inv: Some(sk_enc_inv),
             old_balance_blinding,
             new_balance_blinding,
             balance_amount_blindings,
@@ -504,10 +509,14 @@ impl<
         updated_account: &AccountState<Affine<G0>>,
         challenge: &F0,
     ) -> Result<CommonStateChangeProof<L, F0, F1, G0, G1>> {
+        let mut sk_enc_inv = self.sk_enc_inv.take().ok_or_else(|| {
+            Error::ProofGenerationError("sk_enc_inv is missing (solo mode expected)".to_string())
+        })?;
         let (resp_acc_old, resp_acc_new, resp_null, resp_leg_link, resp_bp_randomness_relations) =
             generate_sigma_responses_for_common_state_change(
                 sk_aff,
                 sk_enc,
+                sk_enc_inv,
                 account,
                 updated_account,
                 self.leaf_rerandomization,
@@ -523,6 +532,7 @@ impl<
 
         Zeroize::zeroize(&mut self.leaf_rerandomization);
         Zeroize::zeroize(&mut self.comm_bp_blinding);
+        Zeroize::zeroize(&mut sk_enc_inv);
 
         Ok(CommonStateChangeProof {
             partial: CommonStateChangeProofPartial {

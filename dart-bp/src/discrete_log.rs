@@ -1,6 +1,8 @@
 use ark_ec::{AffineRepr, CurveGroup};
 use ark_ff::AdditiveGroup;
-use dock_crypto_utils::solve_discrete_log::solve_discrete_log_bsgs_precomputed_with_table_size;
+use dock_crypto_utils::solve_discrete_log::{
+    solve_discrete_log_bsgs_precomputed_batch, solve_discrete_log_bsgs_precomputed_with_table_size,
+};
 // Use BTreeMap for no_std compatibility
 #[cfg(not(feature = "std"))]
 use ark_std::{collections::BTreeMap as HashMap, sync::Arc, vec::Vec};
@@ -19,6 +21,15 @@ pub fn solve_discrete_log_precomputed<G: CurveGroup + Send + Sync + 'static>(
     target: G,
 ) -> Option<u64> {
     solve_discrete_log_bsgs_precomputed_with_table_size(max, 0, MAX_NUM_BABY_STEPS, base, target)
+}
+
+/// Discrete log in `[0, max]` for many targets sharing one `base`, one entry per target in order.
+pub fn solve_discrete_log_precomputed_batch<G: CurveGroup + Send + Sync + 'static>(
+    max: u64,
+    base: G,
+    targets: &[G],
+) -> Vec<Option<u64>> {
+    solve_discrete_log_bsgs_precomputed_batch(max, 0, base, targets)
 }
 
 /// Lockstep giant steps per normalization window. Amortizes the batch inversion and (in

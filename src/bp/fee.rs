@@ -907,8 +907,8 @@ impl<
                 let nullifier = self.nullifier.get_affine()?;
 
                 // Phase 1: derive challenge_h from host transcript
-                let (mut even_verifier, odd_verifier, challenge_h) = proof
-                    .challenge_contribution::<C::DLogParams0, C::DLogParams1>(
+                let (mut even_verifier, odd_verifier, challenge_h, comm_old, comm_new) =
+                    proof.challenge_contribution::<C::DLogParams0, C::DLogParams1>(
                         self.asset_id,
                         self.amount,
                         updated_account_commitment,
@@ -982,6 +982,7 @@ impl<
                     account_comm_key,
                     rng,
                     Some(even_rmc),
+                    Some((comm_old, comm_new)),
                 )?;
 
                 polymesh_dart_bp::util::handle_verification_tuples(

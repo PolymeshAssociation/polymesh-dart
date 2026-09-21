@@ -246,6 +246,7 @@ impl<
             even_prover,
             odd_prover,
             Some(re_randomized_path),
+            None,
         )
     }
 
@@ -268,6 +269,9 @@ impl<
         even_prover: &mut Prover<MerlinTranscript, Affine<G1>>,
         odd_prover: &mut Prover<MerlinTranscript, Affine<G0>>,
         re_randomized_path: Option<SelectAndRerandomizePathWithDivisorComms<L, G1, G0>>,
+        // `asset_data.points()` precomputed by the caller. Lets a settlement reuse one point list
+        // across legs of the same asset. `None` computes it here.
+        precomputed_asset_data_points: Option<Vec<Affine<G0>>>,
     ) -> Result<Self> {
         #[cfg(not(feature = "ignore_prover_input_sanitation"))]
         {
@@ -289,7 +293,8 @@ impl<
         let mut at = F0::from(leg.core.asset_id);
         let mut amount = F0::from(leg.core.amount);
 
-        let asset_data_points = asset_data.points(&asset_comm_params);
+        let asset_data_points =
+            precomputed_asset_data_points.unwrap_or_else(|| asset_data.points(&asset_comm_params));
 
         let num_asset_data_points = asset_data_points.len();
 
@@ -845,8 +850,23 @@ impl<
             )?;
         }
 
-        for ((p, mediator), (re_rand_point, blinding_point)) in
-            pk_m_proto.iter_mut().zip(mediators.iter()).zip(
+        // `y = ct_med - re_rand_point` for every mediator, with one shared batch normalization.
+        let y_meds_ct = <Affine<G0> as AffineRepr>::Group::normalize_batch(
+            &mediators
+                .iter()
+                .zip(
+                    re_randomized_points
+                        .re_randomized_points
+                        .iter()
+                        .skip(l.len() + 1),
+                )
+                .map(|(mediator, re_rand_point)| mediator.ct_med - re_rand_point)
+                .collect::<Vec<_>>(),
+        );
+        for (med_idx, ((p, mediator), (_re_rand_point, blinding_point))) in pk_m_proto
+            .iter_mut()
+            .zip(mediators.iter())
+            .zip(
                 re_randomized_points
                     .re_randomized_points
                     .iter()
@@ -858,12 +878,13 @@ impl<
                             .map(|(_, v)| v),
                     ),
             )
+            .enumerate()
         {
-            let y = mediator.ct_med - re_rand_point;
+            let y = y_meds_ct[med_idx];
             p.0.challenge_contribution(
                 &enc_key_gen,
                 &neg_blinding_base,
-                &y.into_affine(),
+                &y,
                 dst::LEG_CREATE_MED_KEY_CT,
                 &mut transcript,
             )?;
@@ -1568,8 +1589,25 @@ impl<
             )?;
         }
 
-        for (((p_0, p_1, p_2), mediator), (re_rand_point, blinding_point)) in
-            self.resp_eph_pk_meds.iter().zip(mediators.iter()).zip(
+        // `y = ct_med - re_rand_point` for every mediator, with one shared batch normalization;
+        // absorption order and values are unchanged.
+        let y_meds_ct = <Affine<G0> as AffineRepr>::Group::normalize_batch(
+            &mediators
+                .iter()
+                .zip(
+                    self.re_randomized_points
+                        .re_randomized_points
+                        .iter()
+                        .skip(num_enc_keys + 1),
+                )
+                .map(|(mediator, re_rand_point)| mediator.ct_med - re_rand_point)
+                .collect::<Vec<_>>(),
+        );
+        for (med_idx, (((p_0, p_1, p_2), mediator), (_re_rand_point, blinding_point))) in self
+            .resp_eph_pk_meds
+            .iter()
+            .zip(mediators.iter())
+            .zip(
                 self.re_randomized_points
                     .re_randomized_points
                     .iter()
@@ -1581,12 +1619,13 @@ impl<
                             .map(|(_, v)| v),
                     ),
             )
+            .enumerate()
         {
-            let y = mediator.ct_med - re_rand_point;
+            let y = y_meds_ct[med_idx];
             p_0.challenge_contribution(
                 &enc_key_gen,
                 &neg_blinding_base,
-                &y.into_affine(),
+                &y,
                 dst::LEG_CREATE_MED_KEY_CT,
                 &mut transcript,
             )?;
@@ -1884,7 +1923,20 @@ impl<
             );
         }
 
-        for (i, (((p_0, p_1, p_2), mediator), re_rand_point)) in self
+        // `y = ct_med - re_rand_point` for every mediator, with one shared batch normalization.
+        let y_meds_ct = <Affine<G0> as AffineRepr>::Group::normalize_batch(
+            &mediators
+                .iter()
+                .zip(
+                    self.re_randomized_points
+                        .re_randomized_points
+                        .iter()
+                        .skip(num_enc_keys + 1),
+                )
+                .map(|(mediator, re_rand_point)| mediator.ct_med - re_rand_point)
+                .collect::<Vec<_>>(),
+        );
+        for (i, (((p_0, p_1, p_2), mediator), _re_rand_point)) in self
             .resp_eph_pk_meds
             .iter()
             .zip(mediators.iter())
@@ -1896,13 +1948,13 @@ impl<
             )
             .enumerate()
         {
-            let y = mediator.ct_med - re_rand_point;
+            let y = y_meds_ct[i];
 
             verify_or_rmc_3!(
                 rmc,
                 p_0,
                 format!("resp_eph_pk_meds[{}].0 verification failed", i),
-                y.into_affine(),
+                y,
                 enc_key_gen,
                 neg_blinding_base,
                 &challenge,

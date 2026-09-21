@@ -5,6 +5,7 @@ use crate::dst;
 use crate::error::*;
 use crate::util::{bp_gens_for_vec_commitment, handle_verification_tuple};
 use crate::{NONCE_LABEL, TXN_CHALLENGE_LABEL};
+use ark_ec::scalar_mul::BatchMulPreprocessing;
 use ark_ec::{AffineRepr, CurveGroup, VariableBaseMSM};
 use ark_ff::{Field, PrimeField, Zero};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
@@ -113,6 +114,16 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
 
         let sk_blinding = G::ScalarField::rand(rng);
 
+        // Each fixed base is multiplied by `NUM_CHUNKS` scalars (one per chunk), so build a
+        // fixed-base window table per base once and reuse it via `windowed_mul` (same points as
+        // `base * scalar`).
+        let ek_table = BatchMulPreprocessing::<G::Group>::new(enc_key_gen.into_group(), NUM_CHUNKS);
+        let eg_table = BatchMulPreprocessing::<G::Group>::new(enc_gen.into_group(), NUM_CHUNKS);
+        let rp_tables: Vec<_> = recipient_pks
+            .iter()
+            .map(|pk| BatchMulPreprocessing::<G::Group>::new(pk.into_group(), NUM_CHUNKS))
+            .collect();
+
         for (i, &sk_chunk) in sk_chunks.iter().enumerate() {
             let r_i = G::ScalarField::rand(rng);
             enc_rands[i] = r_i;
@@ -122,7 +133,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             sk_chunks_blindings[i] = sk_i_blinding;
 
             // Shared ciphertext for chunk `ct = enc_key_gen * r_i + enc_gen * sk_i`
-            let ct = (enc_key_gen * r_i + enc_gen * sk_chunk).into_affine();
+            let ct = (ek_table.windowed_mul(&r_i) + eg_table.windowed_mul(&sk_chunk)).into_affine();
             shared_cts[i] = ct;
 
             // Prove `ct = enc_key_gen * r_i + enc_gen * sk_i`. The response for `r_i` will be reused in recipient proofs.
@@ -146,7 +157,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             // Per-recipient ciphertext for chunk i: E_ji = recipient_pk_j * r_i (one per recipient)
             // Prove each uses the same r_i (via partial proof that reuses r_i response from shared_proto)
             for (j, &recipient_pk) in recipient_pks.iter().enumerate() {
-                let E_ji = (recipient_pk * r_i).into_affine();
+                let E_ji = rp_tables[j].windowed_mul(&r_i).into_affine();
                 recipient_cts[j][i] = E_ji;
 
                 let recipient_proto =

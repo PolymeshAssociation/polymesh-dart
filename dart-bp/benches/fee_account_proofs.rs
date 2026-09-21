@@ -265,6 +265,64 @@ fn bench_fee_payment_verification(c: &mut Criterion) {
     )
     .unwrap();
 
+    // Fixed-base MSM vs combined MSM, per-proof BP verification.
+    #[cfg(feature = "build-tables")]
+    {
+        use bulletproofs::r1cs::verify_given_verification_tuple;
+        use curve_tree_relations::fixed_base_tables::{FixedBaseTables, FixedBaseTablesPair};
+        use polymesh_dart_bp::util::verify_tuples_with_tables;
+
+        let (even, odd) = proof
+            .verify_and_return_tuples(
+                asset_id,
+                fee_amount,
+                updated_account_comm,
+                nullifier,
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                &mut setup_rng,
+                None,
+            )
+            .unwrap();
+
+        let even_pc = account_tree_params.even_parameters.pc_gens();
+        let odd_pc = account_tree_params.odd_parameters.pc_gens();
+        let even_bp = account_tree_params.even_parameters.bp_gens();
+        let odd_bp = account_tree_params.odd_parameters.bp_gens();
+        let even_n = even.padded_n().unwrap();
+        let odd_n = odd.padded_n().unwrap();
+        let tables = FixedBaseTablesPair {
+            even: FixedBaseTables::with_capacity(even_bp, even_n),
+            odd: FixedBaseTables::with_capacity(odd_bp, odd_n),
+        };
+        println!(
+            "FeePayment fixed-base tables: even padded_n={even_n}, odd padded_n={odd_n}; table size = {:.2} MB (even {:.2} + odd {:.2})",
+            tables.table_bytes() as f64 / (1024.0 * 1024.0),
+            tables.even.table_bytes() as f64 / (1024.0 * 1024.0),
+            tables.odd.table_bytes() as f64 / (1024.0 * 1024.0),
+        );
+
+        c.bench_function("FeePayment per-proof BP verify: without tables", |b| {
+            b.iter(|| {
+                let (er, or) = rayon::join(
+                    || verify_given_verification_tuple(even.clone(), even_pc, even_bp),
+                    || verify_given_verification_tuple(odd.clone(), odd_pc, odd_bp),
+                );
+                er.unwrap();
+                or.unwrap();
+            });
+        });
+
+        c.bench_function("FeePayment per-proof BP verify: fixed-base tables", |b| {
+            b.iter(|| {
+                verify_tuples_with_tables(even.clone(), odd.clone(), even_pc, odd_pc, &tables)
+                    .unwrap();
+            });
+        });
+    }
+
     c.bench_function("FeePaymentProof verification", |b| {
         b.iter(|| {
             let mut local_rng = rand::thread_rng();

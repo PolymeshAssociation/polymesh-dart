@@ -493,6 +493,344 @@ mod tests {
     use polymesh_dart_common::NullifierSkGenCounter;
     use rand_core::SeedableRng;
 
+    /// Measure the overhead of this wrapper for the settlement proof and the sender/receiver
+    /// affirmation proofs. For each it measures the wrapper's public-API verify time and SCALE size,
+    /// and — by reaching the `inner` core proof — the core dart-bp `verify`, compressed
+    /// size, and the arkworks serialize/deserialize (`encode`/`decode`) that are the wrapper's prove-
+    /// and verify-side overhead.
+    /// Ignored by default because proving is slow; run with
+    /// `cargo test --release --lib wrapper_overhead -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn wrapper_overhead() {
+        use crate::curve_tree::*;
+        use std::time::{Duration, Instant};
+
+        fn bench<T>(iters: usize, mut f: impl FnMut() -> T) -> (Duration, T) {
+            let mut ds = Vec::with_capacity(iters);
+            let mut last = None;
+            for _ in 0..iters {
+                let t0 = Instant::now();
+                let v = std::hint::black_box(f());
+                ds.push(t0.elapsed());
+                last = Some(v);
+            }
+            ds.sort();
+            (ds[ds.len() / 2], last.unwrap())
+        }
+        fn ms(d: Duration) -> f64 {
+            d.as_secs_f64() * 1000.0
+        }
+
+        let mut rng = rand_chacha::ChaCha20Rng::from_seed([9u8; 32]);
+        let mut asset_tree = AssetCurveTree::new().unwrap();
+        let mut account_tree =
+            ProverCurveTree::<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>::new(
+                ACCOUNT_TREE_HEIGHT,
+            )
+            .unwrap();
+        let account_params = account_tree.params().clone();
+
+        let issuer_keys = AccountKeys::rand(&mut rng).unwrap();
+        let issuer_acct = issuer_keys.public_keys();
+        let investor_keys = AccountKeys::rand(&mut rng).unwrap();
+        let investor_acct = investor_keys.public_keys();
+        let auditor = AccountKeys::rand(&mut rng).unwrap().public_keys();
+        let ctx = b"wrapper_overhead";
+
+        let asset_id: AssetId = 0;
+        let asset_state =
+            AssetState::new::<()>(asset_id, &[(auditor.acct, auditor.enc)], &[]).unwrap();
+        let asset_lookup = AssetKeysLookup::from(&asset_state);
+        asset_tree.set_asset_state(asset_state.clone()).unwrap();
+
+        let (_p, mut issuer_state) = AccountAssetRegistrationProof::<()>::new(
+            &mut rng,
+            &issuer_keys,
+            asset_id,
+            0,
+            ctx,
+            &account_params,
+            None,
+        )
+        .unwrap();
+        issuer_state.commit_pending_state().unwrap();
+        account_tree
+            .insert(
+                issuer_state
+                    .current_commitment()
+                    .unwrap()
+                    .as_leaf_value()
+                    .unwrap(),
+            )
+            .unwrap();
+
+        let (_, mut investor_state) = AccountAssetRegistrationProof::<()>::new(
+            &mut rng,
+            &investor_keys,
+            asset_id,
+            0,
+            ctx,
+            &account_params,
+            None,
+        )
+        .unwrap();
+        investor_state.commit_pending_state().unwrap();
+        account_tree
+            .insert(
+                investor_state
+                    .current_commitment()
+                    .unwrap()
+                    .as_leaf_value()
+                    .unwrap(),
+            )
+            .unwrap();
+
+        let mint = AssetMintingProof::<(), _>::new(
+            &mut rng,
+            &issuer_keys,
+            ctx,
+            &mut issuer_state,
+            &account_tree,
+            1000,
+        )
+        .unwrap();
+        issuer_state.commit_pending_state().unwrap();
+        account_tree
+            .insert(
+                mint.updated_account_state_commitment
+                    .as_leaf_value()
+                    .unwrap(),
+            )
+            .unwrap();
+
+        let asset_root = asset_tree.root().unwrap();
+        let asset_root_node = asset_root.root_node().unwrap();
+        let account_root = account_tree.root().unwrap();
+        let account_root_node = account_root.root_node().unwrap();
+
+        const K: usize = 11;
+
+        let leg_builder = || LegBuilder {
+            sender: issuer_acct,
+            receiver: investor_acct,
+            asset: asset_state.clone(),
+            amount: 500,
+            config: LegConfig::default(),
+            public_enc_keys: vec![],
+        };
+
+        // Settlement.
+        let settlement: SettlementProof = SettlementBuilder::new(b"wrapper_overhead")
+            .leg(leg_builder())
+            .encrypt_and_prove(&mut rng, &asset_tree.tree)
+            .unwrap();
+        let settle_size = settlement.encode().len();
+        let leg = match &settlement.legs[0] {
+            AnySettlementLegProof::HiddenAssetId(p) => p,
+            AnySettlementLegProof::RevealedAssetId(_) => {
+                unreachable!("default LegConfig hides the asset id")
+            }
+        };
+        let settle_core = leg.inner.decode().unwrap();
+        let settle_core_size = settle_core.compressed_size();
+        let settle_ctx = settlement.leg_ctx(0);
+
+        let (settle_prove, _) = bench(K, || {
+            SettlementBuilder::<()>::new(b"wrapper_overhead")
+                .leg(leg_builder())
+                .encrypt_and_prove(&mut rng, &asset_tree.tree)
+                .unwrap()
+        });
+        let (settle_verify, _) = bench(K, || {
+            settlement
+                .verify(&asset_root, &asset_lookup, &mut rng)
+                .unwrap()
+        });
+        let (settle_core_verify, _) = bench(K, || {
+            leg.verify_core(&settle_core, &settle_ctx, &asset_root_node, &mut rng)
+                .unwrap()
+        });
+        let (settle_decode, _) = bench(K, || leg.inner.decode().unwrap());
+        let (settle_encode, _) = bench(K, || {
+            let mut buf = Vec::new();
+            settle_core.serialize_compressed(&mut buf).unwrap();
+            buf
+        });
+
+        // Affirmations share this leg's encryption and reference.
+        let leg_enc = settlement.legs[0].leg_enc().clone();
+        let leg_ref = LegRef::new(settlement.settlement_ref(), 0 as _);
+
+        // Sender affirmation.
+        let send_proof: SenderAffirmationProof = {
+            let mut acct = issuer_state.clone();
+            SenderAffirmationProof::new(
+                &mut rng,
+                &issuer_keys,
+                &leg_ref,
+                500,
+                &leg_enc,
+                &mut acct,
+                &account_tree,
+            )
+            .unwrap()
+        };
+        let send_size = send_proof.encode().len();
+        let send_core = send_proof.inner.decode().unwrap();
+        let send_core_size = send_core.compressed_size();
+
+        let (send_prove, _) = bench(K, || {
+            let mut acct = issuer_state.clone();
+            SenderAffirmationProof::<()>::new(
+                &mut rng,
+                &issuer_keys,
+                &leg_ref,
+                500,
+                &leg_enc,
+                &mut acct,
+                &account_tree,
+            )
+            .unwrap()
+        });
+        let (send_verify, _) = bench(K, || {
+            send_proof
+                .verify(&leg_enc, &account_root, &mut rng)
+                .unwrap()
+        });
+        let (send_core_verify, _) = bench(K, || {
+            send_proof
+                .verify_core(&send_core, &leg_enc, &account_root_node, &mut rng)
+                .unwrap()
+        });
+        let (send_decode, _) = bench(K, || send_proof.inner.decode().unwrap());
+        let (send_encode, _) = bench(K, || {
+            let mut buf = Vec::new();
+            send_core.serialize_compressed(&mut buf).unwrap();
+            buf
+        });
+
+        // Receiver affirmation (note: &leg_enc before amount).
+        let recv_proof: ReceiverAffirmationProof = {
+            let mut acct = investor_state.clone();
+            ReceiverAffirmationProof::new(
+                &mut rng,
+                &investor_keys,
+                &leg_ref,
+                &leg_enc,
+                500,
+                &mut acct,
+                &account_tree,
+            )
+            .unwrap()
+        };
+        let recv_size = recv_proof.encode().len();
+        let recv_core = recv_proof.inner.decode().unwrap();
+        let recv_core_size = recv_core.compressed_size();
+
+        let (recv_prove, _) = bench(K, || {
+            let mut acct = investor_state.clone();
+            ReceiverAffirmationProof::<()>::new(
+                &mut rng,
+                &investor_keys,
+                &leg_ref,
+                &leg_enc,
+                500,
+                &mut acct,
+                &account_tree,
+            )
+            .unwrap()
+        });
+        let (recv_verify, _) = bench(K, || {
+            recv_proof
+                .verify(&leg_enc, &account_root, &mut rng)
+                .unwrap()
+        });
+        let (recv_core_verify, _) = bench(K, || {
+            recv_proof
+                .verify_core(&recv_core, &leg_enc, &account_root_node, &mut rng)
+                .unwrap()
+        });
+        let (recv_decode, _) = bench(K, || recv_proof.inner.decode().unwrap());
+        let (recv_encode, _) = bench(K, || {
+            let mut buf = Vec::new();
+            recv_core.serialize_compressed(&mut buf).unwrap();
+            buf
+        });
+
+        println!(
+            "\nwrapper overhead (median K={K}, --release); times ms, sizes B (wrapper SCALE / core compressed)"
+        );
+        println!(
+            "{:<26}{:>11}{:>11}{:>11}{:>10}{:>10}{:>9}{:>9}",
+            "op", "prove", "verify", "core_vfy", "decode", "encode", "size", "core_sz"
+        );
+        let row = |name: &str,
+                   prove: Duration,
+                   verify: Duration,
+                   core_verify: Duration,
+                   decode: Duration,
+                   encode: Duration,
+                   size: usize,
+                   core_size: usize| {
+            println!(
+                "{:<26}{:>11.3}{:>11.3}{:>11.3}{:>10.3}{:>10.3}{:>9}{:>9}",
+                name,
+                ms(prove),
+                ms(verify),
+                ms(core_verify),
+                ms(decode),
+                ms(encode),
+                size,
+                core_size
+            );
+        };
+        row(
+            "SettlementProof",
+            settle_prove,
+            settle_verify,
+            settle_core_verify,
+            settle_decode,
+            settle_encode,
+            settle_size,
+            settle_core_size,
+        );
+        row(
+            "SenderAffirmationProof",
+            send_prove,
+            send_verify,
+            send_core_verify,
+            send_decode,
+            send_encode,
+            send_size,
+            send_core_size,
+        );
+        row(
+            "ReceiverAffirmationProof",
+            recv_prove,
+            recv_verify,
+            recv_core_verify,
+            recv_decode,
+            recv_encode,
+            recv_size,
+            recv_core_size,
+        );
+        println!(
+            "\nverify overhead = wrapper verify - core verify (~ core decode); size overhead = SCALE - core compressed"
+        );
+
+        for (size, core_size) in [
+            (settle_size, settle_core_size),
+            (send_size, send_core_size),
+            (recv_size, recv_core_size),
+        ] {
+            assert!(core_size > 0 && size >= core_size);
+        }
+        assert!(settle_verify >= settle_core_verify);
+        assert!(send_verify >= send_core_verify);
+        assert!(recv_verify >= recv_core_verify);
+    }
+
     #[test]
     fn test_dart_bp_generators_encode_decode() {
         let gens = dart_gens().clone();

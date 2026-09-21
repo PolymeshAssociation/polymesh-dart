@@ -28,6 +28,8 @@ use bulletproofs::{BulletproofGens, PedersenGens};
 use core::iter::Copied;
 use curve_tree_relations::curve_tree::{Root, SelectAndRerandomizePath};
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
+#[cfg(feature = "build-tables")]
+use curve_tree_relations::fixed_base_tables::FixedBaseTablesPair;
 use curve_tree_relations::parameters::{SelRerandParametersRef, SelRerandProofParameters};
 use curve_tree_relations::range_proof::range_proof;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
@@ -488,6 +490,86 @@ pub fn verify_given_verification_tuples<
     let (even_res, odd_res) = (
         verify_given_verification_tuple(even_tuple, even_pc_gens, even_bp_gens),
         verify_given_verification_tuple(odd_tuple, odd_pc_gens, odd_bp_gens),
+    );
+
+    even_res?;
+    odd_res?;
+
+    Ok(())
+}
+
+/// Verify given verification tuples using precomputed fixed-base MSM tables (benchmark-only).
+/// Same check as [`verify_given_verification_tuples`], with the fixed `G`/`H` generators evaluated
+/// against the tables and the proof-dependent points (plus `B`, `B_blinding`) via a batch-affine MSM.
+#[cfg(feature = "build-tables")]
+pub fn verify_tuples_with_tables<
+    F0: PrimeField,
+    F1: PrimeField,
+    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+>(
+    even_tuple: VerificationTuple<Affine<G0>>,
+    odd_tuple: VerificationTuple<Affine<G1>>,
+    even_pc_gens: &PedersenGens<Affine<G0>>,
+    odd_pc_gens: &PedersenGens<Affine<G1>>,
+    tables: &FixedBaseTablesPair<G0, G1>,
+) -> Result<()> {
+    #[cfg(feature = "parallel")]
+    let (even_res, odd_res) = rayon::join(
+        || tables.even.verify_tuple(even_pc_gens, even_tuple),
+        || tables.odd.verify_tuple(odd_pc_gens, odd_tuple),
+    );
+
+    #[cfg(not(feature = "parallel"))]
+    let (even_res, odd_res) = (
+        tables.even.verify_tuple(even_pc_gens, even_tuple),
+        tables.odd.verify_tuple(odd_pc_gens, odd_tuple),
+    );
+
+    even_res?;
+    odd_res?;
+
+    Ok(())
+}
+
+/// Batch-verify tuples using fixed-base MSM tables (benchmark-only). Mirrors [`batch_verify_bp`]:
+/// even/odd sides verified independently, each RLC-folding its batch into one table eval plus a
+/// single batch-affine MSM over all proof-dependent points.
+#[cfg(all(feature = "build-tables", feature = "std"))]
+pub fn batch_verify_tuples_with_tables<
+    F0: PrimeField,
+    F1: PrimeField,
+    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
+    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
+>(
+    even_tuples: Vec<VerificationTuple<Affine<G0>>>,
+    odd_tuples: Vec<VerificationTuple<Affine<G1>>>,
+    even_pc_gens: &PedersenGens<Affine<G0>>,
+    odd_pc_gens: &PedersenGens<Affine<G1>>,
+    tables: &FixedBaseTablesPair<G0, G1>,
+) -> Result<()> {
+    #[cfg(feature = "parallel")]
+    let (even_res, odd_res) = rayon::join(
+        || {
+            tables
+                .even
+                .verify_tuples(even_pc_gens, even_tuples, &mut rand::thread_rng())
+        },
+        || {
+            tables
+                .odd
+                .verify_tuples(odd_pc_gens, odd_tuples, &mut rand::thread_rng())
+        },
+    );
+
+    #[cfg(not(feature = "parallel"))]
+    let (even_res, odd_res) = (
+        tables
+            .even
+            .verify_tuples(even_pc_gens, even_tuples, &mut rand::thread_rng()),
+        tables
+            .odd
+            .verify_tuples(odd_pc_gens, odd_tuples, &mut rand::thread_rng()),
     );
 
     even_res?;
@@ -1131,6 +1213,7 @@ pub(crate) fn generate_sigma_t_values_for_common_state_change<
     PokDiscreteLogProtocol<Affine<G0>>,
     Vec<LegAccountLinkProtocol<G0>>,
     SchnorrCommitment<Affine<G0>>,
+    F0, // sk_enc_inv, reused by the response phase
 )> {
     if legs.len() == 0 {
         return Err(Error::ProofGenerationError(
@@ -1196,7 +1279,7 @@ pub(crate) fn generate_sigma_t_values_for_common_state_change<
         pc_gens,
         bp_gens,
     )?;
-    let mut sk_enc_inv = sk_enc_inv.ok_or(Error::InvertingZero)?;
+    let sk_enc_inv = sk_enc_inv.ok_or(Error::InvertingZero)?;
 
     // Create leg-link T-values (solo only)
     let t_leg_link = create_leg_link_t_values(
@@ -1225,7 +1308,6 @@ pub(crate) fn generate_sigma_t_values_for_common_state_change<
     Zeroize::zeroize(&mut asset_id_blinding);
     Zeroize::zeroize(&mut sk_enc_blinding);
     Zeroize::zeroize(&mut sk_enc_inv_blinding);
-    Zeroize::zeroize(&mut sk_enc_inv);
 
     let mut transcript = prover.transcript();
 
@@ -1249,6 +1331,7 @@ pub(crate) fn generate_sigma_t_values_for_common_state_change<
         t_null,
         t_leg_link,
         t_bp_randomness_relations,
+        sk_enc_inv,
     ))
 }
 
@@ -1415,7 +1498,7 @@ pub(crate) fn generate_null_bp_responses<F0: PrimeField, G0: SWCurveConfig<Scala
     comm_bp_blinding: F0,
     t_null: PokDiscreteLogProtocol<Affine<G0>>,
     t_bp: &SchnorrCommitment<Affine<G0>>,
-    sk_enc: Option<F0>, // Only when prover knows sk_enc (solo mode)
+    sk_enc_inv: Option<F0>, // sk_enc^-1; Some in solo mode, None in host mode
     prover_challenge: &F0,
 ) -> Result<(
     PartialPokDiscreteLog<Affine<G0>>,
@@ -1425,8 +1508,7 @@ pub(crate) fn generate_null_bp_responses<F0: PrimeField, G0: SWCurveConfig<Scala
 
     let mut wits = BTreeMap::new();
     wits.insert(0, comm_bp_blinding);
-    if let Some(sk_enc) = sk_enc {
-        let sk_enc_inv = sk_enc.inverse().ok_or(Error::InvertingZero)?;
+    if let Some(sk_enc_inv) = sk_enc_inv {
         wits.insert(8, sk_enc_inv);
     }
     let resp_bp = t_bp.partial_response(wits, prover_challenge)?;
@@ -1442,6 +1524,7 @@ pub(crate) fn generate_sigma_responses_without_leg_link<
 >(
     sk_aff: G0::ScalarField,
     sk_enc: G0::ScalarField,
+    sk_enc_inv: G0::ScalarField,
     account: &AccountState<Affine<G0>>,
     updated_account: &AccountState<Affine<G0>>,
     leaf_rerandomization: F0,
@@ -1477,7 +1560,7 @@ pub(crate) fn generate_sigma_responses_without_leg_link<
         comm_bp_blinding,
         t_null,
         t_bp_randomness_relations,
-        Some(sk_enc),
+        Some(sk_enc_inv),
         prover_challenge,
     )?;
 
@@ -1506,6 +1589,7 @@ pub(crate) fn generate_sigma_responses_for_common_state_change<
 >(
     sk_aff: G0::ScalarField,
     sk_enc: G0::ScalarField,
+    sk_enc_inv: G0::ScalarField,
     account: &AccountState<Affine<G0>>,
     updated_account: &AccountState<Affine<G0>>,
     leaf_rerandomization: F0,
@@ -1528,6 +1612,7 @@ pub(crate) fn generate_sigma_responses_for_common_state_change<
         generate_sigma_responses_without_leg_link(
             sk_aff,
             sk_enc,
+            sk_enc_inv,
             account,
             updated_account,
             leaf_rerandomization,
@@ -1599,8 +1684,34 @@ pub(crate) fn add_leg_link_verifier_challenge_contributions<G0: SWCurveConfig + 
     needs_ct_amount: &[bool],
     enc_gen: Affine<G0>,
     transcript: &mut MerlinTranscript,
-) -> Result<()> {
+    // Returns `y_elsewhere` so the paired verify phase can skip recomputing it.
+) -> Result<Vec<Affine<G0>>> {
     let h_at = asset_id.map(|a| enc_gen * G0::ScalarField::from(a));
+
+    // `y = ct_asset_id - h_at` for every revealed-elsewhere leg, with one shared batch
+    // normalization; absorption order and values are unchanged.
+    let y_elsewhere = match h_at {
+        Some(h_at) => <Affine<G0> as AffineRepr>::Group::normalize_batch(
+            &legs
+                .iter()
+                .zip(resp_leg_link.iter())
+                .filter_map(|((core, _), rll)| {
+                    match (
+                        core.is_asset_id_revealed(),
+                        rll.resp_asset_id(),
+                        core.asset_id_ciphertext(),
+                    ) {
+                        (false, Some(RespAssetId::Elsewhere(_)), Some(ct)) => {
+                            Some(ct.into_group() - h_at)
+                        }
+                        _ => None,
+                    }
+                })
+                .collect::<Vec<_>>(),
+        ),
+        None => Vec::new(),
+    };
+    let mut elsewhere_idx = 0usize;
 
     for (i, (((core, party_eph_pk), resp_leg_link), needs_amount)) in legs
         .iter()
@@ -1645,12 +1756,13 @@ pub(crate) fn add_leg_link_verifier_challenge_contributions<G0: SWCurveConfig + 
                     &mut *transcript,
                 )?,
                 RespAssetId::Elsewhere(resp) => {
-                    let h_at = h_at.ok_or_else(|| {
+                    let _ = h_at.ok_or_else(|| {
                         Error::ProofVerificationError(
                             "asset_id revealed elsewhere but no asset_id provided".to_string(),
                         )
                     })?;
-                    let y = (ct.into_group() - h_at).into_affine();
+                    let y = y_elsewhere[elsewhere_idx];
+                    elsewhere_idx += 1;
                     resp.challenge_contribution(
                         &eph_pk_asset_id,
                         &y,
@@ -1662,7 +1774,7 @@ pub(crate) fn add_leg_link_verifier_challenge_contributions<G0: SWCurveConfig + 
         }
     }
 
-    Ok(())
+    Ok(y_elsewhere)
 }
 
 /// Enforce constraints, take challenge contributions for all T-values including leg-link.
@@ -1687,7 +1799,8 @@ pub(crate) fn enforce_constraints_and_take_challenge_contrib_of_sigma_t_values_f
     verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
     account_comm_key: &impl AccountCommitmentKeyTrait<Affine<G0>>,
     enc_gen: Affine<G0>,
-) -> Result<()> {
+    // Returns `y_elsewhere` so the paired verify phase can skip recomputing it.
+) -> Result<Vec<Affine<G0>>> {
     if legs.len() != resp_leg_link.len() {
         return Err(Error::ProofVerificationError(format!(
             "Mismatched leg vector lengths: legs.len() = {}, resp_leg_link.len() = {}",
@@ -1715,7 +1828,7 @@ pub(crate) fn enforce_constraints_and_take_challenge_contrib_of_sigma_t_values_f
     )?;
 
     let mut transcript = verifier.transcript();
-    add_leg_link_verifier_challenge_contributions(
+    let y_elsewhere = add_leg_link_verifier_challenge_contributions(
         &legs,
         asset_id,
         resp_leg_link,
@@ -1724,7 +1837,7 @@ pub(crate) fn enforce_constraints_and_take_challenge_contrib_of_sigma_t_values_f
         &mut transcript,
     )?;
 
-    Ok(())
+    Ok(y_elsewhere)
 }
 
 /// Write the balance BP T-value challenge contribution to the verifier transcript.
@@ -1752,9 +1865,42 @@ pub(crate) fn verify_leg_link_for_common_state_change<G0: SWCurveConfig + Copy>(
     resp_asset_id_acc_old: Option<&G0::ScalarField>,
     verifier_challenge: &G0::ScalarField,
     enc_gen: Affine<G0>,
+    // `y_elsewhere` precomputed in the challenge phase; `None` recomputes it here (same values).
+    precomputed_y_elsewhere: Option<&[Affine<G0>]>,
     mut rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
 ) -> Result<()> {
-    let h_at = asset_id.map(|a| enc_gen * G0::ScalarField::from(a));
+    // `y = ct_asset_id - h_at` for every revealed-elsewhere leg; reuse the challenge-phase value
+    // when available, else recompute (same values).
+    let recomputed_y_elsewhere;
+    let y_elsewhere: &[Affine<G0>] = match precomputed_y_elsewhere {
+        Some(y) => y,
+        None => {
+            let h_at = asset_id.map(|a| enc_gen * G0::ScalarField::from(a));
+            recomputed_y_elsewhere = match h_at {
+                Some(h_at) => <Affine<G0> as AffineRepr>::Group::normalize_batch(
+                    &legs
+                        .iter()
+                        .zip(resp_leg_link.iter())
+                        .filter_map(|((core, _), rll)| {
+                            match (
+                                core.is_asset_id_revealed(),
+                                rll.resp_asset_id(),
+                                core.asset_id_ciphertext(),
+                            ) {
+                                (false, Some(RespAssetId::Elsewhere(_)), Some(ct)) => {
+                                    Some(ct.into_group() - h_at)
+                                }
+                                _ => None,
+                            }
+                        })
+                        .collect::<Vec<_>>(),
+                ),
+                None => Vec::new(),
+            };
+            &recomputed_y_elsewhere
+        }
+    };
+    let mut elsewhere_idx = 0usize;
 
     for (i, ((leg, resp_leg_link), needs_amount)) in legs
         .iter()
@@ -1820,13 +1966,14 @@ pub(crate) fn verify_leg_link_for_common_state_change<G0: SWCurveConfig + Copy>(
                 }
                 RespAssetId::Elsewhere(resp) => {
                     // ct_asset_id - enc_gen * at = Eph_at * sk_enc^-1
-                    let h_at = h_at.ok_or_else(|| {
+                    let _ = asset_id.ok_or_else(|| {
                         Error::ProofVerificationError(
                             "Asset id expected known (h_at) for a revealed-elsewhere leg"
                                 .to_string(),
                         )
                     })?;
-                    let y = (ct_asset_id.into_group() - h_at).into_affine();
+                    let y = y_elsewhere[elsewhere_idx];
+                    elsewhere_idx += 1;
                     verify_or_rmc_2!(
                         rmc,
                         resp,
@@ -1868,6 +2015,8 @@ pub(crate) fn verify_sigma_for_common_state_change<G0: SWCurveConfig + Copy>(
     pc_gens: &PedersenGens<Affine<G0>>,
     bp_gens: &BulletproofGens<Affine<G0>>,
     enc_gen: Affine<G0>,
+    // `y_elsewhere` precomputed in the challenge phase; `None` recomputes it (same values).
+    precomputed_y_elsewhere: Option<&[Affine<G0>]>,
     mut rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
 ) -> Result<Option<AssetId>> {
     if legs.len() != has_counter_decreased.len() {
@@ -1929,11 +2078,14 @@ pub(crate) fn verify_sigma_for_common_state_change<G0: SWCurveConfig + Copy>(
             .to_vec()
     };
 
-    let y = match asset_id {
+    // `asset_id_gen * asset_id` reduction, computed once and reused for the old-commitment check
+    // and the new-commitment reduction below.
+    let asset_id_term =
+        asset_id.map(|asset_id| account_comm_key.asset_id_gen() * G0::ScalarField::from(asset_id));
+
+    let y = match asset_id_term {
         None => *re_randomized_leaf,
-        Some(asset_id) => (*re_randomized_leaf
-            - (account_comm_key.asset_id_gen() * G0::ScalarField::from(asset_id)))
-        .into_affine(),
+        Some(term) => (*re_randomized_leaf - term).into_affine(),
     };
     verify_schnorr_resp_or_rmc!(rmc, resp_acc_old, gens_acc_old, y, verifier_challenge,);
 
@@ -1957,10 +2109,10 @@ pub(crate) fn verify_sigma_for_common_state_change<G0: SWCurveConfig + Copy>(
     }
     missing_resps.insert(COUNTER_GEN_INDEX, resp_acc_old.0[COUNTER_GEN_INDEX]);
 
-    let offset_when_asset_id_revealed = match asset_id {
-        Some(asset_id) => {
+    let offset_when_asset_id_revealed = match asset_id_term {
+        Some(term) => {
             // If asset-id is revealed, then its knowledge in new account commitment is not being proven and new account commitment has to be reduced accordingly
-            y -= account_comm_key.asset_id_gen() * G0::ScalarField::from(asset_id);
+            y -= term;
             1
         }
         None => {
@@ -2033,6 +2185,7 @@ pub(crate) fn verify_sigma_for_common_state_change<G0: SWCurveConfig + Copy>(
             .then(|| &resp_acc_old.0[ASSET_ID_GEN_INDEX]),
         verifier_challenge,
         enc_gen,
+        precomputed_y_elsewhere,
         rmc.as_deref_mut(),
     )?;
 

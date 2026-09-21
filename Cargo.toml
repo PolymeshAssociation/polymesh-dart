@@ -18,10 +18,10 @@ members = ["dart-bp", "dart-testing-cli", "dart-common"]
 #ark-dlog-gadget = { package = "ark-dlog-gadget", path = "../curve-trees/ark-dlog-gadget"}
 
 # If want to pull code for curve-trees from git, comment above 2 relations and uncomment below 2
-bulletproofs = { git = "https://github.com/PolymeshAssociation/curve-trees", branch = "polymesh" }
-curve_tree_relations = { package = "relations", git = "https://github.com/PolymeshAssociation/curve-trees", branch = "polymesh" }
-ark-ec-divisors = { package = "ark-ec-divisors", git = "https://github.com/PolymeshAssociation/curve-trees", branch = "polymesh" }
-ark-dlog-gadget = { package = "ark-dlog-gadget", git = "https://github.com/PolymeshAssociation/curve-trees", branch = "polymesh" }
+bulletproofs = { git = "https://github.com/PolymeshAssociation/curve-trees", branch = "patch7" }
+curve_tree_relations = { package = "relations", git = "https://github.com/PolymeshAssociation/curve-trees", branch = "patch7" }
+ark-ec-divisors = { package = "ark-ec-divisors", git = "https://github.com/PolymeshAssociation/curve-trees", branch = "patch7" }
+ark-dlog-gadget = { package = "ark-dlog-gadget", git = "https://github.com/PolymeshAssociation/curve-trees", branch = "patch7" }
 
 #dock_crypto_utils = { path = "../crypto/utils" }
 #schnorr_pok = { path = "../crypto/schnorr_pok" }
@@ -41,21 +41,23 @@ schnorr_pok = { git = "https://github.com/PolymeshAssociation/crypto", branch = 
 #ark-wei25519 = { path = "../arkworks-algebra/curves/wei25519" }
 #ark-curve25519 = { path = "../arkworks-algebra/curves/curve25519" }
 #ark-ed25519 = { path = "../arkworks-algebra/curves/ed25519" }
+#ark-secp256k1 = { path = "../arkworks-algebra/curves/secp256k1" }
+#ark-secq256k1 = { path = "../arkworks-algebra/curves/secq256k1" }
 
-ark-serialize = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-master" }
-ark-ec = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-master" }
-ark-host-msm = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-master" }
-ark-host-msm-impl = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-master" }
-ark-ff = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-master" }
-ark-pallas = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-master" }
-ark-vesta = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-master" }
-ark-helios = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-master" }
-ark-selene = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-master" }
-ark-wei25519 = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-master" }
-ark-curve25519 = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-master" }
-ark-ed25519 = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-master" }
-ark-secp256k1 = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-master" }
-ark-secq256k1 = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-master" }
+ark-serialize = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "patch5" }
+ark-ec = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "patch5" }
+ark-host-msm = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "patch5" }
+ark-host-msm-impl = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "patch5" }
+ark-ff = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "patch5" }
+ark-pallas = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "patch5" }
+ark-vesta = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "patch5" }
+ark-helios = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "patch5" }
+ark-selene = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "patch5" }
+ark-wei25519 = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "patch5" }
+ark-curve25519 = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "patch5" }
+ark-ed25519 = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "patch5" }
+ark-secp256k1 = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "patch5" }
+ark-secq256k1 = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "patch5" }
 
 [workspace.dependencies]
 polymesh-dart = { path = "./", version = "1.0.0", default-features = false }
@@ -106,6 +108,7 @@ bulletproofs = { version = "2.0.0", default-features = false }
 curve_tree_relations = { version = "0.1.0", package = "relations", default-features = false }
 ark-ec-divisors = { version = "0.1.0", default-features = false }
 ark-dlog-gadget = { version = "0.1.0", default-features = false }
+ark-host-msm-impl = { version = "0.5.0", default-features = false }
 
 # Dev dependencies
 anyhow = { version = "1.0.98", default-features = false }
@@ -172,12 +175,14 @@ bulletproofs = { workspace = true, default-features = false, optional = true }
 curve_tree_relations = { workspace = true, default-features = false, optional = true }
 ark-ec-divisors = { workspace = true, default-features = false, features = ["pallas", "vesta"], optional = true }
 ark-dlog-gadget = { workspace = true, default-features = false, features = ["pallas", "vesta"], optional = true }
+ark-host-msm-impl = { workspace = true, default-features = false, optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 anyhow = { workspace = true }
 test-log = { workspace = true, features = ["default"] }
 rand = { workspace = true }
+
 
 [[bench]]
 name = "proof_benchmark"
@@ -238,6 +243,19 @@ backend_bp = [
 
 large_baby_steps = [
     "polymesh-dart-bp/large_baby_steps",
+]
+
+# Benchmark-only: precomputed fixed-base MSM tables for the verifier's final MSM.
+build-tables = [
+    "polymesh-dart-bp/build-tables",
+]
+
+# Native-only: register the shared per-curve fixed-base tables with the host MSM at node startup.
+host_msm_tables = [
+    "std",
+    "backend_bp",
+    "dep:ark-host-msm-impl",
+    "ark-host-msm-impl/std",
 ]
 
 no_std = ["alloc"]

@@ -9,7 +9,7 @@ use scale_info::TypeInfo;
 
 use ark_ec::{CurveConfig, short_weierstrass::Affine};
 use ark_std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     format,
     string::{String, ToString},
     vec,
@@ -31,7 +31,7 @@ use dock_crypto_utils::randomized_mult_checker::{
 };
 use polymesh_dart_bp::leg as bp_leg;
 use polymesh_dart_bp::util::batch_verify_bp_with_rng;
-use polymesh_dart_common::{LegId, MediatorId};
+use polymesh_dart_common::{AssetId, Balance, LegId, MAX_ASSET_ID, MAX_BALANCE, MediatorId};
 
 pub mod proofs;
 pub use proofs::*;
@@ -757,6 +757,11 @@ impl<
         SettlementRef(blake2_256(self))
     }
 
+    #[cfg(test)]
+    pub(crate) fn leg_ctx(&self, idx: usize) -> Vec<u8> {
+        leg_proof_initial_ctx(&self.memo, idx as LegId)
+    }
+
     /// Get leg and sender, receiver and mediator affirmation counts.
     pub fn count_leg_affirmations(
         &self,
@@ -1005,7 +1010,7 @@ pub struct SettlementLegProof<T: DartLimits, C: CurveTreeConfig = AssetTreeConfi
     /// Public encryption keys specified by the leg creator (not tied to the asset).
     pub public_enc_keys: Vec<EncryptionPublicKey>,
 
-    inner: BoundedCanonical<BPSettlementTxnProof<C>, T::MaxInnerProofSize>,
+    pub(crate) inner: BoundedCanonical<BPSettlementTxnProof<C>, T::MaxInnerProofSize>,
 }
 
 impl<
@@ -1069,10 +1074,20 @@ impl<
         root: &Root<ASSET_TREE_L, ASSET_TREE_M, C::P0, C::P1>,
         rng: &mut R,
     ) -> Result<(), Error> {
+        let proof = self.inner.decode()?;
+        self.verify_core(&proof, ctx, root, rng)
+    }
+
+    pub(crate) fn verify_core<R: RngCore + CryptoRng>(
+        &self,
+        proof: &BPSettlementTxnProof<C>,
+        ctx: &[u8],
+        root: &Root<ASSET_TREE_L, ASSET_TREE_M, C::P0, C::P1>,
+        rng: &mut R,
+    ) -> Result<(), Error> {
         let asset_comm_params = get_asset_commitment_parameters();
         let leg_enc = self.leg_enc.decode()?;
         log::debug!("Verify leg: {:?}", leg_enc);
-        let proof = self.inner.decode()?;
 
         PairRandomizedMultCheckerGuard::new_using_rng(rng).with(
             |even_rmc, odd_rmc| -> Result<(), Error> {
@@ -1165,7 +1180,7 @@ pub struct SettlementLegProofRevealedAssetId<T: DartLimits> {
     /// Public encryption keys specified by the leg creator (not tied to the asset).
     pub public_enc_keys: Vec<EncryptionPublicKey>,
 
-    inner: BoundedCanonical<
+    pub(crate) inner: BoundedCanonical<
         bp_leg::public_asset_leg_proof::PublicAssetLegCreationProof<PallasParameters>,
         T::MaxInnerProofSize,
     >,
@@ -1459,16 +1474,20 @@ impl LegEncrypted {
 
     /// Try to decrypt the leg as either sender or receiver.
     ///
-    /// Auditors and mediators should use `try_decrypt_with_key` instead.
+    /// The role is settled first with two scalar multiplications rather than by attempting one role
+    /// and falling back on its error: a wrong-role attempt on a leg with a revealed asset-id runs
+    /// the discrete-log solver over the whole balance range on a garbage point.
+    ///
+    /// Auditors and mediators should use `try_decrypt_with_key` instead. Use
+    /// [`Self::scan_legs`] for many legs at once.
     pub fn try_decrypt(&self, keys: &AccountKeys) -> Option<(Leg, LegRole)> {
         let leg_enc = &self.decode().ok()?;
-        if let Ok(leg) = Self::decrypt_decoded(leg_enc, LegRole::sender(), keys) {
-            Some((leg, LegRole::sender()))
-        } else if let Ok(leg) = Self::decrypt_decoded(leg_enc, LegRole::receiver(), keys) {
-            Some((leg, LegRole::receiver()))
-        } else {
-            None
-        }
+        let pk_enc = keys.enc.public.get_affine().ok()?;
+        let role = match leg_enc.identify_role(&keys.enc.secret.0.0, pk_enc).ok()?? {
+            bp_leg::Role::Sender => LegRole::sender(),
+            bp_leg::Role::Receiver => LegRole::receiver(),
+        };
+        Some((Self::decrypt_decoded(leg_enc, role, keys).ok()?, role))
     }
 
     /// Decrypt the leg using the provided role and account keys.  Only use this if the role is known.
@@ -1559,6 +1578,79 @@ impl LegEncrypted {
             asset_id,
             amount,
         })
+    }
+
+    /// Scan many encrypted legs seen by the same participant role, batching the amount and asset-id
+    /// point decryptions across all of them into one shared-scalar GLV ladder. Returns
+    /// `(asset_id, amount)` per leg in the input order. Sender and receiver roles only;
+    /// auditor/mediator use per-leg [`Self::decrypt`]. Use [`Self::scan_legs`] when the role is not
+    /// already known.
+    pub fn scan_values_as_participant(
+        legs: &[Self],
+        role: LegRole,
+        keys: &AccountKeys,
+    ) -> Result<Vec<(AssetId, Balance)>, Error> {
+        let is_sender = match role.kind {
+            LegRoleKind::Sender => true,
+            LegRoleKind::Receiver => false,
+            _ => {
+                return Err(Error::LegDecryptionError(
+                    "scan_values_as_participant supports only sender and receiver roles"
+                        .to_string(),
+                ));
+            }
+        };
+        let decoded = legs
+            .iter()
+            .map(|l| l.decode())
+            .collect::<Result<Vec<_>, Error>>()?;
+        let enc_gen = dart_gens().leg_asset_value_gen();
+        Ok(
+            bp_leg::LegEncryption::<PallasA>::batch_decrypt_values_as_participant(
+                &decoded,
+                is_sender,
+                &keys.enc.secret.0.0,
+                enc_gen,
+                MAX_ASSET_ID,
+                MAX_BALANCE,
+            )?,
+        )
+    }
+
+    /// Scan many encrypted legs under one account's encryption key without knowing the roles up
+    /// front. Returns `(role, asset_id, amount)` for each leg `keys` is the sender or receiver of,
+    /// keyed by that leg's index in `legs`; legs the account is not a party to are absent.
+    ///
+    /// One shared-scalar GLV ladder identifies the roles across the whole batch, a second recovers
+    /// the values of the identified legs only, senders and receivers together. Auditor and mediator
+    /// roles are not covered; those use per-leg [`Self::decrypt`].
+    pub fn scan_legs(
+        legs: &[Self],
+        keys: &AccountKeys,
+    ) -> Result<BTreeMap<u32, (LegRole, AssetId, Balance)>, Error> {
+        let decoded = legs
+            .iter()
+            .map(|l| l.decode())
+            .collect::<Result<Vec<_>, Error>>()?;
+        let enc_gen = dart_gens().leg_asset_value_gen();
+        let scanned = bp_leg::LegEncryption::<PallasA>::batch_decrypt_legs(
+            &decoded,
+            &keys.enc.secret.0.0,
+            keys.enc.public.get_affine()?,
+            enc_gen,
+            MAX_ASSET_ID,
+            MAX_BALANCE,
+        )?;
+        Ok(scanned
+            .into_iter()
+            .map(|(idx, (role, asset_id, amount))| {
+                let role = match role {
+                    bp_leg::Role::Sender => LegRole::sender(),
+                    bp_leg::Role::Receiver => LegRole::receiver(),
+                };
+                (idx, (role, asset_id, amount))
+            })
+            .collect())
     }
 }
 

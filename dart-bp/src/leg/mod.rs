@@ -13,18 +13,23 @@ pub mod old;
 
 pub use self::leg_proof::LegCreationProof;
 pub use self::mediator::MediatorTxnProof;
-use crate::discrete_log::solve_discrete_log_precomputed;
+use crate::batch_decrypt::batch_decrypt_points;
+use crate::discrete_log::{solve_discrete_log_precomputed, solve_discrete_log_precomputed_batch};
 use crate::util::bp_gens_for_vec_commitment;
 use crate::{Error, error::Result};
-use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
+use ark_ec::scalar_mul::BatchMulPreprocessing;
+use ark_ec::scalar_mul::glv::GLVConfig;
+use ark_ec::short_weierstrass::{Affine, Projective, SWCurveConfig};
 use ark_ec::{AffineRepr, CurveConfig, CurveGroup};
 use ark_ff::PrimeField;
 use ark_pallas::PallasConfig;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+use ark_std::collections::BTreeMap;
 use ark_std::{string::ToString, vec::Vec};
 use bulletproofs::BulletproofGens;
 use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
 use core::iter;
+use itertools::Either;
 use polymesh_dart_common::{AssetId, Balance, MAX_ASSET_ID, MAX_BALANCE};
 use rand_core::CryptoRngCore;
 use zeroize::{Zeroize, ZeroizeOnDrop};
@@ -575,43 +580,61 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> Leg<G> {
         let r_meds: Option<Vec<F>> = (!config.reveal_asset_id)
             .then(|| (0..self.med_keys.len()).map(|_| F::rand(rng)).collect());
 
+        // Fixed-base window tables: each base below is multiplied by several scalars, so build one
+        // table per base and reuse it.
+        let n_ek = 4 + self.med_keys.len();
+        let ek_table = BatchMulPreprocessing::<G::Group>::new(enc_key_gen.into_group(), n_ek);
+        let eg_table = BatchMulPreprocessing::<G::Group>::new(enc_gen.into_group(), 2);
+        let pks_table = BatchMulPreprocessing::<G::Group>::new(pk_s_enc.into_group(), 4);
+        let pkr_table = BatchMulPreprocessing::<G::Group>::new(pk_r_enc.into_group(), 4);
+        let enc_key_tables: Vec<_> = self
+            .enc_keys
+            .iter()
+            .map(|pk| BatchMulPreprocessing::<G::Group>::new((*pk).into_group(), n_ek))
+            .collect();
+        let public_key_tables: Vec<_> = self
+            .public_enc_keys
+            .iter()
+            .map(|pk| BatchMulPreprocessing::<G::Group>::new((*pk).into_group(), 4))
+            .collect();
+
         let mut proj: Vec<G::Group> = Vec::new();
-        proj.push(enc_key_gen * r1 + pk_s_enc); // ct_s
-        proj.push(enc_key_gen * r2 + pk_r_enc); // ct_r
-        proj.push(enc_key_gen * r3 + enc_gen * amount); // ct_amount
+        proj.push(ek_table.windowed_mul(&r1) + pk_s_enc); // ct_s
+        proj.push(ek_table.windowed_mul(&r2) + pk_r_enc); // ct_r
+        proj.push(ek_table.windowed_mul(&r3) + eg_table.windowed_mul(&amount)); // ct_amount
         if !config.reveal_asset_id {
-            proj.push(enc_key_gen * r4.unwrap() + enc_gen * asset_id); // ct_asset_id
+            proj.push(ek_table.windowed_mul(&r4.unwrap()) + eg_table.windowed_mul(&asset_id)); // ct_asset_id
         }
-        proj.push(pk_s_enc * r1); // eph_pk_s.r1
-        proj.push(pk_s_enc * r3); // eph_pk_s.r3
+        proj.push(pks_table.windowed_mul(&r1)); // eph_pk_s.r1
+        proj.push(pks_table.windowed_mul(&r3)); // eph_pk_s.r3
         if let Some(r) = r4 {
-            proj.push(pk_s_enc * r); // eph_pk_s.r4
+            proj.push(pks_table.windowed_mul(&r)); // eph_pk_s.r4
         }
         if config.visibility.sender_sees_receiver() {
-            proj.push(pk_s_enc * r2); // eph_pk_s.r2 (cross)
+            proj.push(pks_table.windowed_mul(&r2)); // eph_pk_s.r2 (cross)
         }
-        proj.push(pk_r_enc * r2); // eph_pk_r.r2
-        proj.push(pk_r_enc * r3); // eph_pk_r.r3
+        proj.push(pkr_table.windowed_mul(&r2)); // eph_pk_r.r2
+        proj.push(pkr_table.windowed_mul(&r3)); // eph_pk_r.r3
         if let Some(r) = r4 {
-            proj.push(pk_r_enc * r); // eph_pk_r.r4
+            proj.push(pkr_table.windowed_mul(&r)); // eph_pk_r.r4
         }
         if config.visibility.receiver_sees_sender() {
-            proj.push(pk_r_enc * r1); // eph_pk_r.r1 (cross)
+            proj.push(pkr_table.windowed_mul(&r1)); // eph_pk_r.r1 (cross)
         }
-        for pk in self.enc_keys.iter() {
-            proj.push(*pk * r1);
-            proj.push(*pk * r2);
-            proj.push(*pk * r3);
+        for table in &enc_key_tables {
+            proj.push(table.windowed_mul(&r1));
+            proj.push(table.windowed_mul(&r2));
+            proj.push(table.windowed_mul(&r3));
             if let Some(r) = r4 {
-                proj.push(*pk * r);
+                proj.push(table.windowed_mul(&r));
             }
         }
-        for pk in self.public_enc_keys.iter() {
-            proj.push(*pk * r1);
-            proj.push(*pk * r2);
-            proj.push(*pk * r3);
+        for table in &public_key_tables {
+            proj.push(table.windowed_mul(&r1));
+            proj.push(table.windowed_mul(&r2));
+            proj.push(table.windowed_mul(&r3));
             if let Some(r) = r4 {
-                proj.push(*pk * r);
+                proj.push(table.windowed_mul(&r));
             }
         }
         // Mediator entries: one ephemeral per encryption key plus `ct_med`, all in the same batch.
@@ -619,10 +642,10 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> Leg<G> {
         let num_enc = self.enc_keys.len();
         if let Some(r_meds) = r_meds.as_ref() {
             for i in 0..self.med_keys.len() {
-                for pk in self.enc_keys.iter() {
-                    proj.push(*pk * r_meds[i]); // eph_pk_med_keys[k]
+                for table in &enc_key_tables {
+                    proj.push(table.windowed_mul(&r_meds[i])); // eph_pk_med_keys[k]
                 }
-                proj.push(enc_key_gen * r_meds[i] + self.med_keys[i]); // ct_med
+                proj.push(ek_table.windowed_mul(&r_meds[i]) + self.med_keys[i]); // ct_med
             }
         }
 
@@ -840,7 +863,24 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
     /// Decrypt a single ciphertext element using `sk_enc_inv` and the corresponding ephemeral key.
     /// `plaintext = ct - eph_pk * sk_enc_inv`
     pub fn decrypt_element_with_sk_inv(sk_inv: &F, ct: G, eph_pk: G) -> G::Group {
-        ct.into_group() - eph_pk * sk_inv
+        ct - eph_pk * sk_inv
+    }
+
+    /// Whether `pk_enc`'s holder is this leg's sender, receiver, or neither.
+    pub fn identify_role(&self, sk_enc: &F, pk_enc: G) -> Result<Option<Role>> {
+        let mut sk_inv = sk_enc.inverse().ok_or(Error::InvertingZero)?;
+        let keys = &self.leg_enc_core_and_eph_keys;
+        let sender = Self::decrypt_element_with_sk_inv(&sk_inv, keys.core.ct_s, keys.eph_pk_s.r1);
+        let receiver = Self::decrypt_element_with_sk_inv(&sk_inv, keys.core.ct_r, keys.eph_pk_r.r2);
+        sk_inv.zeroize();
+        let pk_enc = pk_enc.into_group();
+        Ok(if sender == pk_enc {
+            Some(Role::Sender)
+        } else if receiver == pk_enc {
+            Some(Role::Receiver)
+        } else {
+            None
+        })
     }
 
     /// Decrypt as sender using `sk_enc`. Sender can always decrypt own pk, amount, and asset_id
@@ -1108,6 +1148,199 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
                 .map(|id| id as AssetId)
             }
         }
+    }
+}
+
+/// Whether a party is the sender or receiver of a leg.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum Role {
+    Sender,
+    Receiver,
+}
+
+impl Role {
+    pub fn is_sender(&self) -> bool {
+        matches!(self, Self::Sender)
+    }
+}
+
+impl<P: GLVConfig> LegEncryption<Affine<P>> {
+    /// Batch `(asset_id, amount)` recovery for many legs seen by the same participant under one
+    /// `sk_enc`.
+    pub fn batch_decrypt_values_as_participant(
+        legs: &[Self],
+        is_sender: bool,
+        sk_enc: &P::ScalarField,
+        enc_gen: Affine<P>,
+        max_asset_id: AssetId,
+        max_amount: Balance,
+    ) -> Result<Vec<(AssetId, Balance)>> {
+        let role = if is_sender {
+            Role::Sender
+        } else {
+            Role::Receiver
+        };
+        let legs = legs.iter().map(|leg| (leg, role)).collect::<Vec<_>>();
+        Self::batch_decrypt_values(&legs, sk_enc, enc_gen, max_asset_id, max_amount)
+    }
+
+    /// Batch `(asset_id, amount)` recovery for legs seen under one `sk_enc`, each carrying its own
+    /// role, so a party's sender legs and receiver legs share one ladder.
+    pub fn batch_decrypt_values(
+        legs: &[(&Self, Role)],
+        sk_enc: &P::ScalarField,
+        enc_gen: Affine<P>,
+        max_asset_id: AssetId,
+        max_amount: Balance,
+    ) -> Result<Vec<(AssetId, Balance)>> {
+        let n = legs.len();
+        // Amount `(eph_pk, ct)` for every leg, then the asset-id `(eph_pk, ct)` for the legs whose
+        // asset id is a ciphertext.
+        let mut eph_pks = Vec::with_capacity(2 * n);
+        let mut cts = Vec::with_capacity(2 * n);
+        for (leg, role) in legs {
+            eph_pks.push(leg.eph_pk_amount(role.is_sender()));
+            cts.push(leg.ct_amount());
+        }
+
+        // `Right(index of leg `i`'s asset-id point)`, or `Left(value)` when its asset id is revealed.
+        let mut assets = Vec::with_capacity(n);
+        for (leg, role) in legs {
+            match &leg.leg_enc_core_and_eph_keys.core.ct_asset_id {
+                AssetIdEncryption::Revealed(id) => {
+                    assets.push(Either::Left(*id as AssetId));
+                }
+                AssetIdEncryption::Ciphertext(ct) => {
+                    let eph = leg.eph_pk_asset_id(role.is_sender()).ok_or_else(|| {
+                        Error::DecryptionFailed(
+                            "Missing ephemeral key for asset ID decryption".into(),
+                        )
+                    })?;
+                    assets.push(Either::Right(eph_pks.len()));
+                    eph_pks.push(eph);
+                    cts.push(*ct);
+                }
+            }
+        }
+
+        let pts = batch_decrypt_points::<P>(&eph_pks, &cts, sk_enc)?;
+        let base = enc_gen.into_group();
+
+        let amount_targets = pts[..n]
+            .iter()
+            .map(|pt| pt.into_group())
+            .collect::<Vec<Projective<P>>>();
+        let amounts = solve_discrete_log_precomputed_batch::<Projective<P>>(
+            max_amount,
+            base,
+            &amount_targets,
+        );
+        let asset_id_targets = pts[n..]
+            .iter()
+            .map(|pt| pt.into_group())
+            .collect::<Vec<Projective<P>>>();
+        let asset_ids = solve_discrete_log_precomputed_batch::<Projective<P>>(
+            max_asset_id as u64,
+            base,
+            &asset_id_targets,
+        );
+
+        let mut out = Vec::with_capacity(n);
+        for i in 0..n {
+            // let amount = solve_discrete_log_precomputed::<Projective<P>>(
+            //     max_amount,
+            //     base,
+            //     pts[i].into_group(),
+            // )
+            // .ok_or_else(|| Error::DecryptionFailed("Discrete log of `amount` failed.".into()))?;
+            let amount = amounts[i].ok_or_else(|| {
+                Error::DecryptionFailed("Discrete log of `amount` failed.".into())
+            })?;
+            let asset_id = match assets[i] {
+                Either::Left(id) => id,
+                // Either::Right(j) => solve_discrete_log_precomputed::<Projective<P>>(
+                //     max_asset_id as u64,
+                //     base,
+                //     pts[j].into_group(),
+                // )
+                // .ok_or_else(|| {
+                //     Error::DecryptionFailed("Discrete log of `asset_id` failed.".into())
+                // })? as AssetId,
+                Either::Right(j) => asset_ids[j - n].ok_or_else(|| {
+                    Error::DecryptionFailed("Discrete log of `asset_id` failed.".into())
+                })? as AssetId,
+            };
+            out.push((asset_id, amount));
+        }
+        Ok(out)
+    }
+
+    /// For each leg, whether `pk_enc`'s holder is its sender, receiver, or neither, recovering both
+    /// party public keys across the whole batch under one `sk_enc`.
+    pub fn batch_identify_role(
+        legs: &[Self],
+        sk_enc: &P::ScalarField,
+        pk_enc: Affine<P>,
+    ) -> Result<Vec<Option<Role>>> {
+        let n = legs.len();
+        let mut eph_pks = Vec::with_capacity(2 * n);
+        let mut cts = Vec::with_capacity(2 * n);
+        for leg in legs {
+            let (eph_s, ct_s) = leg.eph_pk_and_ct_participant(true);
+            let (eph_r, ct_r) = leg.eph_pk_and_ct_participant(false);
+            eph_pks.push(eph_s);
+            cts.push(ct_s);
+            eph_pks.push(eph_r);
+            cts.push(ct_r);
+        }
+
+        let pts = batch_decrypt_points::<P>(&eph_pks, &cts, sk_enc)?;
+
+        Ok((0..n)
+            .map(|i| {
+                if pts[2 * i] == pk_enc {
+                    Some(Role::Sender)
+                } else if pts[2 * i + 1] == pk_enc {
+                    Some(Role::Receiver)
+                } else {
+                    None
+                }
+            })
+            .collect())
+    }
+
+    /// Scan `legs` under one `sk_enc`, returning `(role, asset_id, amount)` for each leg whose
+    /// sender or receiver is `pk_enc`'s holder, keyed by that leg's index in `legs`.
+    pub fn batch_decrypt_legs(
+        legs: &[Self],
+        sk_enc: &P::ScalarField,
+        pk_enc: Affine<P>,
+        enc_gen: Affine<P>,
+        max_asset_id: AssetId,
+        max_amount: Balance,
+    ) -> Result<BTreeMap<u32, (Role, AssetId, Balance)>> {
+        if legs.len() > u32::MAX as usize {
+            return Err(Error::SizeMismatch(legs.len() - u32::MAX as usize));
+        }
+        let roles = Self::batch_identify_role(legs, sk_enc, pk_enc)?;
+        let mine = roles
+            .into_iter()
+            .enumerate()
+            .filter_map(|(i, role)| role.map(|role| (i as u32, (&legs[i], role))))
+            .collect::<Vec<_>>();
+        let participant_legs = mine.iter().map(|(_, leg)| *leg).collect::<Vec<_>>();
+        let values = Self::batch_decrypt_values(
+            &participant_legs,
+            sk_enc,
+            enc_gen,
+            max_asset_id,
+            max_amount,
+        )?;
+        Ok(mine
+            .into_iter()
+            .zip(values)
+            .map(|((i, (_, role)), (asset_id, amount))| (i, (role, asset_id, amount)))
+            .collect())
     }
 }
 

@@ -658,7 +658,8 @@ impl<
             ));
         }
 
-        let asset_id_comm = (account_comm_key.asset_id_gen() * F0::from(asset_id)).into_affine();
+        let asset_id_comm = account_comm_key.asset_id_gen() * F0::from(asset_id);
+        let id_comm = account_comm_key.id_gen() * id;
 
         let increase_bal_by = F0::from(increase_bal_by);
 
@@ -668,7 +669,7 @@ impl<
             - asset_id_comm
             - issuer_pk_proj
             - issuer_pk_enc_proj
-            - (account_comm_key.id_gen() * id);
+            - id_comm;
         self.resp_acc_old.is_valid(
             &MintTxnProof::<L, F0, F1, G0, G1>::leaf_gens(
                 account_comm_key.clone(),
@@ -686,7 +687,7 @@ impl<
             - asset_id_comm
             - issuer_pk_proj
             - issuer_pk_enc_proj
-            - (account_comm_key.id_gen() * id)
+            - id_comm
             - (account_comm_key.balance_gen() * increase_bal_by);
         let mut missing_resps = BTreeMap::new();
         missing_resps.insert(0, self.resp_acc_old.0[0]);

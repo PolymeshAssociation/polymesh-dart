@@ -553,8 +553,33 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
 
         let h_at = asset_id.map(|a| enc_gen * G::ScalarField::from(a));
 
+        // `y = ct_asset_id - h_at` for every revealed-elsewhere leg, with one shared batch
+        // normalization.
+        let y_elsewhere = match h_at {
+            Some(h_at) => <G as AffineRepr>::Group::normalize_batch(
+                &legs_conf
+                    .iter()
+                    .zip(self.leg_links.iter())
+                    .filter_map(|(conf, link)| {
+                        match (
+                            conf.is_asset_id_revealed(),
+                            link.resp_asset_id(),
+                            conf.encryption.asset_id_ciphertext(),
+                        ) {
+                            (false, Some(RespAssetId::Elsewhere(_)), Some(ct)) => {
+                                Some(ct.into_group() - h_at)
+                            }
+                            _ => None,
+                        }
+                    })
+                    .collect::<Vec<_>>(),
+            ),
+            None => Vec::new(),
+        };
+
         let mut offset_amount = 0;
         let mut offset_asset_id = 0;
+        let mut elsewhere_idx = 0usize;
 
         for (i, (conf, link)) in legs_conf.iter().zip(self.leg_links.iter()).enumerate() {
             if conf.needs_ct_amount() {
@@ -594,12 +619,13 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
                                 "Leg {i}: auth proof claims asset_id is revealed elsewhere but no leg reveals it"
                             )));
                         }
-                        let y = (conf.encryption.asset_id_ciphertext().ok_or_else(|| {
+                        let _ = conf.encryption.asset_id_ciphertext().ok_or_else(|| {
                             Error::ProofVerificationError(format!(
                                 "Leg {i}: encryption is missing the asset-id ciphertext but the leg hides the asset-id"
                             ))
-                        })? - h_at.unwrap())
-                            .into_affine();
+                        })?;
+                        let y = y_elsewhere[elsewhere_idx];
+                        elsewhere_idx += 1;
                         r.challenge_contribution(
                             &eph_pk_base,
                             &y,
@@ -659,6 +685,7 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
 
         let mut offset_amount = 0;
         let mut offset_asset_id = 0;
+        let mut elsewhere_idx = 0usize;
 
         for (i, (conf, link)) in legs_conf.iter().zip(self.leg_links.iter()).enumerate() {
             if conf.needs_ct_amount() {
@@ -695,12 +722,13 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
                 })?;
                 match resp_asset_id {
                     RespAssetId::Elsewhere(r) => {
-                        let y = (conf.encryption.asset_id_ciphertext().ok_or_else(|| {
+                        let _ = conf.encryption.asset_id_ciphertext().ok_or_else(|| {
                             Error::ProofVerificationError(format!(
                                 "Leg {i}: encryption is missing the asset-id ciphertext but the leg hides the asset-id"
                             ))
-                        })? - h_at.unwrap())
-                            .into_affine();
+                        })?;
+                        let y = y_elsewhere[elsewhere_idx];
+                        elsewhere_idx += 1;
                         verify_or_rmc_2!(
                             rmc,
                             r,
