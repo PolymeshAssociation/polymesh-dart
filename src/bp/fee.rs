@@ -1006,11 +1006,16 @@ pub struct FeePaymentWithBatchedProofs<
     T: DartLimits = (),
     C: CurveTreeConfig = FeeAccountTreeConfig,
 > {
+    /// The fee payment associated with this batch of proofs.
     pub fee_payment: FeeAccountPaymentProof<T, C>,
+    /// The batched proofs associated with this fee payment.
     pub batched_proofs: BatchedProofs<T>,
+    /// Indicates whether anyone can submit this batch of proofs and receive the associated fee.
+    pub is_broadcast: bool,
 }
 
 pub const FEE_PAYMENT_BATCH_CTX: &[u8] = b"FeePaymentBatch";
+pub const FEE_PAYMENT_BATCH_BROADCAST_CTX: &[u8] = b"FeePaymentBatchBroadcast";
 
 impl<
     T: DartLimits,
@@ -1028,16 +1033,23 @@ impl<
         key: &AccountKeyPair,
         batched_proofs: BatchedProofs<T>,
         account_state: &mut FeeAccountAssetState,
+        identity: Option<&[u8]>,
         amount: Balance,
         tree_lookup: impl CurveTreeLookup<FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, C>,
     ) -> Result<Self, Error> {
-        let ctx = batched_proofs.ctx(FEE_PAYMENT_BATCH_CTX);
+        let label = if identity.is_none() {
+            FEE_PAYMENT_BATCH_BROADCAST_CTX
+        } else {
+            FEE_PAYMENT_BATCH_CTX
+        };
+        let ctx = batched_proofs.ctx(label, identity);
         let fee_payment =
             FeeAccountPaymentProof::new(rng, key, &ctx.0, account_state, amount, tree_lookup)?;
 
         Ok(Self {
             fee_payment,
             batched_proofs,
+            is_broadcast: identity.is_none(),
         })
     }
 
@@ -1045,14 +1057,20 @@ impl<
     pub fn verify_fee_payment<R: RngCore + CryptoRng>(
         &self,
         rng: &mut R,
+        identity: Option<&[u8]>,
         tree_roots: impl ValidateCurveTreeRoot<FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, C>,
     ) -> Result<(), Error> {
-        let ctx = self.batched_proofs.ctx(FEE_PAYMENT_BATCH_CTX);
+        let ctx = self.fee_payment_ctx(identity);
         self.fee_payment.verify(rng, &ctx.0, tree_roots)
     }
 
     /// Get the fee payment ctx for this batch of proofs.
-    pub fn fee_payment_ctx(&self) -> ProofHash {
-        self.batched_proofs.ctx(FEE_PAYMENT_BATCH_CTX)
+    pub fn fee_payment_ctx(&self, identity: Option<&[u8]>) -> ProofHash {
+        let label = if identity.is_none() {
+            FEE_PAYMENT_BATCH_BROADCAST_CTX
+        } else {
+            FEE_PAYMENT_BATCH_CTX
+        };
+        self.batched_proofs.ctx(label, identity)
     }
 }
