@@ -14,6 +14,7 @@ use crate::{
     NULLIFIER_SK_GEN_COUNTER_LABEL, PK_LABEL,
 };
 use crate::{AUTH_PROOF_LABEL, TXN_CHALLENGE_LABEL};
+use ark_ec::scalar_mul::BatchMulPreprocessing;
 use ark_ec::{AffineRepr, CurveGroup, VariableBaseMSM};
 use ark_ff::BigInteger;
 use ark_ff::field_hashers::{DefaultFieldHasher, HashToField};
@@ -632,8 +633,19 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         let enc_rands_blindings = (0..NUM_CHUNKS)
             .map(|_| G::ScalarField::rand(rng))
             .collect::<Vec<_>>();
+        // `enc_key_gen` and `pk_T` are each multiplied by `NUM_CHUNKS` randomness scalars.
+        let pk_t_table = BatchMulPreprocessing::<G::Group>::new((*pk_T).into_group(), NUM_CHUNKS);
+        let ek_table =
+            BatchMulPreprocessing::<G::Group>::new((*enc_key_gen).into_group(), NUM_CHUNKS);
         let ciphertexts = (0..NUM_CHUNKS)
-            .map(|i| Ciphertext::new_given_randomness(&encs[i], &enc_rands[i], pk_T, enc_key_gen))
+            .map(|i| {
+                Ciphertext::new_given_randomness_and_window_tables(
+                    &encs[i],
+                    &enc_rands[i],
+                    &pk_t_table,
+                    &ek_table,
+                )
+            })
             .collect::<Vec<_>>();
 
         let mut eph_proto = Vec::with_capacity(NUM_CHUNKS);
@@ -750,7 +762,9 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         poseidon_config: &Poseidon2Params<G::ScalarField>,
         T: Option<(G, G, G)>,
         verifier: &mut Verifier<MerlinTranscript, G>,
-    ) -> Result<()> {
+        // `reduced_acc_comm` and, when `encryption_for_T` is present, the `(combined_s, combined_rho)`
+        // commitments, so the paired `verify_with_challenge` can skip recomputing them.
+    ) -> Result<(G, Option<(G, G)>)> {
         if pk_aff.is_zero() || pk_enc.is_zero() {
             return Err(Error::PointAtIdentity);
         }
@@ -883,7 +897,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             .challenge_contribution(dst::REG_BP_RHO, &mut transcript_ref)?;
 
         // Chunks combined protos
-        if let Some(ref enc_for_T) = self.encryption_for_T {
+        let combined_commitments = if let Some(ref enc_for_T) = self.encryption_for_T {
             let enc_rand = &enc_for_T.encrypted_randomness;
             enc_for_T
                 .resp_comm_s_rho_chunks_bp
@@ -926,9 +940,12 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
                 dst::REG_ENC_COMBINED,
                 &mut transcript_ref,
             )?;
-        }
+            Some((combined_s_commitment, combined_rho_commitment))
+        } else {
+            None
+        };
 
-        Ok(())
+        Ok((reduced_acc_comm, combined_commitments))
     }
 
     pub fn challenge_contribution(
@@ -977,6 +994,9 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         leaf_level_bp_gens: &BulletproofGens<G>,
         T: Option<(G, G, G)>,
         mut rmc: Option<&mut RandomizedMultChecker<G>>,
+        // `reduced_acc_comm` and `(combined_s, combined_rho)` from the paired challenge phase.
+        precomputed_reduced_acc_comm: Option<G>,
+        precomputed_combined: Option<(G, G)>,
     ) -> Result<()> {
         if self.resp_comm.len() != 4 {
             return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(
@@ -986,11 +1006,16 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         }
 
         // D = pk_aff + pk_enc + g_k * asset_id + g_l * id
-        let D = pk_aff.into_group()
-            + pk_enc.into_group()
-            + (account_comm_key.asset_id_gen() * G::ScalarField::from(asset_id))
-            + (account_comm_key.id_gen() * id);
-        let reduced_acc_comm = (account_commitment.0.into_group() - D).into_affine();
+        let reduced_acc_comm = match precomputed_reduced_acc_comm {
+            Some(reduced_acc_comm) => reduced_acc_comm,
+            None => {
+                let D = pk_aff.into_group()
+                    + pk_enc.into_group()
+                    + (account_comm_key.asset_id_gen() * G::ScalarField::from(asset_id))
+                    + (account_comm_key.id_gen() * id);
+                (account_commitment.0.into_group() - D).into_affine()
+            }
+        };
 
         // Verify account commitment Schnorr
         let bases = vec![
@@ -1067,16 +1092,26 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
                 );
             }
 
+            // Base powers, needed only when the combined commitments aren't precomputed. Computed
+            // once and shared by the combined_s and combined_rho recompute arms.
+            let recompute_powers = precomputed_combined
+                .is_none()
+                .then(powers_of_base::<G::ScalarField, CHUNK_BITS, NUM_CHUNKS>);
+
             // Compute combined_s_commitment for verification
-            let powers = powers_of_base::<G::ScalarField, CHUNK_BITS, NUM_CHUNKS>();
-            let encs = enc_rand
-                .ciphertexts
-                .iter()
-                .map(|c| c.encrypted)
-                .collect::<Vec<_>>();
-            let combined_s_commitment = G::Group::msm(&encs, &powers)
-                .map_err(Error::size_mismatch)?
-                .into_affine();
+            let combined_s_commitment = match precomputed_combined {
+                Some((combined_s, _)) => combined_s,
+                None => {
+                    let encs = enc_rand
+                        .ciphertexts
+                        .iter()
+                        .map(|c| c.encrypted)
+                        .collect::<Vec<_>>();
+                    G::Group::msm(&encs, recompute_powers.as_ref().unwrap())
+                        .map_err(Error::size_mismatch)?
+                        .into_affine()
+                }
+            };
             verify_or_rmc_3!(
                 rmc,
                 enc_rand.resp_combined_s,
@@ -1131,14 +1166,19 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             );
 
             // Compute combined_rho_commitment for verification
-            let rho_encs = enc_rho
-                .ciphertexts
-                .iter()
-                .map(|c| c.encrypted)
-                .collect::<Vec<_>>();
-            let combined_rho_commitment = G::Group::msm(&rho_encs, &powers)
-                .map_err(Error::size_mismatch)?
-                .into_affine();
+            let combined_rho_commitment = match precomputed_combined {
+                Some((_, combined_rho)) => combined_rho,
+                None => {
+                    let rho_encs = enc_rho
+                        .ciphertexts
+                        .iter()
+                        .map(|c| c.encrypted)
+                        .collect::<Vec<_>>();
+                    G::Group::msm(&rho_encs, recompute_powers.as_ref().unwrap())
+                        .map_err(Error::size_mismatch)?
+                        .into_affine()
+                }
+            };
             verify_or_rmc_3!(
                 rmc,
                 enc_rho.resp_combined_s,
@@ -1428,6 +1468,8 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             leaf_level_bp_gens,
             T,
             rmc,
+            None,
+            None,
         )?;
 
         let bp_proof =
@@ -1499,19 +1541,20 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         verifier: &mut Verifier<MerlinTranscript, G>,
         mut rmc: Option<&mut RandomizedMultChecker<G>>,
     ) -> Result<()> {
-        self.partial.challenge_contribution_with_verifier(
-            id,
-            pk_aff,
-            pk_enc,
-            asset_id,
-            account_commitment,
-            counter,
-            nonce,
-            &account_comm_key,
-            poseidon_config,
-            T,
-            verifier,
-        )?;
+        let (reduced_acc_comm, combined_commitments) =
+            self.partial.challenge_contribution_with_verifier(
+                id,
+                pk_aff,
+                pk_enc,
+                asset_id,
+                account_commitment,
+                counter,
+                nonce,
+                &account_comm_key,
+                poseidon_config,
+                T,
+                verifier,
+            )?;
 
         // Auth challenge contribution (after all partial contributions)
         let enc_key_gen = account_comm_key.sk_enc_gen();
@@ -1540,6 +1583,8 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             leaf_level_bp_gens,
             T,
             rmc.as_deref_mut(),
+            Some(reduced_acc_comm),
+            combined_commitments,
         )?;
 
         // Verify auth
@@ -3153,6 +3198,8 @@ pub mod tests {
                     &leaf_level_bp_gens,
                     T,
                     None,
+                    None,
+                    None,
                 )
                 .unwrap();
 
@@ -3343,6 +3390,8 @@ pub mod tests {
                     &leaf_level_pc_gens,
                     &leaf_level_bp_gens,
                     T,
+                    None,
+                    None,
                     None,
                 )
                 .unwrap();

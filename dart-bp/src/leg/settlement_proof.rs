@@ -15,6 +15,7 @@ use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ec_divisors::DivisorCurve;
 use ark_ff::PrimeField;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize, SerializationError, Valid};
+use ark_std::collections::BTreeMap;
 use ark_std::string::ToString;
 use ark_std::{
     format,
@@ -247,6 +248,8 @@ impl<
         let mut leg_proofs = Vec::with_capacity(num_legs);
         let mut hidden_asset_idx = 0;
         let mut asset_data_iter = asset_data.into_iter();
+        // Legs of the same asset share one `asset_data.points()` list; memoize by asset id.
+        let mut asset_points_cache: BTreeMap<_, Vec<Affine<G0>>> = BTreeMap::new();
 
         for ((leg, leg_enc), leg_enc_rand) in legs.into_iter().zip(leg_encs).zip(leg_enc_rands) {
             let leg_proof = if leg_enc.is_asset_id_revealed() {
@@ -267,6 +270,10 @@ impl<
                 let asset_data = asset_data_iter
                     .next()
                     .expect("asset_data length validated to equal hidden-asset legs");
+                let asset_data_points = asset_points_cache
+                    .entry(asset_data.id)
+                    .or_insert_with(|| asset_data.points(asset_comm_params))
+                    .clone();
                 let proof =
                     LegCreationProof::new_with_given_prover_inner::<_, Parameters0, Parameters1>(
                         rng,
@@ -283,6 +290,7 @@ impl<
                         even_prover,
                         odd_prover,
                         None, // re_randomized_path is stored separately in SettlementCreationProof
+                        Some(asset_data_points),
                     )?;
 
                 hidden_asset_idx += 1;

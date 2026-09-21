@@ -91,6 +91,7 @@ mod error;
 pub mod poseidon_impls;
 
 pub mod auth_proofs;
+pub mod batch_decrypt;
 pub mod discrete_log;
 pub mod dst;
 pub mod fee_account;

@@ -30,6 +30,7 @@ bulletproofs = { workspace = true, default-features = false }
 curve_tree_relations = { workspace = true, default-features = false }
 ark-ec-divisors = { workspace = true, default-features = false, features = ["pallas", "vesta"] }
 ark-dlog-gadget = { workspace = true, default-features = false, features = ["pallas", "vesta"] }
+ark-host-msm-impl = { workspace = true, default-features = false, optional = true }
 
 # Poseidon dependencies
 #arkworks-r1cs-gadgets = {git = "https://github.com/tangle-network/zero-knowledge-gadgets", default-features = false}
@@ -62,12 +63,19 @@ harness = false
 name = "settlement_proofs"
 harness = false
 
+[[bench]]
+name = "batch_decrypt"
+harness = false
+
 [features]
-default = ["std", "asm", "parallel"]
+default = ["std", "asm", "parallel", "build-tables"]
 
 no_std = []
 
 large_baby_steps = []
+
+# Benchmark-only: precomputed fixed-base MSM tables for the verifier's final MSM.
+build-tables = ["curve_tree_relations/build-tables", "dep:ark-host-msm-impl", "ark-host-msm-impl/std"]
 
 std = [
 	"bulletproofs/std",

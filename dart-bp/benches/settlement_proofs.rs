@@ -449,6 +449,113 @@ fn bench_batch_settlement_verification(c: &mut Criterion) {
         "L={L}, M={M}, height={height}, {BATCH_SIZE} settlement proofs with {total_legs} total legs",
     );
 
+    // Fixed-base MSM vs combined MSM, per-proof BP verification.
+    #[cfg(feature = "build-tables")]
+    {
+        use bulletproofs::r1cs::verify_given_verification_tuple;
+        use curve_tree_relations::fixed_base_tables::{FixedBaseTables, FixedBaseTablesPair};
+        use polymesh_dart_bp::util::{batch_verify_tuples_with_tables, verify_tuples_with_tables};
+
+        let mut pairs = Vec::with_capacity(BATCH_SIZE);
+        for i in 0..BATCH_SIZE {
+            let mut tmp_rmc = RandomizedMultChecker::new(PallasFr::rand(&mut rng));
+            let (even, odd) = proofs[i]
+                .verify_and_return_tuples(
+                    all_leg_encs[i].clone(),
+                    &root,
+                    vec![],
+                    vec![],
+                    &nonces[i],
+                    &asset_tree_params,
+                    &asset_comm_params,
+                    enc_key_gen,
+                    enc_gen,
+                    &mut rng,
+                    Some(&mut tmp_rmc),
+                )
+                .unwrap();
+            pairs.push((even, odd));
+        }
+
+        let even_pc = asset_tree_params.even_parameters.pc_gens();
+        let odd_pc = asset_tree_params.odd_parameters.pc_gens();
+        let even_bp = asset_tree_params.even_parameters.bp_gens();
+        let odd_bp = asset_tree_params.odd_parameters.bp_gens();
+
+        let even_max = pairs
+            .iter()
+            .map(|(e, _)| e.padded_n().unwrap())
+            .max()
+            .unwrap();
+        let odd_max = pairs
+            .iter()
+            .map(|(_, o)| o.padded_n().unwrap())
+            .max()
+            .unwrap();
+        let tables = FixedBaseTablesPair {
+            even: FixedBaseTables::with_capacity(even_bp, even_max),
+            odd: FixedBaseTables::with_capacity(odd_bp, odd_max),
+        };
+        println!(
+            "fixed-base tables: even padded_n<={even_max}, odd padded_n<={odd_max}; table size = {:.2} MB (even {:.2} + odd {:.2})",
+            tables.table_bytes() as f64 / (1024.0 * 1024.0),
+            tables.even.table_bytes() as f64 / (1024.0 * 1024.0),
+            tables.odd.table_bytes() as f64 / (1024.0 * 1024.0),
+        );
+
+        c.bench_function("Settlement per-proof BP verify: without tables", |b| {
+            b.iter(|| {
+                for (e, o) in &pairs {
+                    let (er, or) = rayon::join(
+                        || verify_given_verification_tuple(e.clone(), even_pc, even_bp),
+                        || verify_given_verification_tuple(o.clone(), odd_pc, odd_bp),
+                    );
+                    er.unwrap();
+                    or.unwrap();
+                }
+            });
+        });
+
+        c.bench_function("Settlement per-proof BP verify: fixed-base tables", |b| {
+            b.iter(|| {
+                for (e, o) in &pairs {
+                    verify_tuples_with_tables(e.clone(), o.clone(), even_pc, odd_pc, &tables)
+                        .unwrap();
+                }
+            });
+        });
+
+        let even_tuples: Vec<_> = pairs.iter().map(|(e, _)| e.clone()).collect();
+        let odd_tuples: Vec<_> = pairs.iter().map(|(_, o)| o.clone()).collect();
+
+        c.bench_function("Settlement batch verify: without tables", |b| {
+            b.iter(|| {
+                batch_verify_bp(
+                    even_tuples.clone(),
+                    odd_tuples.clone(),
+                    even_pc,
+                    odd_pc,
+                    even_bp,
+                    odd_bp,
+                )
+                .unwrap();
+            });
+        });
+
+        c.bench_function("Settlement batch verify: fixed-base tables", |b| {
+            b.iter(|| {
+                batch_verify_tuples_with_tables(
+                    even_tuples.clone(),
+                    odd_tuples.clone(),
+                    even_pc,
+                    odd_pc,
+                    &tables,
+                )
+                .unwrap();
+            });
+        });
+    }
+
     // Benchmark batch verification with RMC
     c.bench_function("Batch settlement verification with RMC", |b| {
         b.iter(|| {
