@@ -23,10 +23,10 @@ curve_tree_relations = { package = "relations", git = "https://github.com/Polyme
 ark-ec-divisors = { package = "ark-ec-divisors", git = "https://github.com/PolymeshAssociation/curve-trees", branch = "patch7" }
 ark-dlog-gadget = { package = "ark-dlog-gadget", git = "https://github.com/PolymeshAssociation/curve-trees", branch = "patch7" }
 
-#dock_crypto_utils = { path = "../crypto/utils" }
-#schnorr_pok = { path = "../crypto/schnorr_pok" }
-dock_crypto_utils = { git = "https://github.com/PolymeshAssociation/crypto", branch = "dlog-changes" }
-schnorr_pok = { git = "https://github.com/PolymeshAssociation/crypto", branch = "dlog-changes" }
+dock_crypto_utils = { path = "../crypto/utils" }
+schnorr_pok = { path = "../crypto/schnorr_pok" }
+#dock_crypto_utils = { git = "https://github.com/PolymeshAssociation/crypto", branch = "dlog-changes" }
+#schnorr_pok = { git = "https://github.com/PolymeshAssociation/crypto", branch = "dlog-changes" }
 
 # Polymesh changes.
 #ark-serialize = { path = "../arkworks-algebra/serialize" }
@@ -58,6 +58,10 @@ ark-curve25519 = { git = "https://github.com/PolymeshAssociation/arkworks-algebr
 ark-ed25519 = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "patch5" }
 ark-secp256k1 = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "patch5" }
 ark-secq256k1 = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "patch5" }
+
+# BAT PoC only (tests/bat_poc.rs)
+ark-bls12-381 = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "patch5" }
+ark-bn254 = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "patch5" }
 
 [workspace.dependencies]
 polymesh-dart = { path = "./", version = "1.0.0", default-features = false }
@@ -102,6 +106,11 @@ schnorr_pok = { version = "0.22.0", default-features = false }
 
 ark-pallas = { version = "0.5.0", default-features = false }
 ark-vesta = { version = "0.5.0", default-features = false }
+
+# BAT PoC only
+ark-bls12-381 = { version = "0.5.0", default-features = false }
+ark-bn254 = { version = "0.5.0", default-features = false }
+ark-ed25519 = { version = "0.5.0", default-features = false }
 
 # Curve tree dependencies
 bulletproofs = { version = "2.0.0", default-features = false }
@@ -182,6 +191,19 @@ criterion = { version = "0.5", features = ["html_reports"] }
 anyhow = { workspace = true }
 test-log = { workspace = true, features = ["default"] }
 rand = { workspace = true }
+
+# BAT PoC (tests/bat_poc.rs)
+ark-bls12-381 = { workspace = true, features = ["curve", "std"] }
+ark-bn254 = { workspace = true, features = ["curve", "std"] }
+ark-ed25519 = { workspace = true, features = ["std"] }
+ark-pallas = { workspace = true, features = ["curve", "std"] }
+ark-ec = { workspace = true, features = ["std"] }
+ark-ff = { workspace = true, features = ["std"] }
+ark-serialize = { workspace = true, features = ["std"] }
+ark-std = { workspace = true, features = ["std"] }
+dock_crypto_utils = { workspace = true, features = ["std"] }
+schnorr_pok = { workspace = true, features = ["std"] }
+sha2 = { version = "0.10", default-features = false }
 
 
 [[bench]]
