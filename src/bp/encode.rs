@@ -604,3 +604,9 @@ impl<T: CanonicalDeserialize, S: Get<u32>> Decode for BoundedCanonical<T, S> {
         })
     }
 }
+
+impl<T: CanonicalSerialize, S: Get<u32>> MaxEncodedLen for BoundedCanonical<T, S> {
+    fn max_encoded_len() -> usize {
+        BoundedVec::<u8, S>::max_encoded_len()
+    }
+}

@@ -1011,7 +1011,7 @@ type BPSettlementTxnProof<C> = bp_leg::leg_proof::LegCreationProof<
 pub struct SettlementLegProof<T: DartLimits, C: CurveTreeConfig = AssetTreeConfig> {
     pub leg_enc: LegEncrypted,
     /// Public encryption keys specified by the leg creator (not tied to the asset).
-    pub public_enc_keys: Vec<EncryptionPublicKey>,
+    pub public_enc_keys: BoundedVec<EncryptionPublicKey, T::MaxPublicEncKeys>,
 
     inner: BoundedCanonical<BPSettlementTxnProof<C>, T::MaxInnerProofSize>,
 }
@@ -1057,7 +1057,7 @@ impl<
 
         Ok(Self {
             leg_enc: LegEncrypted::new(leg_enc)?,
-            public_enc_keys,
+            public_enc_keys: public_enc_keys.try_into().map_err(|_| Error::TooManyKeys)?,
 
             inner: BoundedCanonical::wrap(&proof)?,
         })
@@ -1171,7 +1171,7 @@ pub struct SettlementLegProofRevealedAssetId<T: DartLimits> {
     pub asset_id: AssetId,
     pub leg_enc: LegEncrypted,
     /// Public encryption keys specified by the leg creator (not tied to the asset).
-    pub public_enc_keys: Vec<EncryptionPublicKey>,
+    pub public_enc_keys: BoundedVec<EncryptionPublicKey, T::MaxPublicEncKeys>,
 
     inner: BoundedCanonical<
         bp_leg::public_asset_leg_proof::PublicAssetLegCreationProof<PallasParameters>,
@@ -1207,7 +1207,7 @@ impl<T: DartLimits> SettlementLegProofRevealedAssetId<T> {
         Ok(Self {
             asset_id,
             leg_enc: LegEncrypted::new(leg_enc)?,
-            public_enc_keys,
+            public_enc_keys: public_enc_keys.try_into().map_err(|_| Error::TooManyKeys)?,
             inner: BoundedCanonical::wrap(&proof)?,
         })
     }
