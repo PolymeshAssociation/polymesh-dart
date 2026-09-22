@@ -77,8 +77,8 @@ impl<T: DartLimits> BatchedProofs<T> {
     }
 
     /// Hash the batched proofs with a context.
-    pub fn ctx(&self, ctx: &[u8]) -> ProofHash {
-        ProofHash(blake2_256(&(ctx, self)))
+    pub fn ctx(&self, ctx: &[u8], identity: Option<&[u8]>) -> ProofHash {
+        ProofHash(blake2_256(&(identity, ctx, self)))
     }
 }
 

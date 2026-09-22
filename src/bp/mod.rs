@@ -404,6 +404,7 @@ pub struct DartBPGenerators {
     enc_key_gen: PallasA,
     account_comm_key: AccountCommitmentKey,
     leg_asset_value_gen: PallasA,
+    force_transfer_enc_gen: PallasA,
 }
 
 impl DartBPGenerators {
@@ -416,12 +417,15 @@ impl DartBPGenerators {
             AccountCommitmentKey::new::<Blake2b512>(DART_GEN_ACCOUNT_KEY, sig_key_gen, enc_key_gen);
 
         let leg_asset_value_gen = hash_to_pallas(label, b" : leg_asset_value_gen").into_affine();
+        let force_transfer_enc_gen =
+            hash_to_pallas(label, b" : force_transfer_enc_gen").into_affine();
 
         Self {
             sig_key_gen,
             enc_key_gen,
             account_comm_key,
             leg_asset_value_gen,
+            force_transfer_enc_gen,
         }
     }
 
@@ -441,6 +445,26 @@ impl DartBPGenerators {
     pub fn leg_asset_value_gen(&self) -> PallasA {
         self.leg_asset_value_gen
     }
+
+    /// Generator used to encrypt the rho/randomness chunks for the issuer's force-transfer key `pk_T`.
+    pub fn force_transfer_enc_gen(&self) -> PallasA {
+        self.force_transfer_enc_gen
+    }
+}
+
+/// Builds the `(pk_T, sk_enc_gen, force_transfer_enc_gen)` tuple expected by the inner BP registration API.
+pub(crate) fn force_transfer_encryption_params(
+    pk_t: Option<EncryptionPublicKey>,
+) -> Result<Option<(PallasA, PallasA, PallasA)>, Error> {
+    pk_t.map(|pk| -> Result<_, Error> {
+        let gens = dart_gens();
+        Ok((
+            pk.get_affine()?,
+            gens.account_comm_key().sk_enc_gen(),
+            gens.force_transfer_enc_gen(),
+        ))
+    })
+    .transpose()
 }
 
 pub(crate) fn try_block_number<T: TryInto<BlockNumber>>(
@@ -511,14 +535,14 @@ mod tests {
     #[test]
     fn key_distribution() {
         let mut rng = rand::thread_rng();
-        let distributor = AccountKeys::rand(&mut rng).unwrap();
+        let distributor = EncryptionKeyPair::rand(&mut rng).unwrap();
         let recipient = AccountKeys::rand(&mut rng).unwrap();
         let params = curve_tree::get_account_curve_tree_parameters();
         let nonce = b"test-nonce";
 
         let proof = KeyDistributionProof::<()>::new(
             &mut rng,
-            &distributor.enc,
+            &distributor,
             vec![recipient.enc.public.clone()],
             nonce,
             params,
@@ -527,7 +551,7 @@ mod tests {
         proof.verify(nonce, params, &mut rng).unwrap();
 
         let recovered = proof.decrypt(0, &recipient.enc.secret).unwrap();
-        assert_eq!(recovered, distributor.enc.secret.inner().0);
+        assert_eq!(recovered, distributor.secret.inner().0);
     }
 
     #[test]
@@ -751,9 +775,15 @@ mod tests {
         let (account_state, rho_randomness) =
             keys.init_asset_state(asset_id, counter, ctx).unwrap();
 
-        let (protocol, device_request) =
-            AccountRegHostProtocol::init(&mut rng, &account_state, rho_randomness, counter, ctx)
-                .unwrap();
+        let (protocol, device_request) = AccountRegHostProtocol::init(
+            &mut rng,
+            &account_state,
+            rho_randomness,
+            counter,
+            ctx,
+            None,
+        )
+        .unwrap();
 
         let gens = dart_gens();
         let device_response = create_registration_auth_proof(
@@ -769,7 +799,9 @@ mod tests {
             .finish(&mut rng, &device_response, counter, tree_params)
             .unwrap();
 
-        proof.verify(ctx, tree_params, &mut rng).unwrap();
+        proof
+            .verify(ctx, tree_params, &mut rng, &AssetPkTLookup::default())
+            .unwrap();
     }
 
     #[test]
@@ -789,12 +821,24 @@ mod tests {
         let (account_state2, rho_randomness2) =
             keys2.init_asset_state(asset_id, counter, ctx).unwrap();
 
-        let (protocol1, device_request1) =
-            AccountRegHostProtocol::init(&mut rng, &account_state1, rho_randomness1, counter, ctx)
-                .unwrap();
-        let (protocol2, device_request2) =
-            AccountRegHostProtocol::init(&mut rng, &account_state2, rho_randomness2, counter, ctx)
-                .unwrap();
+        let (protocol1, device_request1) = AccountRegHostProtocol::init(
+            &mut rng,
+            &account_state1,
+            rho_randomness1,
+            counter,
+            ctx,
+            None,
+        )
+        .unwrap();
+        let (protocol2, device_request2) = AccountRegHostProtocol::init(
+            &mut rng,
+            &account_state2,
+            rho_randomness2,
+            counter,
+            ctx,
+            None,
+        )
+        .unwrap();
 
         let gens = dart_gens();
         let device_response1 = create_registration_auth_proof(
@@ -830,7 +874,101 @@ mod tests {
             },
         };
 
-        batched.verify(ctx, tree_params, &mut rng).unwrap();
+        batched
+            .verify(ctx, tree_params, &mut rng, &AssetPkTLookup::default())
+            .unwrap();
+    }
+
+    #[test]
+    fn test_account_reg_with_pk_t() {
+        let mut rng = rand::thread_rng();
+        let ctx = b"test-account-reg-with-pk-t";
+        let asset_id: AssetId = 1;
+        let counter: NullifierSkGenCounter = 0;
+
+        let tree_params = AccountTreeConfig::parameters();
+        let keys = AccountKeys::rand(&mut rng).unwrap();
+
+        let force_transfer_keys = EncryptionKeyPair::rand(&mut rng).unwrap();
+        let wrong_keys = EncryptionKeyPair::rand(&mut rng).unwrap();
+
+        let (proof, account_state) = AccountAssetRegistrationProof::<()>::new(
+            &mut rng,
+            &keys,
+            asset_id,
+            counter,
+            ctx,
+            tree_params,
+            Some(force_transfer_keys.public),
+        )
+        .unwrap();
+
+        // Verifying with the same pk_T succeeds.
+        let mut asset_lookup = AssetPkTLookup::default();
+        asset_lookup.add(asset_id, force_transfer_keys.public);
+
+        proof
+            .verify(ctx, tree_params, &mut rng, &asset_lookup)
+            .unwrap();
+
+        // Verifying with no pk_T, or a different pk_T, must fail.
+        assert!(
+            proof
+                .verify(ctx, tree_params, &mut rng, &AssetPkTLookup::default())
+                .is_err()
+        );
+        let mut wrong_asset_lookup = AssetPkTLookup::default();
+        wrong_asset_lookup.add(asset_id, wrong_keys.public);
+        assert!(
+            proof
+                .verify(ctx, tree_params, &mut rng, &wrong_asset_lookup)
+                .is_err()
+        );
+
+        // The escrowed rho/randomness must decrypt back to the account's actual values.
+        assert!(proof.has_encrypted_state().unwrap());
+        let encrypted_state = proof
+            .get_encrypted_state()
+            .unwrap()
+            .expect("proof registered with pk_T must have encrypted state")
+            .decode()
+            .unwrap();
+        let (rho, randomness) = encrypted_state
+            .decrypt(&force_transfer_keys.secret)
+            .unwrap();
+        assert_eq!(rho, account_state.current_state.rho.decode().unwrap());
+        assert_eq!(
+            randomness,
+            account_state.current_state.randomness.decode().unwrap()
+        );
+    }
+
+    #[test]
+    fn test_account_reg_without_pk_t_has_no_encrypted_state() {
+        let mut rng = rand::thread_rng();
+        let ctx = b"test-account-reg-without-pk-t";
+        let asset_id: AssetId = 1;
+        let counter: NullifierSkGenCounter = 0;
+
+        let tree_params = AccountTreeConfig::parameters();
+        let keys = AccountKeys::rand(&mut rng).unwrap();
+
+        let (proof, _account_state) = AccountAssetRegistrationProof::<()>::new(
+            &mut rng,
+            &keys,
+            asset_id,
+            counter,
+            ctx,
+            tree_params,
+            None,
+        )
+        .unwrap();
+
+        proof
+            .verify(ctx, tree_params, &mut rng, &AssetPkTLookup::default())
+            .unwrap();
+        assert!(!proof.has_encrypted_state().unwrap());
+        assert!(proof.get_encrypted_state().unwrap().is_none());
     }
 
     #[test]

@@ -5,6 +5,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use ark_ec::short_weierstrass::Affine;
+use ark_std::format;
 use ark_std::vec::Vec;
 use bulletproofs::r1cs::{ConstraintSystem as _, VerificationTuple};
 use curve_tree_relations::curve_tree::Root;
@@ -858,6 +859,76 @@ impl<
         >,
 > FeeAccountPaymentProof<T, C>
 {
+    /// Estimates the SCALE-encoded byte length of a payment proof for a positive tree height.
+    ///
+    /// Includes the public fields, compact length prefixes, divisor commitments, and both
+    /// Bulletproofs. Uses the tree gadget's multiplication-gate estimate, so the result can
+    /// differ from the actual size at inner-product round boundaries. This is not a bound
+    /// for validating untrusted proofs and does not check tree capacity or `DartLimits`.
+    ///
+    /// # Panics
+    /// Panics if `tree_height` is zero.
+    pub fn estimate_encoded_size(tree_height: u8) -> usize {
+        use ark_dlog_gadget::dlog::DiscreteLogParameters;
+        use curve_tree_relations::prover::{get_chunk_lengths, tree_mult_gate_estimate};
+
+        assert!(tree_height > 0, "fee account tree height must be positive");
+        let height = usize::from(tree_height);
+        let even_levels = height / 2;
+        let odd_levels = height.div_ceil(2);
+        let even_gates = tree_mult_gate_estimate(even_levels, FEE_ACCOUNT_TREE_L, 1);
+        let odd_gates = tree_mult_gate_estimate(odd_levels, FEE_ACCOUNT_TREE_L, 1);
+        let (even_chunk_len, odd_chunk_len) =
+            get_chunk_lengths::<C::DLogParams0, C::DLogParams1>(None, (even_gates, odd_gates));
+        let even_chunks = 2 * C::DLogParams0::decomposition_size() / even_chunk_len;
+        let odd_chunks = 2 * C::DLogParams1::decomposition_size() / odd_chunk_len;
+        let compact_len = |length: usize| codec::Compact(length as u64).encoded_size();
+        let point_size = ARK_EC_BASE_FIELD_SIZE;
+
+        let path_size = 2 * compact_len(even_levels)
+            + 2 * compact_len(odd_levels)
+            + height * point_size
+            + even_levels * (compact_len(even_chunks) + even_chunks * point_size)
+            + odd_levels * (compact_len(odd_chunks) + odd_chunks * point_size);
+
+        let r1cs_size =
+            |levels: usize, chunks: usize, chunk_len: usize, gates: usize, root: bool| {
+                let non_root_levels = levels - usize::from(root);
+                let vector_commitments = levels * chunks + non_root_levels;
+                let coefficient_commitments = 3 * vector_commitments + 5;
+                let dimension = gates.max(if levels > 0 { chunk_len } else { 1 });
+                let rounds = dimension.next_power_of_two().ilog2() as usize;
+                let fixed_points_and_scalars = 8 * point_size;
+                fixed_points_and_scalars
+                    + 1
+                    + compact_len(coefficient_commitments)
+                    + coefficient_commitments * point_size
+                    + 2 * (compact_len(rounds) + rounds * point_size)
+            };
+        let even_proof_size = r1cs_size(
+            even_levels,
+            even_chunks,
+            even_chunk_len,
+            even_gates + usize::from(polymesh_dart_common::FEE_BALANCE_BITS),
+            height % 2 == 0,
+        );
+        let odd_proof_size = r1cs_size(
+            odd_levels,
+            odd_chunks,
+            odd_chunk_len,
+            odd_gates,
+            height % 2 != 0,
+        );
+        let fixed_sigma_proofs_size = 622;
+        let inner_size = path_size + even_proof_size + odd_proof_size + fixed_sigma_proofs_size + 1;
+        let public_fields_size = AssetId::max_encoded_len()
+            + Balance::max_encoded_len()
+            + BlockNumber::max_encoded_len()
+            + FeeAccountStateCommitment::max_encoded_len()
+            + FeeAccountStateNullifier::max_encoded_len();
+        public_fields_size + compact_len(inner_size) + inner_size
+    }
+
     /// Generate a new payment proof for the given fee payment account.
     pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
@@ -1006,11 +1077,71 @@ pub struct FeePaymentWithBatchedProofs<
     T: DartLimits = (),
     C: CurveTreeConfig = FeeAccountTreeConfig,
 > {
+    /// The fee payment associated with this batch of proofs.
     pub fee_payment: FeeAccountPaymentProof<T, C>,
+    /// The batched proofs associated with this fee payment.
     pub batched_proofs: BatchedProofs<T>,
+    /// Indicates whether anyone can submit this batch of proofs and receive the associated fee.
+    pub is_broadcast: bool,
 }
 
 pub const FEE_PAYMENT_BATCH_CTX: &[u8] = b"FeePaymentBatch";
+pub const FEE_PAYMENT_BATCH_BROADCAST_CTX: &[u8] = b"FeePaymentBatchBroadcast";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::curve_tree::ProverCurveTree;
+
+    #[test]
+    fn fee_payment_encoded_size_by_tree_height() {
+        let mut rng = rand_chacha::ChaCha20Rng::from_seed([42; 32]);
+        let keys = AccountKeys::rand(&mut rng).unwrap();
+        let ctx = b"fee-payment-size";
+
+        for height in 1..=10 {
+            let mut tree = ProverCurveTree::<
+                FEE_ACCOUNT_TREE_L,
+                FEE_ACCOUNT_TREE_M,
+                FeeAccountTreeConfig,
+            >::new(height)
+            .unwrap();
+            let mut state =
+                FeeAccountAssetState::new(&mut rng, &keys.acct.public, 0, 1000).unwrap();
+            let leaf = state.current_commitment().unwrap().as_leaf_value().unwrap();
+            tree.insert(leaf).unwrap();
+            tree.store_root().unwrap();
+            let witness_path = tree.get_path_to_leaf(leaf).unwrap();
+            assert_eq!(
+                witness_path.even_internal_nodes.len() + witness_path.odd_internal_nodes.len(),
+                usize::from(height),
+                "fee account leaf witness path at height {height}",
+            );
+
+            let proof = FeeAccountPaymentProof::<()>::new(
+                &mut rng, &keys.acct, ctx, &mut state, 200, &tree,
+            )
+            .unwrap();
+            proof.verify(&mut rng, ctx, &tree.root().unwrap()).unwrap();
+            let actual_size = proof.encode().len();
+            let estimated_size = FeeAccountPaymentProof::<()>::estimate_encoded_size(height);
+            println!(
+                "fee payment height {height}: {actual_size} SCALE bytes, estimate {estimated_size}",
+            );
+            assert!(
+                estimated_size >= actual_size && estimated_size - actual_size <= 128,
+                "height {height}: actual {actual_size}, estimate {estimated_size}",
+            );
+            let inner = proof.inner.decode().unwrap();
+            let path = &inner.partial.re_randomized_path;
+            assert_eq!(
+                path.path.even_commitments.len() + path.path.odd_commitments.len(),
+                usize::from(height),
+                "fee account leaf proof path at height {height}",
+            );
+        }
+    }
+}
 
 impl<
     T: DartLimits,
@@ -1028,16 +1159,23 @@ impl<
         key: &AccountKeyPair,
         batched_proofs: BatchedProofs<T>,
         account_state: &mut FeeAccountAssetState,
+        identity: Option<&[u8]>,
         amount: Balance,
         tree_lookup: impl CurveTreeLookup<FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, C>,
     ) -> Result<Self, Error> {
-        let ctx = batched_proofs.ctx(FEE_PAYMENT_BATCH_CTX);
+        let label = if identity.is_none() {
+            FEE_PAYMENT_BATCH_BROADCAST_CTX
+        } else {
+            FEE_PAYMENT_BATCH_CTX
+        };
+        let ctx = batched_proofs.ctx(label, identity);
         let fee_payment =
             FeeAccountPaymentProof::new(rng, key, &ctx.0, account_state, amount, tree_lookup)?;
 
         Ok(Self {
             fee_payment,
             batched_proofs,
+            is_broadcast: identity.is_none(),
         })
     }
 
@@ -1045,14 +1183,25 @@ impl<
     pub fn verify_fee_payment<R: RngCore + CryptoRng>(
         &self,
         rng: &mut R,
+        identity: Option<&[u8]>,
         tree_roots: impl ValidateCurveTreeRoot<FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, C>,
     ) -> Result<(), Error> {
-        let ctx = self.batched_proofs.ctx(FEE_PAYMENT_BATCH_CTX);
+        if self.is_broadcast != identity.is_none() {
+            return Err(Error::CryptoError(format!(
+                "is_broadcast does not match identity presence"
+            )));
+        }
+        let ctx = self.fee_payment_ctx(identity);
         self.fee_payment.verify(rng, &ctx.0, tree_roots)
     }
 
     /// Get the fee payment ctx for this batch of proofs.
-    pub fn fee_payment_ctx(&self) -> ProofHash {
-        self.batched_proofs.ctx(FEE_PAYMENT_BATCH_CTX)
+    pub fn fee_payment_ctx(&self, identity: Option<&[u8]>) -> ProofHash {
+        let label = if identity.is_none() {
+            FEE_PAYMENT_BATCH_BROADCAST_CTX
+        } else {
+            FEE_PAYMENT_BATCH_CTX
+        };
+        self.batched_proofs.ctx(label, identity)
     }
 }

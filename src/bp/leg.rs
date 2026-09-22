@@ -7,14 +7,9 @@ use serde::{Deserialize, Serialize};
 use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
 use scale_info::TypeInfo;
 
-use ark_ec::{CurveConfig, short_weierstrass::Affine};
-use ark_std::{
-    collections::BTreeSet,
-    format,
-    string::{String, ToString},
-    vec,
-    vec::Vec,
-};
+use ark_ec::{AffineRepr, CurveConfig, CurveGroup, short_weierstrass::Affine};
+use ark_ff::Field;
+use ark_std::{collections::BTreeSet, format, string::ToString, vec, vec::Vec};
 use bulletproofs::r1cs::{VerificationTuple, batch_verify_with_rng};
 use bulletproofs::{BulletproofGens, PedersenGens};
 use curve_tree_relations::curve_tree::Root;
@@ -140,10 +135,8 @@ impl LegRef {
     }
 
     /// The settlement/leg context to tie proofs to a leg.
-    pub fn context(&self) -> [u8; 33] {
-        let mut out = [0u8; 33];
-        (&self.settlement, self.leg_id).encode_to(&mut out.as_mut_slice());
-        out
+    pub fn context(&self) -> Vec<u8> {
+        (&self.settlement, self.leg_id).encode()
     }
 }
 
@@ -1355,12 +1348,31 @@ impl LegEncrypted {
         Ok(Self(WrappedLegEncryption::wrap(&leg_enc)?))
     }
 
+    /// Convert from the old LegEncryptionV0 format to the new LegEncryption format.
+    pub fn from_v0(&self) -> Result<LegEncrypted, Error> {
+        let leg_enc_v1 = self
+            .0
+            .convert_from::<bp_leg::old::LegEncryptionV0<PallasA>>()?;
+        LegEncrypted::new(leg_enc_v1)
+    }
+
     pub fn decode(&self) -> Result<bp_leg::LegEncryption<PallasA>, Error> {
         self.0.decode()
     }
 
+    /// Check if the asset ID of the leg is revealed.
     pub fn is_asset_id_revealed(&self) -> Result<bool, Error> {
         Ok(self.decode()?.is_asset_id_revealed())
+    }
+
+    /// Get the asset ID of the leg, if it is revealed. Returns `None` if the asset ID is encrypted.
+    ///
+    /// Auditors/Mediators can use this to filter legs based on the asset ID, if it is revealed.
+    ///
+    /// If the asset ID is encrypted, auditors/mediators will need to call `try_decrypt_with_key` to attempt decryption.
+    pub fn asset_id(&self) -> Result<Option<AssetId>, Error> {
+        let leg_enc = self.decode()?;
+        Ok(leg_enc.asset_id())
     }
 
     pub fn mediator_count(&self) -> Result<usize, Error> {
@@ -1388,14 +1400,24 @@ impl LegEncrypted {
     }
 
     /// Attempt to decrypt the leg using the provided key pair and optional auditor/mediator key index.
+    ///
     /// Every mediator entry is encrypted to every asset encryption key, so an encryption key alone
     /// doesn't identify a mediator.
+    ///
+    /// It is recommended to provide the `max_amount` limit to prevent excessive decryption time.
+    ///
+    /// Auditors and mediators can use the maximum total supply of the assets they are responsible for as the `max_amount` limit.
+    ///
+    /// This call is for auditors/mediators to attempt decryption of the leg using their keys.
+    ///
+    /// Investors should use `try_decrypt` instead.
     pub fn try_decrypt_with_key(
         &self,
         keys: &EncryptionKeyPair,
         key_index: Option<usize>,
         affirmation_key: Option<&AccountPublicKey>,
         max_asset_id: Option<AssetId>,
+        max_amount: Option<Balance>,
     ) -> Result<(Leg, LegRole), Error> {
         let enc_gen = dart_gens().leg_asset_value_gen();
         let leg_enc = self.decode()?;
@@ -1409,7 +1431,7 @@ impl LegEncrypted {
                     key_index,
                     enc_gen,
                     max_asset_id,
-                    None,
+                    max_amount,
                 )?,
             )
         } else {
@@ -1423,7 +1445,7 @@ impl LegEncrypted {
                     idx,
                     enc_gen,
                     max_asset_id,
-                    None,
+                    max_amount,
                 ) {
                     break (idx, res);
                 }
@@ -1475,6 +1497,101 @@ impl LegEncrypted {
         }
     }
 
+    /// Check if the given key and account correspond to a party in this leg.
+    ///
+    /// Investors should:
+    /// - Provide their account public key in the `account` parameter.
+    /// - `max_asset_id` and `auditor_check` should be `None`.
+    ///
+    /// Mediators and auditors should:
+    /// - Provide `None` for the `account` parameter.
+    /// - Provide the appropriate `max_asset_id` and `auditor_check` values.
+    ///
+    /// The `auditor_check` closure is used to filter asset IDs the auditor isn't interested in.  The closure should return `Some(balance)` if the auditor wants to check the asset ID, or `None` otherwise.
+    /// If possible the auditor check closure should return the asset's total supply as the `Balance` value for faster decryption.
+    pub fn is_party<F: Fn(&AssetId) -> Option<Balance>>(
+        &self,
+        key: &EncryptionKeyPair,
+        account: Option<AccountPublicKey>,
+        max_asset_id: Option<AssetId>,
+        auditor_check: Option<F>,
+    ) -> Result<Option<LegRole>, Error> {
+        use polymesh_dart_bp::leg::LegEncryption;
+
+        let leg_enc = self.decode()?;
+
+        let sk_enc_inv = key
+            .secret
+            .0
+            .0
+            .inverse()
+            .ok_or_else(|| Error::LegDecryptionError("Inverse failed".into()))?;
+
+        // If we have the account public key, we can check if this key corresponds to the sender or receiver in the leg.
+        if let Some(account) = account {
+            let account = account.get_affine()?;
+            // Try to decrypt as the sender.
+            {
+                let sender = LegEncryption::decrypt_element_with_sk_inv(
+                    &sk_enc_inv,
+                    leg_enc.leg_enc_core_and_eph_keys.core.ct_s,
+                    leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
+                )
+                .into_affine();
+                if sender == account {
+                    return Ok(Some(LegRole::sender()));
+                }
+            }
+            // Try to decrypt as the receiver.
+            {
+                let receiver = LegEncryption::decrypt_element_with_sk_inv(
+                    &sk_enc_inv,
+                    leg_enc.leg_enc_core_and_eph_keys.core.ct_r,
+                    leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
+                )
+                .into_affine();
+                if receiver == account {
+                    return Ok(Some(LegRole::receiver()));
+                }
+            }
+        }
+
+        if let Some(auditor_check) = auditor_check {
+            let enc_gen = dart_gens().leg_asset_value_gen().into_group();
+
+            let num_enc_keys = leg_enc.eph_pk_enc_keys.len();
+
+            if let Some(asset_id) = leg_enc.asset_id() {
+                // The asset ID is revealed, so we have to try decrypting the leg `amount`.
+                if let Some(balance) = auditor_check(&asset_id) {
+                    for key_idx in 0..num_enc_keys {
+                        if leg_enc
+                            .decrypt_amount(&sk_enc_inv, false, key_idx, enc_gen, balance)
+                            .is_ok()
+                        {
+                            return Ok(Some(LegRole::auditor(key_idx as u8)));
+                        }
+                    }
+                } else {
+                    // The auditor is not interested in this asset ID.
+                    return Ok(None);
+                }
+            } else {
+                let max_asset_id = max_asset_id.unwrap_or(MAX_ASSET_ID);
+                // The asset ID is not revealed, so we need to try decrypting the asset ID.
+                for key_idx in 0..num_enc_keys {
+                    if leg_enc
+                        .decrypt_asset_id(&sk_enc_inv, false, key_idx, enc_gen, max_asset_id)
+                        .is_ok()
+                    {
+                        return Ok(Some(LegRole::auditor(key_idx as u8)));
+                    }
+                }
+            }
+        }
+        Ok(None)
+    }
+
     /// Decrypt the leg using the provided role and account keys.  Only use this if the role is known.
     ///
     /// Senders/receivers should use `try_decrypt` instead.
@@ -1521,8 +1638,13 @@ impl LegEncrypted {
                 index: Some(idx),
             } => {
                 match leg_enc.mediators.as_ref() {
-                    Some(_) => {
-                        let med_enc = leg_enc.mediator_encryption(idx as usize)?;
+                    Some(med_enc) => {
+                        let med_enc = med_enc.get(idx as usize).ok_or_else(|| {
+                            Error::LegDecryptionError(format!(
+                                "Mediator encryption not found for index {}",
+                                idx
+                            ))
+                        })?;
                         // The mediator's entry is encrypted to every asset encryption key. The index
                         // of the one it holds is found by trial decryption.
                         let i = med_enc.find_key_index(

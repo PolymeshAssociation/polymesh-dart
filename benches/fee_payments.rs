@@ -4,6 +4,20 @@ use std::hint::black_box;
 
 use polymesh_dart::{curve_tree::*, *};
 
+fn fee_payment_size_estimate_benchmark(c: &mut Criterion) {
+    let mut group = c.benchmark_group("FeeAccountPaymentProof estimate_encoded_size");
+    for height in 1u8..=10 {
+        group.bench_with_input(
+            criterion::BenchmarkId::from_parameter(height),
+            &height,
+            |b, height| {
+                b.iter(|| FeeAccountPaymentProof::<()>::estimate_encoded_size(black_box(*height)))
+            },
+        );
+    }
+    group.finish();
+}
+
 fn fee_proof_benchmark(c: &mut Criterion) {
     let mut rng = rand_chacha::ChaCha20Rng::from_seed([42; 32]);
     let ctx = b"fee_benchmark";
@@ -162,5 +176,9 @@ fn fee_proof_benchmark(c: &mut Criterion) {
     });
 }
 
-criterion_group!(fee_proof_benches, fee_proof_benchmark);
+criterion_group!(
+    fee_proof_benches,
+    fee_proof_benchmark,
+    fee_payment_size_estimate_benchmark
+);
 criterion_main!(fee_proof_benches);

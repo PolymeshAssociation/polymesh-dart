@@ -20,6 +20,37 @@ use crate::{
 };
 use polymesh_dart_bp::account::mint::MintTxnProof;
 
+/// A lookup table for asset pk_T encryption key needed for account registration.
+#[derive(Clone, Debug, Encode, Decode, Default, DecodeWithMemTracking, TypeInfo)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct AssetPkTLookup {
+    pub assets: BTreeMap<AssetId, EncryptionPublicKey>,
+}
+
+impl AssetPkTLookup {
+    /// Creates a new, empty `AssetPkTLookup`.
+    pub fn new() -> Self {
+        Self {
+            assets: BTreeMap::new(),
+        }
+    }
+
+    /// Adds a new asset and its corresponding pk_T encryption key to the lookup table.
+    pub fn add(&mut self, asset_id: AssetId, pk_t: EncryptionPublicKey) {
+        self.assets.insert(asset_id, pk_t);
+    }
+
+    /// Retrieves the pk_T encryption key for the specified asset.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `Error::AssetNotFound` if the asset is not present in the lookup table.
+    pub fn get(&self, asset_id: AssetId) -> Option<&EncryptionPublicKey> {
+        self.assets.get(&asset_id)
+    }
+}
+
+/// A lookup table for asset keys, allowing retrieval of encryption and mediator affirmation keys for a given asset.
 #[derive(Clone, Debug, Encode, Decode, Default, DecodeWithMemTracking, TypeInfo)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct AssetKeysLookup {
@@ -27,16 +58,23 @@ pub struct AssetKeysLookup {
 }
 
 impl AssetKeysLookup {
+    /// Creates a new, empty `AssetKeysLookup`.
     pub fn new() -> Self {
         Self {
             assets: BTreeMap::new(),
         }
     }
 
+    /// Adds a new asset and its corresponding keys to the lookup table.
     pub fn add(&mut self, asset_state: AssetState) {
         self.assets.insert(asset_state.asset_id, asset_state.keys);
     }
 
+    /// Retrieves the encryption and mediator affirmation keys for the specified asset.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `Error::AssetNotFound` if the asset is not present in the lookup table.
     pub fn get_keys(&self, asset_id: AssetId) -> Result<(Vec<PallasA>, Vec<PallasA>), Error> {
         let asset_keys = self
             .assets

@@ -101,11 +101,21 @@ pub const ENCRYPTION_KEY_REGISTRATION_PROOF: &str = "encryption_key_registration
 pub const FEE_ACCOUNT_REGISTRATION_PROOF: &str = "fee_account_registration_proof.bin";
 pub const BATCHED_FEE_ACCOUNT_REGISTRATION_PROOF: &str = "batched_fee_account_registration_proof";
 pub const ACCOUNT_ASSET_REGISTRATION_PROOF: &str = "account_asset_registration_proof.bin";
+pub const ACCOUNT_ASSET_REGISTRATION_PROOF_WITH_PK_T: &str =
+    "account_asset_registration_proof_with_pk_t.bin";
+pub const FORCE_TRANSFER_KEY_PAIR: &str = "force_transfer_key_pair.bin";
 pub const BATCHED_ACCOUNT_ASSET_REGISTRATION_PROOF: &str =
     "batched_account_asset_registration_proof";
+pub const BATCHED_ACCOUNT_ASSET_REGISTRATION_PROOF_WITH_PK_T: &str =
+    "batched_account_asset_registration_proof_with_pk_t";
+pub const FORCE_TRANSFER_KEY_PAIRS_BATCH: &str = "force_transfer_key_pairs_batch.bin";
 pub const KEY_DISTRIBUTION_PROOF_PREFIX: &str = "key_distribution_proof";
 pub const FEE_ACCOUNT_TOPUP_PROOF: &str = "fee_account_topup_proof.bin";
+pub const BATCHED_FEE_ACCOUNT_TOPUP_PROOF: &str = "batched_fee_account_topup_proof.bin";
 pub const FEE_ACCOUNT_PAYMENT_PROOF: &str = "fee_account_payment_proof.bin";
+pub const FEE_PAYMENT_WITH_BATCHED_PROOFS: &str = "fee_payment_with_batched_proofs.bin";
+pub const FEE_PAYMENT_WITH_BATCHED_PROOFS_BROADCAST: &str =
+    "fee_payment_with_batched_proofs_broadcast.bin";
 pub const ASSET_MINTING_PROOF: &str = "asset_minting_proof.bin";
 pub const SETTLEMENT_PROOF_PREFIX: &str = "settlement_proof";
 pub const SETTLEMENT_PROOF_REVEALED_ASSET_ID: &str = "settlement_proof_revealed_asset_id.bin";

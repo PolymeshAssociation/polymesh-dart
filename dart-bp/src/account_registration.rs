@@ -62,7 +62,7 @@ pub const ENC_PK_LABEL: &'static [u8; 6] = b"pk_enc";
 // The problem is that response of all chunks is aggregated in one value so tying it with BP is not straightforward. So need to check if aggregating
 // those responses and comparing is safe
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
-pub struct EncryptedScalar<G: AffineRepr, const CHUNK_BITS: usize = 48, const NUM_CHUNKS: usize = 6>
+pub struct EncryptedScalar<G: AffineRepr, const CHUNK_BITS: usize = 43, const NUM_CHUNKS: usize = 6>
 {
     pub ciphertexts: [Ciphertext<G>; NUM_CHUNKS],
     /// For relation `g * r_i`
@@ -77,7 +77,7 @@ pub struct EncryptedScalar<G: AffineRepr, const CHUNK_BITS: usize = 48, const NU
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct EncryptionForRegistration<
     G: AffineRepr,
-    const CHUNK_BITS: usize = 48,
+    const CHUNK_BITS: usize = 43,
     const NUM_CHUNKS: usize = 6,
 > {
     /// Combined Bulletproof vector commitment to `[s_chunks..., rho_chunks...]`
@@ -93,7 +93,7 @@ pub struct EncryptionForRegistration<
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct RegTxnWithoutSkProof<
     G: AffineRepr,
-    const CHUNK_BITS: usize = 48,
+    const CHUNK_BITS: usize = 43,
     const NUM_CHUNKS: usize = 6,
 > {
     /// Carries the commitment to randomness `t` from step 1.
@@ -114,7 +114,7 @@ pub struct RegTxnWithoutSkProof<
 /// This is the proof for user registering its (signing) public key for an asset. Report section 5.1.3, called "Account Registration"
 /// We could register both signing and encryption keys by modifying this proof even though the encryption isn't used in account commitment.
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
-pub struct RegTxnProof<G: AffineRepr, const CHUNK_BITS: usize = 48, const NUM_CHUNKS: usize = 6> {
+pub struct RegTxnProof<G: AffineRepr, const CHUNK_BITS: usize = 43, const NUM_CHUNKS: usize = 6> {
     pub partial: RegTxnWithoutSkProof<G, { CHUNK_BITS }, { NUM_CHUNKS }>,
     pub auth_proof: AuthProofOnlySks<G>,
 }
@@ -123,7 +123,7 @@ pub struct RegTxnProof<G: AffineRepr, const CHUNK_BITS: usize = 48, const NUM_CH
 /// Holds Schnorr commitments, protocol objects, and witnesses needed for `gen_proof`.
 pub struct RegTxnWithoutSkProtocol<
     G: AffineRepr,
-    const CHUNK_BITS: usize = 48,
+    const CHUNK_BITS: usize = 43,
     const NUM_CHUNKS: usize = 6,
 > {
     comm_protocol: SchnorrCommitment<G>,
@@ -2625,7 +2625,7 @@ pub mod tests {
         // Setup begins
         const NUM_GENS: usize = 1 << 12; // minimum sufficient power of 2 (for height 4 curve tree)
 
-        const CHUNK_BITS: usize = 48;
+        const CHUNK_BITS: usize = 43;
         const NUM_CHUNKS: usize = 6;
 
         // Create public params (generators, etc)
@@ -2860,7 +2860,7 @@ pub mod tests {
         let mut rng = rand::thread_rng();
 
         const NUM_GENS: usize = 1 << 12;
-        const CHUNK_BITS: usize = 48;
+        const CHUNK_BITS: usize = 43;
         const NUM_CHUNKS: usize = 6;
 
         let account_tree_params =
@@ -3469,7 +3469,7 @@ pub mod tests {
         }
         assert_eq!(reconstructed, val);
 
-        const B: usize = 48;
+        const B: usize = 43;
         const N: usize = 6;
         let powers = powers_of_base::<Fr, B, N>();
         for _ in 0..100 {
@@ -3646,7 +3646,7 @@ pub mod tests {
         // Setup begins
         const NUM_GENS: usize = 1 << 12; // minimum sufficient power of 2 (for height 4 curve tree)
 
-        const CHUNK_BITS: usize = 48;
+        const CHUNK_BITS: usize = 43;
         const NUM_CHUNKS: usize = 6;
 
         // Create public params (generators, etc)
@@ -4815,7 +4815,7 @@ pub mod tests {
             use super::*;
             use mocktopus::mocking::{MockResult, Mockable};
 
-            const CHUNK_BITS: usize = 48;
+            const CHUNK_BITS: usize = 43;
             const NUM_CHUNKS: usize = 6;
 
             fn clear_mocks<CK: AccountCommitmentKeyTrait<PallasA>>(_: &CK) {
@@ -4837,7 +4837,7 @@ pub mod tests {
                 let mut rng = rand::thread_rng();
 
                 const NUM_GENS: usize = 1 << 12;
-                const CHUNK_BITS: usize = 48;
+                const CHUNK_BITS: usize = 43;
                 const NUM_CHUNKS: usize = 6;
 
                 let account_tree_params = SelRerandProofParameters::<
@@ -4955,7 +4955,7 @@ pub mod tests {
                 let mut rng = rand::thread_rng();
 
                 const NUM_GENS: usize = 1 << 12;
-                const CHUNK_BITS: usize = 48;
+                const CHUNK_BITS: usize = 43;
                 const NUM_CHUNKS: usize = 6;
 
                 let account_tree_params = SelRerandProofParameters::<
@@ -5104,7 +5104,7 @@ pub mod tests {
                 let mut rng = rand::thread_rng();
 
                 const NUM_GENS: usize = 1 << 12;
-                const CHUNK_BITS: usize = 48;
+                const CHUNK_BITS: usize = 43;
                 const NUM_CHUNKS: usize = 6;
 
                 let account_tree_params = SelRerandProofParameters::<
