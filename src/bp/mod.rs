@@ -632,7 +632,7 @@ mod tests {
             .finish::<_, ()>(&mut rng, &device_response, tree_params)
             .unwrap();
 
-        let root = fee_tree.root().unwrap().root_node().unwrap();
+        let root = fee_tree.root().unwrap();
         proof.verify(&mut rng, ctx, &root).unwrap();
     }
 
@@ -1202,6 +1202,99 @@ mod tests {
         test_with_config(false, true);
         // Both legs hidden
         test_with_config(false, false);
+    }
+
+    /// The verifier must bound the (prover-supplied) curve-tree path by the root's height before
+    /// running any gadget, and reject roots outside `1..=MAX_CURVE_TREE_HEIGHT`.
+    #[test]
+    fn verifier_rejects_path_height_mismatch() {
+        use crate::curve_tree::MAX_CURVE_TREE_HEIGHT;
+
+        let mut rng = rand::thread_rng();
+        let asset_id: AssetId = 1;
+        let counter: NullifierSkGenCounter = 0;
+        let ctx = b"test-path-height";
+        let sender_keys = AccountKeys::rand(&mut rng).unwrap();
+        let receiver_keys = AccountKeys::rand(&mut rng).unwrap();
+        let (mut sender_state, _) = sender_keys
+            .init_asset_state(asset_id, counter, ctx)
+            .unwrap();
+        sender_state.current_state.balance = 1000;
+        let leaf = sender_state.current_commitment().unwrap();
+        let (leg_enc, leg_ref, account_tree) = make_leg_and_tree(
+            &mut rng,
+            sender_keys.enc.public,
+            receiver_keys.enc.public,
+            asset_id,
+            300,
+            leaf,
+        );
+        let proof = SenderAffirmationProof::<()>::new(
+            &mut rng,
+            &sender_keys,
+            &leg_ref,
+            300,
+            &leg_enc,
+            &mut sender_state,
+            &account_tree,
+        )
+        .unwrap();
+        let root = account_tree.root().unwrap();
+        assert_eq!(root.height(), ACCOUNT_TREE_HEIGHT);
+        proof.verify(&leg_enc, &root, &mut rng).unwrap();
+
+        // Same root commitments but a height that does not match the proof's path length: the
+        // proof must be rejected by the path check, before the curve-tree gadget runs. Keep the
+        // root parity (even) so decompression succeeds and the path check is what fires.
+        let mut taller = root.clone();
+        taller.height = ACCOUNT_TREE_HEIGHT + 2;
+        assert!(matches!(
+            proof.verify(&leg_enc, &taller, &mut rng),
+            Err(Error::CurveTreeError(
+                curve_tree_relations::error::Error::MalformedProofInput(_)
+            ))
+        ));
+        let mut shorter = root.clone();
+        shorter.height = ACCOUNT_TREE_HEIGHT - 2;
+        assert!(matches!(
+            proof.verify(&leg_enc, &shorter, &mut rng),
+            Err(Error::CurveTreeError(
+                curve_tree_relations::error::Error::MalformedProofInput(_)
+            ))
+        ));
+        // Flipping the parity must be rejected too (either at root decompression, since the
+        // commitments are then read as points of the other curve, or by the path check).
+        let mut odd = root.clone();
+        odd.height = ACCOUNT_TREE_HEIGHT + 1;
+        assert!(proof.verify(&leg_enc, &odd, &mut rng).is_err());
+
+        // Heights outside the supported range are rejected outright.
+        let mut zero = root.clone();
+        zero.height = 0;
+        assert!(matches!(
+            proof.verify(&leg_enc, &zero, &mut rng),
+            Err(Error::CurveTreeInvalidHeight(0))
+        ));
+        let mut huge = root.clone();
+        huge.height = MAX_CURVE_TREE_HEIGHT + 1;
+        assert!(matches!(
+            proof.verify(&leg_enc, &huge, &mut rng),
+            Err(Error::CurveTreeInvalidHeight(h)) if h == MAX_CURVE_TREE_HEIGHT + 1
+        ));
+
+        // A path with an extra (fake) level must also be rejected against the real root.
+        let mut inner = proof.inner.decode().unwrap();
+        let path = inner.common.partial.re_randomized_path.as_mut().unwrap();
+        let extra = path.path.odd_commitments[0];
+        path.path.odd_commitments.push(extra);
+        let mut tampered = proof.clone();
+        tampered.inner = BoundedCanonical::wrap(&inner).unwrap();
+        assert!(matches!(
+            tampered.verify(&leg_enc, &root, &mut rng),
+            Err(Error::CurveTreeError(
+                curve_tree_relations::error::Error::MalformedProofInput(_)
+            ))
+        ));
     }
 
     #[test]

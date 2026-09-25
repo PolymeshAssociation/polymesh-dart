@@ -84,9 +84,7 @@ fn fee_proof_benchmark(c: &mut Criterion) {
     // Update tree root after registration.
     let fee_account_root = fee_account_tree
         .root()
-        .expect("Failed to get fee account tree root")
-        .root_node()
-        .expect("Failed to get root node");
+        .expect("Failed to get fee account tree root");
 
     // Benchmark: Generate FeeAccountTopupProof.
     c.bench_function("FeeAccountTopupProof generate", |b| {

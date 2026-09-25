@@ -1973,11 +1973,18 @@ impl<
                 &challenge,
                 &self.resp_comm_r_i_amount.0[4],
             );
+            // Presence of `r4` was checked above for every public encryption key, but keep this
+            // an error rather than an unwrap so the verifier stays panic-free by construction.
+            let eph_pk_public_enc_r4 = eph_pk_public_enc_key.r4.ok_or_else(|| {
+                Error::ProofVerificationError(format!(
+                    "leg_enc.eph_pk_public_enc_keys[{i}].3 must be present when asset-id is encrypted"
+                ))
+            })?;
             verify_or_rmc_2!(
                 rmc,
                 p_3,
                 format!("resp_eph_pk_public_enc[{}].3 verification failed", i),
-                *eph_pk_public_enc_key.r4.as_ref().unwrap(),
+                eph_pk_public_enc_r4,
                 *pk,
                 &challenge,
                 &self.resp_comm_r_i_amount.0[5],

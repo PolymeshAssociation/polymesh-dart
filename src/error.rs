@@ -45,6 +45,10 @@ pub enum Error {
     #[error("Curve tree root not found.")]
     CurveTreeRootNotFound,
 
+    /// Curve tree height is zero or exceeds `MAX_CURVE_TREE_HEIGHT`.
+    #[error("Curve tree height {0} is outside the supported range")]
+    CurveTreeInvalidHeight(NodeLevel),
+
     /// Curve tree leaf index is out of bounds.
     #[error("Curve tree leaf index is out of bounds: {0}")]
     CurveTreeLeafIndexOutOfBounds(LeafIndex),

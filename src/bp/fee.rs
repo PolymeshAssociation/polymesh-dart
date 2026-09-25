@@ -4,6 +4,7 @@ use rayon::prelude::*;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
+use crate::curve_tree::CompressedCurveTreeRoot;
 use ark_ec::short_weierstrass::Affine;
 use ark_std::format;
 use ark_std::vec::Vec;
@@ -517,15 +518,24 @@ impl<
     }
 
     /// Verifies the topup proof against the provided public key, asset ID, amount, and account state commitment.
+    ///
+    /// Takes the compressed root (rather than a decompressed [`Root`]) so the height of the tree
+    /// is known and the proof's curve-tree path can be bounded before any verifier work is done.
     pub fn verify<R: RngCore + CryptoRng>(
         &self,
         rng: &mut R,
         ctx: &[u8],
-        root: &Root<FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, C::P0, C::P1>,
+        root: &CompressedCurveTreeRoot<FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, C>,
     ) -> Result<(), Error> {
+        let compressed_root = root;
+        let root = compressed_root.root_node()?;
         PairRandomizedMultCheckerGuard::new_using_rng(rng).with(
             |even_rmc, odd_rmc| -> Result<(), Error> {
                 let proof = self.inner.decode()?;
+                crate::curve_tree::validate_path_height(
+                    &proof.partial.re_randomized_path,
+                    compressed_root,
+                )?;
                 proof.verify_split(
                     self.account.get_affine()?,
                     self.asset_id,
@@ -551,6 +561,7 @@ impl<
         &self,
         rng: &mut R,
         ctx: &[u8],
+        compressed_root: &CompressedCurveTreeRoot<FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, C>,
         root: &Root<FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, C::P0, C::P1>,
         rmc: Option<&mut RandomizedMultChecker<PallasA>>,
     ) -> Result<
@@ -561,6 +572,10 @@ impl<
         Error,
     > {
         let proof = self.inner.decode()?;
+        crate::curve_tree::validate_path_height(
+            &proof.partial.re_randomized_path,
+            compressed_root,
+        )?;
         let tuples = proof.verify_split_and_return_tuples(
             self.account.get_affine()?,
             self.asset_id,
@@ -682,7 +697,6 @@ impl<
                 log::error!("Invalid root for fee account topup proof");
                 Error::CurveTreeRootNotFound
             })?;
-        let root = root.root_node()?;
         // NOTE: This could single pair of RMC if allowed to pass the pair in proof.verify
         self.proofs
             .par_iter()
@@ -705,7 +719,6 @@ impl<
                 log::error!("Invalid root for fee account topup proof");
                 Error::CurveTreeRootNotFound
             })?;
-        let root = root.root_node()?;
         for proof in &self.proofs {
             proof.verify(rng, ctx, &root)?;
         }
@@ -734,7 +747,8 @@ impl<
                 log::error!("Invalid root for fee account topup proof");
                 Error::CurveTreeRootNotFound
             })?;
-        let root = root.root_node()?;
+        let compressed_root = root;
+        let root = compressed_root.root_node()?;
 
         let tuples = self
             .proofs
@@ -744,7 +758,7 @@ impl<
                 |rng, proof| {
                     let guard = RandomizedMultCheckerGuard::new_using_rng(rng);
                     guard.with_err(Error::RMCVerifyError, |rmc| {
-                        proof.batched_verify(rng, ctx, &root, Some(rmc))
+                        proof.batched_verify(rng, ctx, &compressed_root, &root, Some(rmc))
                     })
                 },
             )
@@ -791,7 +805,8 @@ impl<
                 log::error!("Invalid root for fee account topup proof");
                 Error::CurveTreeRootNotFound
             })?;
-        let root = root.root_node()?;
+        let compressed_root = root;
+        let root = compressed_root.root_node()?;
 
         let mut even_tuples = Vec::with_capacity(batch_size);
         let mut odd_tuples = Vec::with_capacity(batch_size);
@@ -799,7 +814,8 @@ impl<
         let guard = RandomizedMultCheckerGuard::new_using_rng(rng);
         guard.with_err(Error::RMCVerifyError, |rmc| {
             for proof in &self.proofs {
-                let (even, odd) = proof.batched_verify(rng, ctx, &root, Some(rmc))?;
+                let (even, odd) =
+                    proof.batched_verify(rng, ctx, &compressed_root, &root, Some(rmc))?;
                 even_tuples.push(even);
                 odd_tuples.push(odd);
             }
@@ -967,11 +983,16 @@ impl<
     ) -> Result<(), Error> {
         PairRandomizedMultCheckerGuard::new_using_rng(rng).with(
             |even_rmc, odd_rmc| -> Result<(), Error> {
-                let root = tree_roots
+                let compressed_root = tree_roots
                     .get_block_root(self.root_block.into())
                     .ok_or(Error::CurveTreeRootNotFound)?;
-                let root = root.root_node()?;
+                let root = compressed_root.root_node()?;
                 let proof = self.inner.decode()?;
+                // Bound the verifier work the (untrusted) path can request before any gadget runs.
+                crate::curve_tree::validate_path_height(
+                    &proof.partial.re_randomized_path,
+                    &compressed_root,
+                )?;
                 let account_comm_key = dart_gens().account_comm_key();
                 let updated_account_commitment =
                     self.updated_account_state_commitment.as_commitment()?;

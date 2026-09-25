@@ -222,7 +222,7 @@ fn verify_v1_fee_topup_split() {
     let keys = alice_keys();
     let (tree, _) = make_fee_state_and_tree(&keys);
     let proof: FeeAccountTopupProof = load_scale_v1(FEE_TOPUP_SPLIT_PROOF);
-    let root = tree.root().unwrap().root_node().unwrap();
+    let root = tree.root().unwrap();
     proof.verify(&mut default_rng(), IDENTITY, &root).unwrap();
 }
 

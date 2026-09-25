@@ -326,14 +326,19 @@ impl<
     ) -> Result<(), Error> {
         let id = hash_identity::<PallasScalar>(identity);
         // Get the curve tree root.
-        let root = tree_roots
+        let compressed_root = tree_roots
             .get_block_root(self.root_block.into())
             .ok_or_else(|| {
                 log::error!("Invalid root for asset minting proof");
                 Error::CurveTreeRootNotFound
             })?;
-        let root = root.root_node()?;
+        let root = compressed_root.root_node()?;
         let proof = self.inner.decode()?;
+        // Bound the verifier work the (untrusted) path can request before any gadget runs.
+        crate::curve_tree::validate_path_height(
+            &proof.partial.re_randomized_path,
+            &compressed_root,
+        )?;
 
         PairRandomizedMultCheckerGuard::new_using_rng(rng).with(
             |even_rmc, odd_rmc| -> Result<(), Error> {

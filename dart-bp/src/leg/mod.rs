@@ -1042,8 +1042,12 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
         match &self.leg_enc_core_and_eph_keys.core.ct_asset_id {
             AssetIdEncryption::Revealed(id) => Ok(*id as AssetId),
             AssetIdEncryption::Ciphertext(ct) => {
-                let asset_id =
-                    Self::decrypt_as_group_element(sk_inv, *ct, eph_keys[key_index].r4.unwrap());
+                // A leg with an encrypted asset-id must carry the matching ephemeral key; a
+                // (malformed or hostile) leg without one is undecryptable, not a panic.
+                let eph_pk_asset_id = eph_keys[key_index].r4.ok_or_else(|| {
+                    Error::DecryptionFailed("Missing ephemeral key for asset ID decryption".into())
+                })?;
+                let asset_id = Self::decrypt_as_group_element(sk_inv, *ct, eph_pk_asset_id);
                 solve_discrete_log_bsgs::<G::Group>(max_asset_id as _, enc_gen, asset_id)
                     .map(|id| id as AssetId)
                     .ok_or_else(|| {

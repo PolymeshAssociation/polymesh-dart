@@ -294,9 +294,20 @@ macro_rules! with_balance {
                         log::error!("Invalid root for sender affirmation proof");
                         Error::CurveTreeRootNotFound
                     })?;
-                let root = root.root_node()?;
+                let compressed_root = root;
+                let root = compressed_root.root_node()?;
 
                 let proof = self.inner.decode()?;
+                // Bound the verifier work the (untrusted) path can request before any gadget runs.
+                let path = proof
+                    .common
+                    .partial
+                    .re_randomized_path
+                    .as_ref()
+                    .ok_or_else(|| {
+                        Error::ProofGenerationError("Missing re_randomized_path".to_string())
+                    })?;
+                crate::curve_tree::validate_path_height(path, &compressed_root)?;
                 let updated_comm = self.updated_account_state_commitment.as_commitment()?;
                 let nullifier = self.nullifier.get_affine()?;
                 let ctx = self.leg_ref.context();
@@ -661,9 +672,20 @@ macro_rules! no_balance {
                         log::error!("Invalid root for sender affirmation proof");
                         Error::CurveTreeRootNotFound
                     })?;
-                let root = root.root_node()?;
+                let compressed_root = root;
+                let root = compressed_root.root_node()?;
 
                 let proof = self.inner.decode()?;
+                // Bound the verifier work the (untrusted) path can request before any gadget runs.
+                let path = proof
+                    .common
+                    .partial
+                    .re_randomized_path
+                    .as_ref()
+                    .ok_or_else(|| {
+                        Error::ProofGenerationError("Missing re_randomized_path".to_string())
+                    })?;
+                crate::curve_tree::validate_path_height(path, &compressed_root)?;
                 let updated_comm = self.updated_account_state_commitment.as_commitment()?;
                 let nullifier = self.nullifier.get_affine()?;
                 let ctx = self.leg_ref.context();

@@ -37,6 +37,42 @@ pub use common::*;
 pub type AssetCommitmentParameters<C> =
     bp_leg::AssetCommitmentParams<<C as CurveTreeConfig>::P1, <C as CurveTreeConfig>::P0>;
 
+/// Largest curve-tree height the verifiers in this crate accept.
+///
+/// Trees start at [`ACCOUNT_TREE_HEIGHT`]/[`ASSET_TREE_HEIGHT`]/[`FEE_ACCOUNT_TREE_HEIGHT`] and
+/// only grow via [`CompressedCurveTreeRoot::increase_height`] when full; with arity 64 a height of
+/// 16 already holds 2^96 leaves, so this is never a functional limit. It bounds the amount of
+/// verifier work a proof (or a malformed root) can request, since every level of a
+/// select-and-rerandomize path costs the verifier a fixed number of R1CS constraints.
+pub const MAX_CURVE_TREE_HEIGHT: NodeLevel = 16;
+
+/// Reject tree heights outside `1..=MAX_CURVE_TREE_HEIGHT`.
+pub(crate) fn check_tree_height(height: NodeLevel) -> Result<(), Error> {
+    if height == 0 || height > MAX_CURVE_TREE_HEIGHT {
+        return Err(Error::CurveTreeInvalidHeight(height));
+    }
+    Ok(())
+}
+
+/// Validate a prover-supplied select-and-rerandomize path against the height of the tree whose
+/// root it is verified against. Must be called before running the curve-tree verifier gadget: the
+/// gadget itself does not know the tree height, so without this an attacker can make the verifier
+/// build constraints for an arbitrary number of fake levels (see A4 in the v1.0 panic audit).
+pub fn validate_path_height<
+    const L: usize,
+    const M: usize,
+    C: CurveTreeConfig,
+    P0: SWCurveConfig,
+    P1: SWCurveConfig,
+>(
+    path: &curve_tree_relations::curve_tree::SelectAndRerandomizePathWithDivisorComms<L, P0, P1>,
+    root: &CompressedCurveTreeRoot<L, M, C>,
+) -> Result<(), Error> {
+    check_tree_height(root.height())?;
+    path.validate_height(usize::from(root.height()))?;
+    Ok(())
+}
+
 const CURVE_TREE_PARAMETERS_PALLAS_LABEL: &[u8] = b"curve-tree-pallas";
 const CURVE_TREE_PARAMETERS_VESTA_LABEL: &[u8] = b"curve-tree-vesta";
 const ASSET_COMMITMENT_PARAMETERS_LABEL: &[u8] = b"asset-comm-params";
@@ -915,6 +951,9 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> CompressedCurveTreeRoot
     }
 
     pub fn root_node(&self) -> Result<Root<L, M, C::P0, C::P1>, Error> {
+        // Defense in depth: roots come from chain storage, but bound the height anyway so a
+        // malformed root cannot drive the verifier gadget through an unbounded number of levels.
+        check_tree_height(self.height)?;
         Ok(if self.is_even() {
             Root::Even(self.decompress::<C::P0, C::P1>()?)
         } else {

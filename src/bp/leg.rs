@@ -575,15 +575,18 @@ impl<
         }
     }
 
+    /// Verify the leg proof. `compressed_root` is the asset-tree root `root` was decompressed
+    /// from; its height bounds the curve-tree path of a hidden-asset-id proof.
     pub fn verify<R: RngCore + CryptoRng>(
         &self,
         ctx: &[u8],
+        compressed_root: &CompressedCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, C>,
         root: &Root<ASSET_TREE_L, ASSET_TREE_M, C::P0, C::P1>,
         asset_lookup: &AssetKeysLookup,
         rng: &mut R,
     ) -> Result<(), Error> {
         match self {
-            Self::HiddenAssetId(p) => p.verify(ctx, root, rng),
+            Self::HiddenAssetId(p) => p.verify(ctx, compressed_root, root, rng),
             Self::RevealedAssetId(p) => p.verify(ctx, asset_lookup, rng),
         }
     }
@@ -591,6 +594,7 @@ impl<
     pub(crate) fn batched_verify<R: RngCore + CryptoRng>(
         &self,
         ctx: &[u8],
+        compressed_root: &CompressedCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, C>,
         root: &Root<ASSET_TREE_L, ASSET_TREE_M, C::P0, C::P1>,
         asset_lookup: &AssetKeysLookup,
         rng: &mut R,
@@ -603,7 +607,7 @@ impl<
         Error,
     > {
         match self {
-            Self::HiddenAssetId(p) => p.batched_verify(ctx, root, rng, rmc),
+            Self::HiddenAssetId(p) => p.batched_verify(ctx, compressed_root, root, rng, rmc),
             Self::RevealedAssetId(p) => {
                 let odd_tuple = p.batched_verify(ctx, asset_lookup, rng, rmc)?;
                 // Create an empty verification tuple for Vesta (even) since revealed asset ID
@@ -804,7 +808,8 @@ impl<
                 log::error!("Invalid root for settlement proof");
                 Error::CurveTreeRootNotFound
             })?;
-        let root = root.root_node()?;
+        let compressed_root = root;
+        let root = compressed_root.root_node()?;
         let memo = &*self.memo;
         if self.legs.len() > LegId::MAX as usize {
             return Err(Error::UnsupportedNumberOfLegs(self.legs.len()));
@@ -814,7 +819,7 @@ impl<
             || rng.clone(),
             |rng, (idx, leg)| {
                 let ctx = leg_proof_initial_ctx(memo, idx as LegId);
-                leg.verify(&ctx, &root, asset_lookup, rng)
+                leg.verify(&ctx, &compressed_root, &root, asset_lookup, rng)
             },
         )?;
         Ok(())
@@ -834,13 +839,14 @@ impl<
                 log::error!("Invalid root for settlement proof");
                 Error::CurveTreeRootNotFound
             })?;
-        let root = root.root_node()?;
+        let compressed_root = root;
+        let root = compressed_root.root_node()?;
         if self.legs.len() > LegId::MAX as usize {
             return Err(Error::UnsupportedNumberOfLegs(self.legs.len()));
         }
         for (idx, leg) in self.legs.iter().enumerate() {
             let ctx = leg_proof_initial_ctx(&self.memo, idx as LegId);
-            leg.verify(&ctx, &root, asset_lookup, rng)?;
+            leg.verify(&ctx, &compressed_root, &root, asset_lookup, rng)?;
         }
         Ok(())
     }
@@ -864,7 +870,8 @@ impl<
                 log::error!("Invalid root for settlement proof");
                 Error::CurveTreeRootNotFound
             })?;
-        let root = root.root_node()?;
+        let compressed_root = root;
+        let root = compressed_root.root_node()?;
         let memo = &*self.memo;
 
         if self.legs.len() > LegId::MAX as usize {
@@ -881,7 +888,14 @@ impl<
                     let ctx = leg_proof_initial_ctx(memo, idx as LegId);
                     let guard = RandomizedMultCheckerGuard::new_using_rng(rng);
                     guard.with_err(Error::RMCVerifyError, |rmc| {
-                        leg.batched_verify(&ctx, &root, asset_lookup, rng, Some(rmc))
+                        leg.batched_verify(
+                            &ctx,
+                            &compressed_root,
+                            &root,
+                            asset_lookup,
+                            rng,
+                            Some(rmc),
+                        )
                     })
                 },
             )
@@ -923,7 +937,8 @@ impl<
                 log::error!("Invalid root for settlement proof");
                 Error::CurveTreeRootNotFound
             })?;
-        let root = root.root_node()?;
+        let compressed_root = root;
+        let root = compressed_root.root_node()?;
         if self.legs.len() > LegId::MAX as usize {
             return Err(Error::UnsupportedNumberOfLegs(self.legs.len()));
         }
@@ -934,7 +949,14 @@ impl<
         guard.with_err(Error::RMCVerifyError, |rmc| {
             for (idx, leg) in self.legs.iter().enumerate() {
                 let ctx = leg_proof_initial_ctx(&self.memo, idx as LegId);
-                let (even, odd) = leg.batched_verify(&ctx, &root, asset_lookup, rng, Some(rmc))?;
+                let (even, odd) = leg.batched_verify(
+                    &ctx,
+                    &compressed_root,
+                    &root,
+                    asset_lookup,
+                    rng,
+                    Some(rmc),
+                )?;
                 // If any tuple is empty which can happen when asset id is revealed
                 if !even.fixed_point_scalars.is_empty() {
                     even_tuples.push(even);
@@ -1064,9 +1086,27 @@ impl<
         self.leg_enc.get_mediator_ids()
     }
 
+    /// Bound the untrusted inputs before any verifier work: the curve-tree path must match the
+    /// asset tree's height and the creator-provided public keys must respect the protocol limit.
+    fn validate_path(
+        &self,
+        proof: &BPSettlementTxnProof<C>,
+        compressed_root: &CompressedCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, C>,
+    ) -> Result<(), Error> {
+        if self.public_enc_keys.len() > T::MaxPublicEncKeys::get() as usize {
+            return Err(Error::TooManyKeys);
+        }
+        let path = proof
+            .re_randomized_path
+            .as_ref()
+            .ok_or_else(|| Error::ProofGenerationError("Missing re_randomized_path".to_string()))?;
+        crate::curve_tree::validate_path_height(path, compressed_root)
+    }
+
     pub fn verify<R: RngCore + CryptoRng>(
         &self,
         ctx: &[u8],
+        compressed_root: &CompressedCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, C>,
         root: &Root<ASSET_TREE_L, ASSET_TREE_M, C::P0, C::P1>,
         rng: &mut R,
     ) -> Result<(), Error> {
@@ -1074,6 +1114,7 @@ impl<
         let leg_enc = self.leg_enc.decode()?;
         log::debug!("Verify leg: {:?}", leg_enc);
         let proof = self.inner.decode()?;
+        self.validate_path(&proof, compressed_root)?;
 
         PairRandomizedMultCheckerGuard::new_using_rng(rng).with(
             |even_rmc, odd_rmc| -> Result<(), Error> {
@@ -1105,6 +1146,7 @@ impl<
     pub(crate) fn batched_verify<R: RngCore + CryptoRng>(
         &self,
         ctx: &[u8],
+        compressed_root: &CompressedCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, C>,
         root: &Root<ASSET_TREE_L, ASSET_TREE_M, C::P0, C::P1>,
         rng: &mut R,
         rmc: Option<&mut RandomizedMultChecker<PallasA>>,
@@ -1119,6 +1161,7 @@ impl<
         let leg_enc = self.leg_enc.decode()?;
         log::debug!("Verify leg: {:?}", leg_enc);
         let proof = self.inner.decode()?;
+        self.validate_path(&proof, compressed_root)?;
 
         let public_enc_keys: Vec<PallasA> = self
             .public_enc_keys
@@ -1227,6 +1270,9 @@ impl<T: DartLimits> SettlementLegProofRevealedAssetId<T> {
         asset_lookup: &AssetKeysLookup,
         rng: &mut R,
     ) -> Result<(), Error> {
+        if self.public_enc_keys.len() > T::MaxPublicEncKeys::get() as usize {
+            return Err(Error::TooManyKeys);
+        }
         let leg_enc = self.leg_enc.decode()?;
         if leg_enc.asset_id() != Some(self.asset_id) {
             return Err(Error::CryptoError("Asset ID mismatch".to_string()));
@@ -1271,10 +1317,16 @@ impl<T: DartLimits> SettlementLegProofRevealedAssetId<T> {
         rng: &mut R,
         rmc: Option<&mut RandomizedMultChecker<PallasA>>,
     ) -> Result<VerificationTuple<PallasA>, Error> {
+        if self.public_enc_keys.len() > T::MaxPublicEncKeys::get() as usize {
+            return Err(Error::TooManyKeys);
+        }
         let (enc_keys, _) = asset_lookup.get_keys(self.asset_id)?;
         let leaf_level_pc_gens = get_leaf_level_pc_gens();
         let leaf_level_bp_gens = get_leaf_level_bp_gens();
         let leg_enc = self.leg_enc.decode()?;
+        if leg_enc.asset_id() != Some(self.asset_id) {
+            return Err(Error::CryptoError("Asset ID mismatch".to_string()));
+        }
         let proof = self.inner.decode()?;
 
         let public_enc_keys: Vec<PallasA> = self

@@ -145,7 +145,7 @@ fn verify_v1_fee_account_topup_proof() {
     let keys = alice_keys();
     let (fee_tree, _) = alice_fee_tree(&keys);
     let proof: FeeAccountTopupProof = load_scale_v1(FEE_ACCOUNT_TOPUP_PROOF);
-    let root = fee_tree.root().unwrap().root_node().unwrap();
+    let root = fee_tree.root().unwrap();
     proof.verify(&mut rng, IDENTITY, &root).unwrap();
 }
 

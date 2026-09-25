@@ -1,0 +1,60 @@
+[package]
+name = "polymesh-dart-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "Panic-freedom harnesses for the DART verifier entry points (cargo-fuzz targets + property tests)."
+license = "GPL-3.0"
+
+[package.metadata]
+cargo-fuzz = true
+
+[lib]
+name = "polymesh_dart_fuzz"
+path = "src/lib.rs"
+
+[dependencies]
+polymesh-dart = { workspace = true, default-features = false, features = ["std", "backend_bp", "asm", "large_baby_steps"] }
+polymesh-dart-common = { workspace = true, default-features = false }
+codec = { workspace = true, default-features = false, features = ["derive"] }
+bounded-collections = { workspace = true, default-features = false }
+rand_core = { workspace = true, default-features = false }
+rand_chacha = { workspace = true, default-features = false }
+ark-serialize = { workspace = true, default-features = false }
+
+# Only the libFuzzer binaries need this; `cargo test -p polymesh-dart-fuzz` does not build them.
+libfuzzer-sys = { version = "0.4", optional = true }
+
+[dev-dependencies]
+proptest = { version = "1", default-features = false, features = ["std"] }
+
+[features]
+default = []
+libfuzzer = ["dep:libfuzzer-sys"]
+# Match the native worker's feature set (Polymesh `dart-v1` with `std`): rayon-parallel
+# verification. The default (no `parallel`) matches the code paths of the wasm runtime fallback.
+parallel = ["polymesh-dart/parallel", "polymesh-dart/verifier_parallel"]
+
+[[bin]]
+name = "verify_request"
+path = "fuzz_targets/verify_request.rs"
+test = false
+doc = false
+bench = false
+required-features = ["libfuzzer"]
+
+[[bin]]
+name = "leg_encrypted"
+path = "fuzz_targets/leg_encrypted.rs"
+test = false
+doc = false
+bench = false
+required-features = ["libfuzzer"]
+
+[[bin]]
+name = "curve_tree_root"
+path = "fuzz_targets/curve_tree_root.rs"
+test = false
+doc = false
+bench = false
+required-features = ["libfuzzer"]
