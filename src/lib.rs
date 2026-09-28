@@ -5,6 +5,11 @@ mod bp;
 #[cfg(feature = "backend_bp")]
 pub use bp::*;
 
+#[cfg(feature = "bat")]
+mod bat;
+#[cfg(feature = "bat")]
+pub use bat::*;
+
 #[cfg(feature = "serde")]
 mod serde_impl;
 #[cfg(feature = "serde")]

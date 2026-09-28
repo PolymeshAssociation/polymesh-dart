@@ -1,0 +1,54 @@
+[package]
+name = "polymesh-bat"
+version = "0.1.0"
+edition = "2024"
+description = "BAT (eprint 2026/1074) Protocol A."
+license = "GPL-3.0"
+
+[dependencies]
+ark-ec = { workspace = true }
+ark-ff = { workspace = true }
+ark-serialize = { workspace = true, features = ["derive"] }
+ark-std = { workspace = true }
+dock_crypto_utils = { workspace = true }
+schnorr_pok = { workspace = true }
+rand_core = { workspace = true, default-features = false }
+sha2 = { version = "0.10", default-features = false }
+zeroize = { workspace = true, features = ["derive"] }
+thiserror = { workspace = true }
+
+ark-bls12-381 = { workspace = true, features = ["curve"], optional = true }
+ark-bn254 = { workspace = true, features = ["curve"], optional = true }
+
+[dev-dependencies]
+ark-pallas = { workspace = true, features = ["curve", "std"] }
+ark-bls12-381 = { workspace = true, features = ["curve", "std"] }
+ark-bn254 = { workspace = true, features = ["curve", "std"] }
+criterion = { workspace = true }
+
+[[bench]]
+name = "protocol"
+harness = false
+required-features = ["std", "bls12-381", "bn254"]
+
+[features]
+default = ["std", "bls12-381", "bn254"]
+bls12-381 = ["dep:ark-bls12-381"]
+bn254 = ["dep:ark-bn254"]
+std = [
+    "ark-ec/std",
+    "ark-ff/std",
+    "ark-serialize/std",
+    "ark-std/std",
+    "dock_crypto_utils/std",
+    "schnorr_pok/std",
+    "rand_core/std",
+    "sha2/std",
+    "zeroize/std",
+    "thiserror/std",
+    "ark-bls12-381?/std",
+    "ark-bn254?/std",
+]
+parallel = ["std", "dock_crypto_utils/parallel", "schnorr_pok/parallel"]
+# Skips the prover-side input checks so tests can build malformed payments, refunds and reveals.
+ignore_prover_input_sanitation = []

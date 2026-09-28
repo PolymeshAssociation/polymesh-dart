@@ -67,6 +67,10 @@ harness = false
 name = "batch_decrypt"
 harness = false
 
+[[bench]]
+name = "paper_numbers"
+harness = false
+
 [features]
 default = ["std", "asm", "parallel", "build-tables"]
 

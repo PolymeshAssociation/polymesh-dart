@@ -315,6 +315,13 @@ enum Commands {
         #[arg(short, long)]
         settlement_id: SettlementId,
     },
+
+    /// Walk through BAT fee token scenarios on an in-memory chain
+    BatDemo {
+        /// Run only this scenario
+        #[arg(short, long, value_enum)]
+        scenario: Option<bat::Scenario>,
+    },
 }
 
 #[derive(clap::ValueEnum, Clone)]
@@ -327,6 +334,10 @@ fn main() -> Result<()> {
     env_logger::init();
 
     let cli = Cli::parse();
+    if let Commands::BatDemo { scenario } = cli.command {
+        bat::run(scenario);
+        return Ok(());
+    }
     let mut db = DartTestingDb::new(&cli.database)?;
     let mut rng = thread_rng();
     let mut rng = reseed_rng(&mut rng);
@@ -710,6 +721,8 @@ fn main() -> Result<()> {
             let status = db.get_settlement_status(settlement_id)?;
             println!("Settlement {} status: {}", settlement_id, status);
         }
+
+        Commands::BatDemo { .. } => unreachable!(),
     }
 
     Ok(())

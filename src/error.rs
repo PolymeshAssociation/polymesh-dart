@@ -148,6 +148,21 @@ pub enum Error {
     /// Unsupported number of legs
     #[error("Unsupported number of legs: {0}")]
     UnsupportedNumberOfLegs(usize),
+
+    /// BAT error.
+    #[cfg(feature = "bat")]
+    #[error("BAT error: {0}")]
+    BatError(#[from] polymesh_bat::Error),
+
+    /// BAT issuer key not found.
+    #[cfg(feature = "bat")]
+    #[error("BAT issuer key not found: {0}")]
+    UnknownBatIssuer(u32),
+
+    /// A BAT payment spends under more issuer keys than allowed.
+    #[cfg(feature = "bat")]
+    #[error("Too many BAT issuer keys in payment")]
+    TooManyBatIssuerKeys,
 }
 
 impl From<UtilsError> for Error {

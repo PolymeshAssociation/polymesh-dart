@@ -11,6 +11,7 @@ use std::sync::Arc;
 use polymesh_dart::curve_tree::get_account_curve_tree_parameters;
 use polymesh_dart::*;
 
+pub mod bat;
 mod sqlite_curve_tree;
 use sqlite_curve_tree::{AccountCurveTree, AccountRootHistory, AssetCurveTree, AssetRootHistory};
 

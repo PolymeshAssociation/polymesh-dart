@@ -123,7 +123,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 [[package]]
 name = "ark-bls12-381"
 version = "0.5.0"
-source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=patch5#3c506298461c506f4c2270c59999a6379be22476"
+source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=patch-h2c#a675572d5ec6a5d4296d0c806cc3610afe32bde2"
 dependencies = [
  "ark-ec",
  "ark-ff",
@@ -134,7 +134,7 @@ dependencies = [
 [[package]]
 name = "ark-bn254"
 version = "0.5.0"
-source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=patch5#3c506298461c506f4c2270c59999a6379be22476"
+source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=patch-h2c#a675572d5ec6a5d4296d0c806cc3610afe32bde2"
 dependencies = [
  "ark-ec",
  "ark-ff",
@@ -177,7 +177,7 @@ dependencies = [
 [[package]]
 name = "ark-curve25519"
 version = "0.5.0"
-source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=patch5#3c506298461c506f4c2270c59999a6379be22476"
+source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=patch-h2c#a675572d5ec6a5d4296d0c806cc3610afe32bde2"
 dependencies = [
  "ark-ec",
  "ark-ff",
@@ -187,7 +187,7 @@ dependencies = [
 [[package]]
 name = "ark-dlog-gadget"
 version = "0.1.0"
-source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=patch7#ebea1bc259d215eed3dc57251c06f3bbbc81fbf1"
+source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=patch7#24c65d3e5ed0c8d4c897d88514ff4bfe07eefa16"
 dependencies = [
  "ark-curve25519",
  "ark-ec",
@@ -213,12 +213,11 @@ dependencies = [
 [[package]]
 name = "ark-ec"
 version = "0.5.0"
-source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=patch5#3c506298461c506f4c2270c59999a6379be22476"
+source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=patch-h2c#a675572d5ec6a5d4296d0c806cc3610afe32bde2"
 dependencies = [
  "ahash",
  "ark-ff",
  "ark-host-msm",
- "ark-poly 0.5.0 (git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=patch5)",
  "ark-serialize",
  "ark-std",
  "educe",
@@ -235,7 +234,7 @@ dependencies = [
 [[package]]
 name = "ark-ec-divisors"
 version = "0.1.0"
-source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=patch7#ebea1bc259d215eed3dc57251c06f3bbbc81fbf1"
+source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=patch7#24c65d3e5ed0c8d4c897d88514ff4bfe07eefa16"
 dependencies = [
  "ark-curve25519",
  "ark-ec",
@@ -263,7 +262,7 @@ dependencies = [
 [[package]]
 name = "ark-ed25519"
 version = "0.5.0"
-source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=patch5#3c506298461c506f4c2270c59999a6379be22476"
+source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=patch-h2c#a675572d5ec6a5d4296d0c806cc3610afe32bde2"
 dependencies = [
  "ark-curve25519",
  "ark-ec",
@@ -274,7 +273,7 @@ dependencies = [
 [[package]]
 name = "ark-ff"
 version = "0.5.0"
-source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=patch5#3c506298461c506f4c2270c59999a6379be22476"
+source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=patch-h2c#a675572d5ec6a5d4296d0c806cc3610afe32bde2"
 dependencies = [
  "ark-ff-asm",
  "ark-ff-macros",
@@ -291,7 +290,7 @@ dependencies = [
 [[package]]
 name = "ark-ff-asm"
 version = "0.5.0"
-source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=patch5#3c506298461c506f4c2270c59999a6379be22476"
+source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=patch-h2c#a675572d5ec6a5d4296d0c806cc3610afe32bde2"
 dependencies = [
  "quote",
  "syn 2.0.119",
@@ -300,7 +299,7 @@ dependencies = [
 [[package]]
 name = "ark-ff-macros"
 version = "0.5.0"
-source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=patch5#3c506298461c506f4c2270c59999a6379be22476"
+source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=patch-h2c#a675572d5ec6a5d4296d0c806cc3610afe32bde2"
 dependencies = [
  "num-bigint",
  "num-traits",
@@ -312,7 +311,7 @@ dependencies = [
 [[package]]
 name = "ark-helios"
 version = "0.5.0"
-source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=patch5#3c506298461c506f4c2270c59999a6379be22476"
+source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=patch-h2c#a675572d5ec6a5d4296d0c806cc3610afe32bde2"
 dependencies = [
  "ark-ec",
  "ark-ff",
@@ -322,9 +321,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "ark-host-hash-to-curve"
+version = "0.5.0"
+source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=patch-h2c#a675572d5ec6a5d4296d0c806cc3610afe32bde2"
+dependencies = [
+ "ark-bls12-381",
+ "ark-bn254",
+ "ark-ec",
+ "ark-ff",
+ "ark-helios",
+ "ark-host-msm",
+ "ark-pallas",
+ "ark-selene",
+ "ark-serialize",
+ "ark-std",
+ "ark-vesta",
+ "ark-wei25519",
+ "rayon",
+ "sha2",
+]
+
+[[package]]
 name = "ark-host-msm"
 version = "0.5.0"
-source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=patch5#3c506298461c506f4c2270c59999a6379be22476"
+source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=patch-h2c#a675572d5ec6a5d4296d0c806cc3610afe32bde2"
 dependencies = [
  "ark-serialize",
  "ark-std",
@@ -333,8 +353,10 @@ dependencies = [
 [[package]]
 name = "ark-host-msm-impl"
 version = "0.5.0"
-source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=patch5#3c506298461c506f4c2270c59999a6379be22476"
+source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=patch-h2c#a675572d5ec6a5d4296d0c806cc3610afe32bde2"
 dependencies = [
+ "ark-bls12-381",
+ "ark-bn254",
  "ark-ec",
  "ark-ff",
  "ark-host-msm",
@@ -348,7 +370,7 @@ dependencies = [
 [[package]]
 name = "ark-pallas"
 version = "0.5.0"
-source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=patch5#3c506298461c506f4c2270c59999a6379be22476"
+source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=patch-h2c#a675572d5ec6a5d4296d0c806cc3610afe32bde2"
 dependencies = [
  "ark-ec",
  "ark-ff",
@@ -370,20 +392,6 @@ dependencies = [
  "fnv",
  "hashbrown 0.15.5",
  "rayon",
-]
-
-[[package]]
-name = "ark-poly"
-version = "0.5.0"
-source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=patch5#3c506298461c506f4c2270c59999a6379be22476"
-dependencies = [
- "ahash",
- "ark-ff",
- "ark-serialize",
- "ark-std",
- "educe",
- "fnv",
- "hashbrown 0.16.1",
 ]
 
 [[package]]
@@ -418,7 +426,7 @@ dependencies = [
 [[package]]
 name = "ark-secp256k1"
 version = "0.5.0"
-source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=patch5#3c506298461c506f4c2270c59999a6379be22476"
+source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=patch-h2c#a675572d5ec6a5d4296d0c806cc3610afe32bde2"
 dependencies = [
  "ark-ec",
  "ark-ff",
@@ -428,7 +436,7 @@ dependencies = [
 [[package]]
 name = "ark-secq256k1"
 version = "0.5.0"
-source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=patch5#3c506298461c506f4c2270c59999a6379be22476"
+source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=patch-h2c#a675572d5ec6a5d4296d0c806cc3610afe32bde2"
 dependencies = [
  "ark-ec",
  "ark-ff",
@@ -439,7 +447,7 @@ dependencies = [
 [[package]]
 name = "ark-selene"
 version = "0.5.0"
-source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=patch5#3c506298461c506f4c2270c59999a6379be22476"
+source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=patch-h2c#a675572d5ec6a5d4296d0c806cc3610afe32bde2"
 dependencies = [
  "ark-curve25519",
  "ark-ec",
@@ -451,7 +459,7 @@ dependencies = [
 [[package]]
 name = "ark-serialize"
 version = "0.5.0"
-source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=patch5#3c506298461c506f4c2270c59999a6379be22476"
+source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=patch-h2c#a675572d5ec6a5d4296d0c806cc3610afe32bde2"
 dependencies = [
  "ark-serialize-derive",
  "ark-std",
@@ -465,7 +473,7 @@ dependencies = [
 [[package]]
 name = "ark-serialize-derive"
 version = "0.5.0"
-source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=patch5#3c506298461c506f4c2270c59999a6379be22476"
+source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=patch-h2c#a675572d5ec6a5d4296d0c806cc3610afe32bde2"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -498,7 +506,7 @@ dependencies = [
 [[package]]
 name = "ark-vesta"
 version = "0.5.0"
-source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=patch5#3c506298461c506f4c2270c59999a6379be22476"
+source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=patch-h2c#a675572d5ec6a5d4296d0c806cc3610afe32bde2"
 dependencies = [
  "ark-ec",
  "ark-ff",
@@ -510,7 +518,7 @@ dependencies = [
 [[package]]
 name = "ark-wei25519"
 version = "0.5.0"
-source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=patch5#3c506298461c506f4c2270c59999a6379be22476"
+source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=patch-h2c#a675572d5ec6a5d4296d0c806cc3610afe32bde2"
 dependencies = [
  "ark-curve25519",
  "ark-ec",
@@ -685,13 +693,13 @@ dependencies = [
 [[package]]
 name = "bulletproofs"
 version = "2.0.0"
-source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=patch7#ebea1bc259d215eed3dc57251c06f3bbbc81fbf1"
+source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=patch7#24c65d3e5ed0c8d4c897d88514ff4bfe07eefa16"
 dependencies = [
  "ahash",
  "ark-ec",
  "ark-ff",
  "ark-helios",
- "ark-host-msm",
+ "ark-host-hash-to-curve",
  "ark-pallas",
  "ark-secp256k1",
  "ark-secq256k1",
@@ -705,7 +713,6 @@ dependencies = [
  "dock_crypto_utils",
  "fnv",
  "hashbrown 0.15.5",
- "lazy_static",
  "log",
  "rand 0.8.8",
  "rand_core 0.6.4",
@@ -1057,6 +1064,7 @@ name = "dart-testing-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "ark-ec",
  "ark-serialize",
  "blake2",
  "clap",
@@ -1066,6 +1074,7 @@ dependencies = [
  "lazy_static",
  "log",
  "parity-scale-codec",
+ "polymesh-bat",
  "polymesh-dart",
  "polymesh-dart-bp",
  "polymesh-dart-common",
@@ -1232,11 +1241,12 @@ dependencies = [
 [[package]]
 name = "dock_crypto_utils"
 version = "0.22.0"
+source = "git+https://github.com/PolymeshAssociation/crypto?branch=patch34#cef09632709fcce97a1cbcaba0c0a4284652833a"
 dependencies = [
  "aead",
  "ark-ec",
  "ark-ff",
- "ark-poly 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "ark-poly",
  "ark-serialize",
  "ark-std",
  "cfg_eval",
@@ -1258,6 +1268,7 @@ dependencies = [
 [[package]]
 name = "dock_merlin"
 version = "3.0.0"
+source = "git+https://github.com/PolymeshAssociation/crypto?branch=patch34#cef09632709fcce97a1cbcaba0c0a4284652833a"
 dependencies = [
  "ark-serialize",
  "ark-std",
@@ -2715,6 +2726,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "polymesh-bat"
+version = "0.1.0"
+dependencies = [
+ "ark-bls12-381",
+ "ark-bn254",
+ "ark-ec",
+ "ark-ff",
+ "ark-pallas",
+ "ark-serialize",
+ "ark-std",
+ "criterion",
+ "dock_crypto_utils",
+ "rand_core 0.6.4",
+ "schnorr_pok",
+ "sha2",
+ "thiserror",
+ "zeroize",
+]
+
+[[package]]
 name = "polymesh-dart"
 version = "1.0.0"
 dependencies = [
@@ -2741,6 +2772,7 @@ dependencies = [
  "lazy_static",
  "log",
  "parity-scale-codec",
+ "polymesh-bat",
  "polymesh-dart-bp",
  "polymesh-dart-common",
  "rand 0.8.8",
@@ -3088,7 +3120,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 [[package]]
 name = "relations"
 version = "0.1.0"
-source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=patch7#ebea1bc259d215eed3dc57251c06f3bbbc81fbf1"
+source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=patch7#24c65d3e5ed0c8d4c897d88514ff4bfe07eefa16"
 dependencies = [
  "ark-crypto-primitives",
  "ark-dlog-gadget",
@@ -3097,7 +3129,7 @@ dependencies = [
  "ark-ff",
  "ark-helios",
  "ark-pallas",
- "ark-poly 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "ark-poly",
  "ark-selene",
  "ark-serialize",
  "ark-std",
@@ -3242,6 +3274,7 @@ dependencies = [
 [[package]]
 name = "schnorr_pok"
 version = "0.22.0"
+source = "git+https://github.com/PolymeshAssociation/crypto?branch=patch34#cef09632709fcce97a1cbcaba0c0a4284652833a"
 dependencies = [
  "ark-ec",
  "ark-ff",
@@ -4874,3 +4907,8 @@ name = "zmij"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
+
+[[patch.unused]]
+name = "ark-host-hash-to-curve-impl"
+version = "0.5.0"
+source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=patch-h2c#a675572d5ec6a5d4296d0c806cc3610afe32bde2"

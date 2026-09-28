@@ -1,26 +1,62 @@
 # BAT for DART fee payment: measured costs
 
+## TL;DR
+
+On-chain cost of BAT against the current DART fee payment. All times are node verification time and
+all sizes are the bytes that go on chain. The current mechanism is a curve-tree membership proof plus
+a Bulletproofs range proof plus linked sigmas over the Pasta cycle (Pallas/Vesta). BAT is a pairing
+scheme: the numbers here use **BN254 for the tokens (the pairing curve) and Pallas for the client
+signature `DS`**; the full report below also prices BLS12-381 tokens and Ed25519 signatures.
+
+The current mechanism BAT would replace is two proofs, each a fixed cost for any amount:
+
+| current mechanism | verify | size |
+|---|---|---|
+| top-up (funds the fee account) | 3.68 ms | 4,655 B |
+| fee payment (pays a fee) | 3.51 ms | 4,787 B |
+
+BAT replaces a fee payment of $n$ base units with $n$ one-unit tokens (one denomination). Issuance is
+bought once and is a flat on-chain cost regardless of $n$, because the per-token traffic is off chain
+between client and issuer; spend and refund are the per-payment costs and grow linearly in $n$:
+
+| $n$ tokens | issuance time | issuance size | spend time | spend size | refund time | refund size |
+|---|---|---|---|---|---|---|
+| 1 | 0.30 ms | 196 B | 0.61 ms | 128 B | 0.48 ms | 160 B |
+| 5 | 0.30 ms | 196 B | 0.99 ms | 384 B | 0.93 ms | 416 B |
+| 10 | 0.30 ms | 196 B | 1.74 ms | 704 B | 1.50 ms | 736 B |
+| 20 | 0.30 ms | 196 B | 2.16 ms | 1,344 B | 1.73 ms | 1,376 B |
+| 50 | 0.30 ms | 196 B | 3.46 ms | 3,264 B | 2.62 ms | 3,296 B |
+| 100 | 0.30 ms | 196 B | 4.80 ms | 6,464 B | 3.87 ms | 6,496 B |
+| 200 | 0.30 ms | 196 B | 8.08 ms | 12,864 B | 6.76 ms | 12,896 B |
+
+So BAT beats the current fee payment for small fees and loses the advantage as $n$ grows: against the
+3.51 ms / 4,787 B fee-payment proof, a BAT spend is cheaper on time up to about 52 tokens and on size
+up to about 74 tokens. Funding is the clear win — a purchase of any size is flat at 0.30 ms / 196 B
+on chain against the top-up's 3.68 ms / 4,655 B. Denomination pools cut the token count $n$ carries
+for a given fee; the report below prices them.
+
+---
+
 Measurements of [Cryptocurrency-Backed Trustless Anonymous Tokens and Their
-Applications](https://eprint.iacr.org/2026/1074) (BAT) Protocol A against the fee mechanism in
-[`dart-bp/docs/6.md`](dart-bp/docs/6.md), from the implementation in
-[`tests/bat_poc.rs`](tests/bat_poc.rs). Four combinations throughout: BLS12-381 and BN254 for the
+Applications](https://eprint.iacr.org/2026/1074) (BAT) Protocol A against the current DART fee
+mechanism. Four combinations throughout: BLS12-381 and BN254 for the
 tokens, crossed with Ed25519 and Pallas for the client signature scheme `DS`.
 
 ## Cost against the current mechanism
 
 The current fee payment is a curve-tree membership proof plus a Bulletproofs range proof plus
-linked sigmas. Numbers from `perf_comparison_results_1.md`, BAT numbers from the paper's Table 1
-on BLS12-381 with Ed25519 client keys. *Measured costs* below replaces these with numbers from an
+linked sigmas. BAT numbers here are from the paper's Table 1 on BLS12-381 with Ed25519 client keys.
+*Measured costs* below replaces these with numbers from an
 independent implementation and is what the decision should rest on.
 
 This table is per token, which is the comparison the paper invites and it is misleading for a fee
 mechanism. *Against the current mechanism, at one denomination* below carries it out to the payment
 amounts where it stops holding.
 
-| | `6.md` fee payment | BAT spend |
+| | current fee payment | BAT spend |
 |---|---|---|
-| Prove | 53 ms | 0.24 ms |
-| Verify | 5.7 ms | 1.68 ms |
+| Prove | 51 ms | 0.24 ms |
+| Verify | 3.5 ms | 1.68 ms |
 | Proof size | kilobytes | 144 B |
 | Verifier work | curve tree + BP + sigma | 2 pairings + 1 DS verify |
 
@@ -35,35 +71,60 @@ $$
 e(\sum_i{\alpha_i*\beta_i}, h) == \sum_{j \in J}{e(\sum_{i \in S_j}{H(pk_{e,i})*\beta_i}, pk_{iss,j})}
 $$
 
-which is $1 + |J|$ pairings for the whole block. Hash-to-curve and nullifier distinctness stay
-per token. Within one extrinsic this is free. Across extrinsics it needs the fee check lifted out
-of per-extrinsic validation, which is pallet work.
+which is $1 + |J|$ pairings for the whole payment. Hash-to-curve and nullifier distinctness stay
+per token. Batching stops there: aggregating across extrinsics would need the fee check lifted out
+of per-extrinsic validation and would cost per-payment attribution, which is not a trade worth
+making.
 
 ## Measured costs
 
-Protocol A implemented and measured in [`tests/bat_poc.rs`](tests/bat_poc.rs), on both pairing
+Protocol A implemented and measured on both pairing
 curves crossed with both client signature groups: BLS12-381 and BN254 for the tokens, Ed25519 and
 Pallas for `DS`. The paper's Table 1 is Protocol A on BLS12-381 with Ed25519 and Table 2 is
 Protocol B on BN254, so neither prices either axis on its own. Single-threaded, arkworks, native, no
 precompiles. Storage is excluded throughout: nullifier writes are a trie cost that follows from
 nothing measured here and will not be small. Every table in this section comes from one run so the
-columns are comparable to each other. The `6.md` baseline is re-measured in the same run and drifts
+columns are comparable to each other. The current-mechanism baseline is re-measured in the same run and drifts
 several percent between runs, so the third digit of any ratio should not be quoted.
 
+Two departures from the paper, both measured here rather than assumed. `DS` is batch Schnorr, one
+`(t, s)` for the whole payment instead of one per token, which the next-but-one paragraph explains.
+And hash-to-`G1` on BN254 is the RFC 9380 Shallue-van de Woestijne map rather than try-and-increment,
+which the arkworks fork now carries for `G1` and `G2`.
+
 The two axes are independent and it shows. The pairing curve sets everything on the token side and
-BN254 is roughly 2x to 4x cheaper than BLS12-381 throughout. The `DS` group sets only $\gamma$, and
-in this implementation Pallas is about 2x Ed25519 on every `DS` operation, which moves the totals by
-a few percent except where `DS` is the whole cost. Where a quantity depends on only one axis the
-table says so rather than repeating four near-identical copies.
+BN254 is roughly 2x to 3x cheaper than BLS12-381 throughout. The `DS` group sets only $\gamma$, and
+in this implementation Pallas is about 2x Ed25519 on every `DS` operation, which now moves the
+totals by very little, because batching has made `DS` a small term. Where a quantity depends on only
+one axis the table says so rather than repeating four near-identical copies.
 
-Serialized sizes come out on the paper's numbers to the byte and are the same for both `DS` groups,
-since Pallas and Ed25519 both have 32-byte compressed points and 32-byte scalars. Token 144 B on
-BLS12-381, issuance request 512 / 2,432 / 4,832 B and response 608 / 2,528 / 4,928 B at
-$\ell = 10 / 50 / 100$. BN254 gives a 128 B token and 3,232 B at $\ell = 100$.
+**`DS` is batch Schnorr**, Fig. 2 of
+[the Asiacrypt 2004 protocol](https://iacr.org/archive/asiacrypt2004/33290273/33290273.pdf) that
+DART already uses for key registration. A payment's $\ell$ ephemeral keys were all generated by
+one client, so one prover knows every $sk_e$, which is exactly that setting:
 
-Every pairing check routes through `RandomizedPairingChecker` and every group-equation check through
-`RandomizedMultChecker`, both from `dock_crypto_utils`, taken by reference so a caller settling a
-whole block pays one final exponentiation and one MSM.
+$$
+t = g*r, \quad c = H(t, pk_{e,1} \dots pk_{e,\ell}, ad), \quad s = r + \sum_i{c^i . sk_{e,i}}
+$$
+
+$$
+g*s == t + \sum_i{pk_{e,i}*c^i}
+$$
+
+One `G1` MSM of size $\ell + 1$ to verify, one scalar mult to sign, and 64 bytes per payment rather
+than per token. It binds the ordered key set, so a reordered or truncated spend yields a different
+challenge, and it does not reject a repeated key, so nullifier distinctness stays a separate check.
+Aggregation stops at the payment: batching across submitters would go further still, but a rejected
+batch would name no submitter, and per-extrinsic attribution is worth more than the factor.
+
+Serialized sizes. A token is $pk_e$ and $\alpha$, 80 B on BLS12-381 and 64 B on BN254, both `DS`
+groups alike since Pallas and Ed25519 have 32-byte points and 32-byte scalars. A payment adds one
+64 B signature. Issuance is unchanged from the paper and matches it to the byte: request
+512 / 2,432 / 4,832 B and response 608 / 2,528 / 4,928 B at $\ell = 10 / 50 / 100$ on BLS12-381.
+
+Every pairing check routes through `RandomizedPairingChecker` from `dock_crypto_utils`, taken by
+reference so a payment settling several equations pays one final exponentiation rather than one per
+equation.
 
 **Nothing in the PoC aggregates a pairing equation by hand.** The checker groups the pairs it
 accumulates by their $G_2$ element, so a batch whose $G_2$ side takes $k$ distinct values settles as
@@ -100,36 +161,34 @@ only on the signature group, so each is listed once:
 
 | | BLS12-381 | BN254 |
 |---|---|---|
-| $G_1$ scalar mult | 0.088 ms | 0.042 ms |
-| $G_2$ scalar mult | 0.245 ms | 0.110 ms |
-| $G_1$ MSM, 100 | 1.78 ms | 0.94 ms |
-| pairing | 0.55 ms | 0.30 ms |
-| multi-pairing, 2 pairs | 0.69 ms | 0.39 ms |
-| final exponentiation | 0.53 ms | 0.29 ms |
-| hash to $G_1$ | 0.075 ms (WB/SWU) | 0.0060 ms (try-and-increment) |
+| $G_1$ scalar mult | 0.092 ms | 0.043 ms |
+| $G_2$ scalar mult | 0.124 ms | 0.061 ms |
+| $G_1$ MSM, 100 | 0.89 ms | 0.66 ms |
+| pairing | 0.49 ms | 0.29 ms |
+| multi-pairing, 2 pairs | 0.63 ms | 0.37 ms |
+| final exponentiation | 0.49 ms | 0.27 ms |
+| hash to $G_1$ | 0.055 ms (WB) | 0.025 ms (SVDW) |
 
 | | Ed25519 | Pallas |
 |---|---|---|
-| `DS` keygen | 0.056 ms | 0.030 ms |
+| `DS` keygen | 0.057 ms | 0.029 ms |
 | `DS` sign | 0.056 ms | 0.029 ms |
-| `DS` verify | 0.092 ms | 0.044 ms |
+| `DS` verify | 0.093 ms | 0.044 ms |
 
-The hash-to-curve row needs reading carefully, because the two pairing curves are not running the
-same construction. Each uses the best arkworks offers: BLS12-381 gets the RFC 9380 WB map, BN254 gets
-hash-to-field plus try-and-increment on $x$. BN254 has no standard map available and this is not an
-oversight of the fork. Its $G_1$ is $y^2 = x^3 + 3$ with $COEFF_A = 0$, arkworks' `SWUConfig` requires
-$COEFF_A \neq 0$, no WB isogeny is shipped for it, and arkworks 0.5 has no SVDW at all. A BN254
-deployment needs a constant-time map written before it ships, since try-and-increment is variable
-time in the number of increments.
+Both curves now run RFC 9380, BLS12-381 over the WB isogeny and BN254 over the Shallue-van de
+Woestijne map, which applies where SWU does not because it admits `a.b = 0` and BN254's $G_1$ is
+$y^2 = x^3 + 3$. The remaining 2.2x between them is cofactor clearing: BLS12-381's $G_1$ has cofactor
+about $2^{126}$ and BN254's is 1.
 
-The 12x gap between the curves is nonetheless real and is not an artifact of that substitution. It is
-cofactor clearing: BLS12-381's $G_1$ has cofactor about $2^{126}$ and BN254's is 1. Measuring
-BLS12-381 both ways, before the fallback was removed as a selectable option, gave 0.079 for
-try-and-increment against 0.078 for WB, indistinguishable, because both pay the cofactor and that
-dominates the map. So writing SVDW for BN254 will not move its number much, and BLS12-381 cannot
-close the gap by changing construction. Now that the pairings are grouped away this is the dominant
-per-token cost on BLS12-381, and it is the term that does not batch: at $n = 512, J = 1$ it is
-49.8 ms of a 58.0 ms pairing check.
+**The constant-time map costs BN254 a factor of four.** Try-and-increment on the same curve measured
+0.0060 ms against SVDW's 0.025. That is a larger gap than the earlier reading of this table
+predicted, and the earlier reasoning was wrong in a way worth recording: measuring BLS12-381 both
+ways gave 0.079 for try-and-increment against 0.078 for WB, indistinguishable, and the inference
+drawn was that the map never matters because cofactor clearing dominates. It dominates on BLS12-381,
+whose cofactor is $2^{126}$. BN254's cofactor is 1, so there is nothing to dominate the map and the
+map is the whole cost. Try-and-increment is variable time in the number of increments and so is not
+deployable; the 4x is what correctness costs, and it is paid per token on the term that does not
+batch.
 
 ### Issuance, off chain
 
@@ -141,63 +200,63 @@ BLS12-381 with Ed25519, milliseconds:
 
 | $\ell$ | client blind | issuer sign | client verify | client unmask | verify, per token |
 |---|---|---|---|---|---|
-| 1 | 0.534 | 0.386 | 0.863 | 0.087 | 0.863 |
-| 5 | 1.41 | 0.796 | 1.172 | 0.466 | 0.235 |
-| 10 | 2.50 | 1.31 | 1.292 | 0.897 | 0.129 |
-| 20 | 4.70 | 2.35 | 1.527 | 1.95 | 0.076 |
-| 30 | 6.80 | 3.39 | 1.735 | 2.95 | 0.058 |
-| 40 | 8.88 | 4.34 | 2.028 | 3.98 | 0.051 |
-| 50 | 11.0 | 5.41 | 2.160 | 4.97 | 0.043 |
-| 100 | 21.5 | 10.6 | 2.823 | 10.1 | 0.028 |
-| 200 | 42.3 | 20.4 | 4.154 | 20.1 | 0.021 |
+| 1 | 0.663 | 0.245 | 0.750 | 0.090 | 0.750 |
+| 5 | 1.42 | 0.657 | 1.038 | 0.453 | 0.208 |
+| 10 | 2.18 | 1.17 | 1.466 | 0.937 | 0.147 |
+| 20 | 3.94 | 2.21 | 1.623 | 1.94 | 0.081 |
+| 30 | 5.51 | 3.25 | 1.733 | 3.00 | 0.058 |
+| 40 | 7.08 | 4.24 | 1.660 | 4.07 | 0.042 |
+| 50 | 8.83 | 5.28 | 1.832 | 5.16 | 0.037 |
+| 100 | 17.0 | 10.6 | 2.053 | 10.3 | 0.021 |
+| 200 | 33.3 | 20.7 | 2.399 | 20.7 | 0.012 |
 
 BLS12-381 with Pallas:
 
 | $\ell$ | client blind | issuer sign | client verify | client unmask | verify, per token |
 |---|---|---|---|---|---|
-| 1 | 0.538 | 0.417 | 0.864 | 0.093 | 0.864 |
-| 5 | 1.41 | 0.799 | 1.171 | 0.438 | 0.234 |
-| 10 | 2.50 | 1.29 | 1.294 | 0.925 | 0.129 |
-| 20 | 4.68 | 2.38 | 1.521 | 1.89 | 0.076 |
-| 30 | 6.84 | 3.38 | 1.739 | 2.94 | 0.058 |
-| 40 | 8.96 | 4.34 | 2.036 | 3.98 | 0.051 |
-| 50 | 11.3 | 5.62 | 2.234 | 5.01 | 0.045 |
-| 100 | 21.8 | 10.5 | 2.922 | 10.0 | 0.029 |
-| 200 | 42.7 | 20.2 | 4.166 | 20.1 | 0.021 |
+| 1 | 0.535 | 0.245 | 0.747 | 0.093 | 0.747 |
+| 5 | 1.23 | 0.664 | 1.041 | 0.440 | 0.208 |
+| 10 | 2.07 | 1.17 | 1.518 | 0.931 | 0.152 |
+| 20 | 3.68 | 2.23 | 1.683 | 1.96 | 0.084 |
+| 30 | 5.36 | 3.21 | 1.683 | 3.04 | 0.056 |
+| 40 | 7.02 | 4.21 | 1.623 | 4.09 | 0.041 |
+| 50 | 8.60 | 5.31 | 1.812 | 5.08 | 0.036 |
+| 100 | 16.9 | 10.6 | 2.119 | 10.3 | 0.021 |
+| 200 | 33.3 | 20.7 | 2.390 | 20.6 | 0.012 |
 
 BN254 with Ed25519:
 
 | $\ell$ | client blind | issuer sign | client verify | client unmask | verify, per token |
 |---|---|---|---|---|---|
-| 1 | 0.396 | 0.219 | 0.462 | 0.046 | 0.462 |
-| 5 | 0.745 | 0.459 | 0.766 | 0.230 | 0.153 |
-| 10 | 1.18 | 0.752 | 0.840 | 0.479 | 0.084 |
-| 20 | 2.06 | 1.36 | 0.979 | 1.05 | 0.049 |
-| 30 | 2.99 | 1.98 | 1.096 | 1.69 | 0.037 |
-| 40 | 3.69 | 2.55 | 1.251 | 2.27 | 0.031 |
-| 50 | 4.55 | 3.22 | 1.328 | 2.91 | 0.027 |
-| 100 | 8.79 | 6.22 | 1.678 | 5.92 | 0.017 |
-| 200 | 16.8 | 12.3 | 2.445 | 11.9 | 0.012 |
+| 1 | 0.489 | 0.142 | 0.442 | 0.046 | 0.442 |
+| 5 | 0.899 | 0.388 | 0.785 | 0.227 | 0.157 |
+| 10 | 1.35 | 0.707 | 1.209 | 0.502 | 0.121 |
+| 20 | 2.24 | 1.32 | 1.314 | 1.13 | 0.066 |
+| 30 | 3.13 | 1.95 | 1.343 | 1.73 | 0.045 |
+| 40 | 3.94 | 2.53 | 1.269 | 2.30 | 0.032 |
+| 50 | 4.90 | 3.19 | 1.380 | 2.96 | 0.028 |
+| 100 | 9.14 | 6.28 | 1.528 | 6.04 | 0.015 |
+| 200 | 17.8 | 12.5 | 1.708 | 12.2 | 0.009 |
 
 BN254 with Pallas:
 
 | $\ell$ | client blind | issuer sign | client verify | client unmask | verify, per token |
 |---|---|---|---|---|---|
-| 1 | 0.395 | 0.218 | 0.460 | 0.046 | 0.460 |
-| 5 | 0.738 | 0.458 | 0.770 | 0.225 | 0.154 |
-| 10 | 1.18 | 0.756 | 0.838 | 0.463 | 0.084 |
-| 20 | 2.05 | 1.37 | 0.969 | 1.07 | 0.049 |
-| 30 | 2.91 | 1.97 | 1.092 | 1.67 | 0.036 |
-| 40 | 3.77 | 2.55 | 1.254 | 2.25 | 0.031 |
-| 50 | 4.63 | 3.15 | 1.321 | 2.91 | 0.026 |
-| 100 | 8.84 | 6.06 | 1.674 | 5.93 | 0.017 |
-| 200 | 17.0 | 12.2 | 2.433 | 11.9 | 0.012 |
+| 1 | 0.443 | 0.141 | 0.433 | 0.047 | 0.433 |
+| 5 | 0.846 | 0.388 | 0.764 | 0.227 | 0.153 |
+| 10 | 1.29 | 0.694 | 1.254 | 0.492 | 0.125 |
+| 20 | 2.17 | 1.30 | 1.382 | 1.12 | 0.069 |
+| 30 | 3.00 | 1.93 | 1.377 | 1.76 | 0.046 |
+| 40 | 3.91 | 2.49 | 1.305 | 2.35 | 0.033 |
+| 50 | 4.74 | 3.15 | 1.319 | 2.94 | 0.026 |
+| 100 | 8.96 | 6.13 | 1.513 | 6.09 | 0.015 |
+| 200 | 17.7 | 12.4 | 1.675 | 12.2 | 0.008 |
 
-**The paper reports 60.72 ms for this step at $\ell = 100$ against 2.82 here, a factor of twenty.**
+**The paper reports 60.72 ms for this step at $\ell = 100$ against 2.05 here, a factor of thirty.**
 That matters because it is the wallet-visible latency of buying tokens, and it is available without
 any protocol change: the whole win is that the two repeated $G_2$ elements are recognized as
-repeated. Verification has stopped being the client's bottleneck. Blinding is, at 21.5 ms, and
-unmasking is next at 10.1 against 2.82.
+repeated. Verification has stopped being the client's bottleneck. Blinding is, at 17.0 ms, and
+unmasking is next at 10.3 against 2.05.
 
 The `DS` group barely enters this table, which is not obvious in advance: blinding generates
 $\ell$ ephemeral keys, so a 2x cheaper keygen ought to show. It does not, because keygen is batched
@@ -217,169 +276,155 @@ $\gamma$:
 
 | | client msg decode | issuer key decode |
 |---|---|---|
-| BLS12-381 / Ed25519 | 0.133 ms | 0.078 ms |
-| BLS12-381 / Pallas | 0.083 ms | 0.079 ms |
-| BN254 / Ed25519 | 0.135 ms | 0.080 ms |
-| BN254 / Pallas | 0.085 ms | 0.080 ms |
+| BLS12-381 / Ed25519 | 0.132 ms | 0.077 ms |
+| BLS12-381 / Pallas | 0.082 ms | 0.077 ms |
+| BN254 / Ed25519 | 0.102 ms | 0.045 ms |
+| BN254 / Pallas | 0.050 ms | 0.046 ms |
 
 Ed25519's subgroup check costs about 0.05 ms more than Pallas's, which is the whole difference.
 
-The issuer's message is one check $k . pk_{iss} == com_k$ in $G_2$, and a block carries $m$ of them.
-It touches no `DS` key at all, so it depends only on the pairing curve; the two `DS` columns agree
-to within a percent everywhere and only one is given.
+The issuer's message is one check $k . pk_{iss} == com_k$ in $G_2$. An issuer settling $m$ of its own
+sessions in one extrinsic pays the $m$ row; $m = 1$ is one session per extrinsic. Batching does not
+cross extrinsics here either, so a rejected batch is chargeable to the issuer that submitted it. The
+check touches no `DS` key, so it depends only on the pairing curve; the two `DS` columns agree to
+within a percent everywhere and only one is given.
 
 BLS12-381, milliseconds:
 
 | $m$ | $J$ keys | fixed-base cold | fixed-base warm | RMC |
 |---|---|---|---|---|
-| 1 | 1 | 1.73 | 0.071 | 0.433 |
-| 5 | 1 | 2.01 | 0.312 | 0.869 |
-| 10 | 1 | 2.40 | 0.651 | 1.24 |
-| 20 | 1 | 3.11 | 1.37 | 1.90 |
-| 50 | 1 | 5.08 | 2.79 | 3.81 |
-| 100 | 1 | 7.91 | 5.67 | 5.73 |
-| 100 | 10 | 29.3 | 7.08 | 6.08 |
+| 1 | 1 | 0.627 | 0.074 | 0.420 |
+| 5 | 1 | 0.720 | 0.168 | 0.678 |
+| 10 | 1 | 0.759 | 0.179 | 0.845 |
+| 20 | 1 | 0.857 | 0.298 | 0.958 |
+| 50 | 1 | 1.07 | 0.449 | 1.29 |
+| 100 | 1 | 1.31 | 0.697 | 1.66 |
+| 200 | 1 | 1.95 | 1.24 | 2.20 |
+| 1000 | 1 | 5.54 | 4.34 | 6.93 |
+| 100 | 10 | 8.02 | 2.09 | 1.74 |
 
 BN254:
 
 | $m$ | $J$ keys | fixed-base cold | fixed-base warm | RMC |
 |---|---|---|---|---|
-| 1 | 1 | 0.720 | 0.033 | 0.228 |
-| 5 | 1 | 0.849 | 0.156 | 0.474 |
-| 10 | 1 | 1.03 | 0.327 | 0.669 |
-| 20 | 1 | 1.39 | 0.650 | 1.02 |
-| 50 | 1 | 2.53 | 1.43 | 2.03 |
-| 100 | 1 | 4.12 | 2.98 | 3.03 |
-| 100 | 10 | 14.2 | 3.91 | 3.21 |
+| 1 | 1 | 0.409 | 0.034 | 0.235 |
+| 5 | 1 | 0.489 | 0.104 | 0.384 |
+| 10 | 1 | 0.537 | 0.138 | 0.623 |
+| 20 | 1 | 0.528 | 0.157 | 0.761 |
+| 50 | 1 | 0.670 | 0.261 | 0.835 |
+| 100 | 1 | 0.900 | 0.488 | 1.09 |
+| 200 | 1 | 1.30 | 1.03 | 1.59 |
+| 1000 | 1 | 4.15 | 2.68 | 4.21 |
+| 100 | 10 | 6.53 | 1.46 | 1.27 |
 
-Two ways to batch and they win in different places. A `BatchMulPreprocessing` window table on
-$pk_{iss}$ is dramatic at small $m$, where the checker's fixed bookkeeping dominates: 0.071 ms
-against 0.433 at $m = 1$, a factor of six. By $m = 100$ on one key the two have converged, 5.67
-against 5.73. But the table is per key: at $J = 10$ each one serves ten scalars and it degrades to
-7.08 while the checker holds at 6.08. And cold it is a loss everywhere, 1.73 ms at $m = 1$ and 7.91
-at $m = 100$, so it only pays as a warm cache.
+A `BatchMulPreprocessing` window table on $pk_{iss}$ wins at every $m$ on one key: 0.074 ms against
+the checker's 0.420 at $m = 1$, a factor of six, and still ahead at $m = 1000$, 4.34 ms against 6.93
+on BLS12-381 (2.68 against 4.21 on BN254). But the table is per key: at $J = 10$ it fragments into ten
+tables of a tenth the scalars each and loses to the checker, 2.09 ms against 1.74 at $m = 100$. And
+cold it is a loss, 0.627 ms at $m = 1$ against the warm 0.074, so it only pays as a warm cache.
 
-Issuer keys are long-lived registry state, so a warm cache is realistic, but it makes invalidation on
-register and retire a pallet obligation. The checker needs no cache, no invalidation and does not
-care how reveals distribute. Take the checker as the default and add the table only if blocks
-routinely carry a handful of reveals concentrated on one key, which is where its six-fold advantage
-lives; past $m \approx 100$ the table has nothing left to give. Under denomination pools an honest
-issuer holds $D$ keys rather than one, which pushes the realistic case towards the $J = 10$ column
-where the table is already behind.
+If issuers settle one session per extrinsic, which is the attribution-preserving default, $m = 1$ is
+the only row that matters and the warm table wins six to one. It is a cache on long-lived registry
+state, so invalidation on register and retire becomes a pallet obligation. The checker needs no cache
+and wins only when reveals span many keys. Under denomination pools an honest issuer holds $D$ keys
+rather than one, which pushes any batching towards the $J = 10$ column where the checker is ahead.
 
 The checker is a locally randomized check, not Fiat-Shamir. Each node draws its own randomness and
 never reveals it, so nothing is aimable at a node's coin, an honest batch passes for every draw and a
 dishonest one fails except with probability $m/p$. Two obligations follow and both belong to the
 pallet. Consensus needs that divergence probability argued rather than assumed. And a failing batch
-names no culprit, so rejection has to fall back to per-item checking to attribute the failure, which
-is a liveness and attribution requirement rather than a soundness one.
+names no culprit within the extrinsic, so rejection has to fall back to per-item checking to
+attribute the failure, which is a liveness and attribution requirement rather than a soundness one.
 
 ### Spend, on chain
 
-$n$ tokens across $J$ issuer keys fold into one multi-pairing of $1 + J$ pairs. Hash-to-curve and
-nullifier distinctness stay per token. In DART $\gamma$ is the extrinsic signature the node verifies
-regardless, so the no-DS column is the one that belongs against the current fee proof.
-
-Both chain columns are the whole check, hash-to-curve plus nullifier distinctness plus the pairing,
-so hash-to-curve is a component of them rather than something to add on. They are separate timings
-of the same batch rather than one derived from the other, so at $n = 1$, where the `DS` batch is
-0.03 to 0.17 ms against a 0.5 to 0.9 ms check, run-to-run noise can leave them within a few percent
-of each other.
+$n$ tokens across $J$ issuer keys fold into one multi-pairing of $1 + J$ pairs. Hash-to-curve,
+nullifier distinctness and the batch `DS` verify all stay per payment. The chain column is the whole
+check: hash-to-curve plus nullifier distinctness plus the pairing plus the batch `DS` verify, so the
+hash-to-curve and DS-batch columns are components of it rather than addends. `DS` is always verified;
+the batch signature is not a Substrate extrinsic signature, so a custom transaction extension checks
+it whichever curve it lives on (see *Client signature group*).
 
 The $J$ column is the denomination question in disguise. Under pools a payment spending $d$ distinct
 denominations has $J = d$, so the $J = n$ rows are what a multi-denomination fee actually costs.
 
 BLS12-381 with Ed25519, milliseconds:
 
-| $n$ | $J$ | hash-to-curve | chain, no DS | DS batched | chain, with DS | per token, no DS |
-|---|---|---|---|---|---|---|
-| 1 | 1 | 0.063 | 0.892 | 0.172 | 1.089 | 0.892 |
-| 4 | 1 | 0.292 | 1.464 | 0.273 | 1.732 | 0.366 |
-| 4 | 4 | 0.278 | 2.118 | 0.271 | 2.362 | 0.530 |
-| 8 | 1 | 0.661 | 1.981 | 0.386 | 2.359 | 0.248 |
-| 8 | 8 | 0.657 | 3.456 | 0.387 | 3.865 | 0.432 |
-| 16 | 1 | 1.46 | 2.996 | 0.731 | 3.729 | 0.187 |
-| 16 | 16 | 1.51 | 6.190 | 0.730 | 6.911 | 0.387 |
-| 64 | 1 | 6.15 | 8.697 | 1.67 | 10.3 | 0.136 |
-| 128 | 1 | 12.5 | 15.8 | 2.89 | 18.7 | 0.124 |
-| 512 | 1 | 49.8 | 58.0 | 7.96 | 65.7 | 0.113 |
-| 512 | 64 | 49.7 | 70.7 | 7.93 | 78.8 | 0.138 |
+| $n$ | $J$ | hash-to-curve | DS batch | chain | per token |
+|---|---|---|---|---|---|
+| 1 | 1 | 0.054 | 0.176 | 1.041 | 1.041 |
+| 4 | 1 | 0.218 | 0.265 | 1.489 | 0.372 |
+| 4 | 4 | 0.217 | 0.259 | 1.874 | 0.469 |
+| 8 | 1 | 0.434 | 0.568 | 2.516 | 0.315 |
+| 16 | 1 | 0.873 | 0.579 | 3.178 | 0.199 |
+| 16 | 16 | 0.874 | 0.549 | 4.302 | 0.269 |
+| 64 | 1 | 3.66 | 0.734 | 6.315 | 0.099 |
+| 128 | 1 | 7.30 | 0.894 | 10.4 | 0.082 |
+| 512 | 1 | 29.5 | 1.59 | 34.7 | 0.068 |
+| 512 | 64 | 29.7 | 1.58 | 60.1 | 0.117 |
 
 BLS12-381 with Pallas:
 
-| $n$ | $J$ | hash-to-curve | chain, no DS | DS batched | chain, with DS | per token, no DS |
-|---|---|---|---|---|---|---|
-| 1 | 1 | 0.075 | 0.912 | 0.034 | 0.923 | 0.912 |
-| 4 | 1 | 0.304 | 1.473 | 0.104 | 1.562 | 0.368 |
-| 4 | 4 | 0.313 | 2.066 | 0.104 | 2.218 | 0.517 |
-| 8 | 1 | 0.675 | 1.954 | 0.182 | 2.127 | 0.244 |
-| 8 | 8 | 0.640 | 3.419 | 0.182 | 3.567 | 0.427 |
-| 16 | 1 | 1.47 | 2.932 | 0.340 | 3.297 | 0.183 |
-| 16 | 16 | 1.44 | 6.048 | 0.340 | 6.405 | 0.378 |
-| 64 | 1 | 6.09 | 8.558 | 1.40 | 9.976 | 0.134 |
-| 128 | 1 | 12.4 | 15.7 | 2.44 | 18.2 | 0.123 |
-| 512 | 1 | 50.6 | 58.4 | 5.99 | 64.2 | 0.114 |
-| 512 | 64 | 49.5 | 70.9 | 5.96 | 77.0 | 0.138 |
+| $n$ | $J$ | hash-to-curve | DS batch | chain | per token |
+|---|---|---|---|---|---|
+| 1 | 1 | 0.055 | 0.032 | 0.854 | 0.854 |
+| 4 | 1 | 0.213 | 0.057 | 1.323 | 0.331 |
+| 4 | 4 | 0.217 | 0.056 | 1.713 | 0.428 |
+| 8 | 1 | 0.434 | 0.089 | 1.956 | 0.245 |
+| 16 | 1 | 0.874 | 0.153 | 2.599 | 0.162 |
+| 16 | 16 | 0.875 | 0.153 | 3.925 | 0.245 |
+| 64 | 1 | 3.71 | 0.615 | 6.266 | 0.098 |
+| 128 | 1 | 7.46 | 0.738 | 10.4 | 0.081 |
+| 512 | 1 | 29.7 | 1.32 | 34.8 | 0.068 |
+| 512 | 64 | 29.6 | 1.44 | 58.4 | 0.114 |
 
 BN254 with Ed25519:
 
-| $n$ | $J$ | hash-to-curve | chain, no DS | DS batched | chain, with DS | per token, no DS |
-|---|---|---|---|---|---|---|
-| 1 | 1 | 0.016 | 0.476 | 0.172 | 0.678 | 0.476 |
-| 4 | 1 | 0.065 | 0.816 | 0.286 | 1.112 | 0.204 |
-| 4 | 4 | 0.039 | 1.273 | 0.272 | 1.502 | 0.318 |
-| 8 | 1 | 0.068 | 0.882 | 0.385 | 1.267 | 0.110 |
-| 8 | 8 | 0.130 | 2.020 | 0.383 | 2.390 | 0.253 |
-| 16 | 1 | 0.204 | 1.121 | 0.727 | 1.849 | 0.070 |
-| 16 | 16 | 0.148 | 3.368 | 0.727 | 4.087 | 0.211 |
-| 64 | 1 | 0.780 | 2.218 | 1.66 | 3.903 | 0.035 |
-| 128 | 1 | 1.43 | 3.353 | 2.89 | 6.279 | 0.026 |
-| 512 | 1 | 5.80 | 10.2 | 7.94 | 18.1 | 0.020 |
-| 512 | 64 | 5.96 | 19.9 | 7.98 | 28.1 | 0.039 |
+| $n$ | $J$ | hash-to-curve | DS batch | chain | per token |
+|---|---|---|---|---|---|
+| 1 | 1 | 0.024 | 0.174 | 0.753 | 0.753 |
+| 4 | 1 | 0.085 | 0.256 | 1.115 | 0.279 |
+| 4 | 4 | 0.080 | 0.258 | 1.445 | 0.361 |
+| 8 | 1 | 0.149 | 0.591 | 2.008 | 0.251 |
+| 16 | 1 | 0.363 | 0.589 | 2.331 | 0.146 |
+| 16 | 16 | 0.346 | 0.549 | 3.191 | 0.199 |
+| 64 | 1 | 1.46 | 0.727 | 3.655 | 0.057 |
+| 128 | 1 | 2.99 | 0.908 | 5.496 | 0.043 |
+| 512 | 1 | 11.9 | 1.54 | 15.9 | 0.031 |
+| 512 | 64 | 12.1 | 3.26 | 41.0 | 0.080 |
 
 BN254 with Pallas:
 
-| $n$ | $J$ | hash-to-curve | chain, no DS | DS batched | chain, with DS | per token, no DS |
-|---|---|---|---|---|---|---|
-| 1 | 1 | 0.006 | 0.482 | 0.034 | 0.503 | 0.482 |
-| 4 | 1 | 0.049 | 0.798 | 0.104 | 0.901 | 0.199 |
-| 4 | 4 | 0.049 | 1.256 | 0.105 | 1.347 | 0.314 |
-| 8 | 1 | 0.074 | 0.885 | 0.181 | 1.065 | 0.111 |
-| 8 | 8 | 0.089 | 1.965 | 0.182 | 2.132 | 0.246 |
-| 16 | 1 | 0.153 | 1.075 | 0.339 | 1.411 | 0.067 |
-| 16 | 16 | 0.143 | 3.326 | 0.339 | 3.653 | 0.208 |
-| 64 | 1 | 0.703 | 2.151 | 1.42 | 3.586 | 0.034 |
-| 128 | 1 | 1.60 | 3.519 | 2.43 | 6.022 | 0.028 |
-| 512 | 1 | 6.17 | 10.6 | 6.02 | 16.6 | 0.021 |
-| 512 | 64 | 5.87 | 19.9 | 5.97 | 25.9 | 0.039 |
+| $n$ | $J$ | hash-to-curve | DS batch | chain | per token |
+|---|---|---|---|---|---|
+| 1 | 1 | 0.020 | 0.032 | 0.879 | 0.879 |
+| 4 | 1 | 0.099 | 0.055 | 0.947 | 0.237 |
+| 4 | 4 | 0.076 | 0.057 | 1.223 | 0.306 |
+| 8 | 1 | 0.176 | 0.089 | 1.399 | 0.175 |
+| 16 | 1 | 0.391 | 0.152 | 1.723 | 0.108 |
+| 16 | 16 | 0.340 | 0.151 | 2.587 | 0.162 |
+| 64 | 1 | 1.51 | 0.711 | 3.688 | 0.058 |
+| 128 | 1 | 3.09 | 0.890 | 5.571 | 0.044 |
+| 512 | 1 | 11.8 | 1.37 | 15.9 | 0.031 |
+| 512 | 64 | 12.1 | 1.40 | 39.9 | 0.078 |
 
-Against the 5.714 ms verify of `FeeAccountPaymentProof` measured below, a single spend is 6.4x
-cheaper on BLS12-381 and 12.0x on BN254. At block scale with one issuer the per-token figures are
-0.113 and 0.020 ms, which is 50x and 287x. The order-of-magnitude claim in the paper's abstract
-survives contact with a second implementation, and batching widens it rather than narrowing it. The
-`DS` group changes none of this, because the pairing columns do not depend on it: it is the same
-batch of tokens either way, differing only in which curve $\gamma$ lives on.
+Against the 3.508 ms verify of `FeeAccountPaymentProof` measured below, a single spend is 3.4x
+cheaper on BLS12-381 and 4.7x on BN254. At $n = 512$ with one issuer the per-token figures are
+0.068 and 0.031 ms, which is 52x and 113x. The order-of-magnitude claim in the paper's abstract
+survives at scale, though the current mechanism's faster verify has shrunk the single-payment margin.
+
+Batch Schnorr keeps the `DS` term small. At $n = 512$ it is 1.59 ms on Ed25519 and 1.32 on
+Pallas, an `n + 1` MSM instead of the `2n + 1` points individual verification would need. On the
+client side the effect is larger and shows up in the payment table below, where producing a spend is
+one scalar mult regardless of $\ell$.
 
 $J$ costs real time, and it is the cost denominations impose. At $n = 16$, going from one issuer key
-to sixteen takes the batch from 3.00 to 6.19 ms on BLS12-381, because the multi-miller-loop goes
+to sixteen takes the batch from 3.18 to 4.30 ms on BLS12-381, because the multi-miller-loop goes
 from 2 pairs to 17 and the $G_1$ side fragments from one MSM of 16 into sixteen of size 1.
 
-Settling a whole block through one checker pair rather than one per payment is the largest single
-win available on the verifier side, because the grouping is across the block rather than within a
-payment. At 128 payments of four tokens under one issuer key:
-
-| | per-payment settle | one checker for block | speedup | per token |
-|---|---|---|---|---|
-| BLS12-381 / Ed25519 | 231.3 ms | 65.9 ms | 3.51x | 0.129 ms |
-| BLS12-381 / Pallas | 209.7 | 65.0 | 3.22x | 0.127 |
-| BN254 / Ed25519 | 137.8 | 18.4 | 7.50x | 0.036 |
-| BN254 / Pallas | 116.5 | 16.7 | 6.98x | 0.033 |
-
-The whole block is two groups, so it is two $G_1$ MSMs of size 512 and a two-pair multi-miller-loop
-for 128 fee payments. It needs the fee check lifted out of per-extrinsic validation, which is pallet
-work. Pallas's smaller speedup is not a worse result: the per-payment column it is measured against
-is already cheaper, because 512 Ed25519 signatures cost 8.0 ms against Pallas's 6.0. Under pools the
-block carries $1 + D$ groups rather than 2, so this factor shrinks as $D$ grows.
+Hash-to-curve is the term that does not batch, and on BLS12-381 it is now most of the cost: 29.5 ms
+of a 34.7 ms check at $n = 512$. On BN254 it is 11.9 of 15.9, which is a larger share than before the
+constant-time map went in.
 
 ### Client signature group
 
@@ -388,24 +433,21 @@ it for the curve trees, so ephemeral keys on Pallas add no new curve to the veri
 measured throughout the tables above; neither is removed.
 
 Sizes are identical. Both have 32-byte compressed points and 32-byte scalars, so the signature is
-64 B and the token is 144 B on BLS12-381 and 128 B on BN254 either way.
-
-Times, per signature and then batched through `RandomizedMultChecker`:
+64 B and the token is 80 B on BLS12-381 and 64 B on BN254 either way.
 
 | | Ed25519 | Pallas |
 |---|---|---|
-| keygen | 0.056 ms | 0.030 ms |
+| keygen | 0.056 ms | 0.029 ms |
 | sign | 0.056 | 0.029 |
-| verify | 0.092 | 0.044 |
-| batch verify, $n = 1$ | 0.172 | 0.034 |
-| batch verify, $n = 512$ | 7.96 | 5.99 |
-| $com_k$ + $pk_{ref}$ decode | 0.133 | 0.083 |
+| verify, single | 0.093 | 0.044 |
+| batch, $n = 1$ | 0.176 | 0.032 |
+| batch, $n = 512$ | 1.59 | 1.32 |
+| $com_k$ + $pk_{ref}$ decode | 0.135 | 0.082 |
+| sign a payment of any size | 0.057 | 0.030 |
 
-End to end the effect is small, because the pairing dominates everything except the smallest batch.
-Full chain verification including `DS` goes from 1.089 to 0.923 ms at $n = 1$ on BLS12-381 and from
-0.678 to 0.503 on BN254, then converges: at $n = 512$ it is 65.7 against 64.2, and 18.1 against 16.6.
-The largest effect anywhere is on the client, where producing a payment is nothing but signatures:
-0.056 ms per token against 0.029.
+Batching has made the choice nearly free either way: at $n = 512$ full chain verification is 34.7
+against 34.8 ms on BLS12-381 and 15.9 against 15.9 on BN254. The largest remaining difference is the
+$pk_{ref}$ subgroup check in Π-Execute, not $\gamma$.
 
 **The 2x is not a property of the curves.** It is arkworks representing $2^{255} - 19$ as a generic
 256-bit Montgomery field, where `curve25519-dalek` uses a radix representation specialised to that
@@ -420,27 +462,27 @@ What does survive the caveat is architectural. Pallas is already in the verifier
 `pk_e` on Pallas introduces no new field arithmetic, no new subgroup check and no new audit surface,
 where Ed25519 is a third curve alongside Pallas, Vesta and the pairing curve.
 
-Against that sits an interaction with the wire format, and it may dominate. The claim that
-$\gamma$ is free because it is the extrinsic signature needs the node to be verifying that
-signature anyway. Substrate has no Pallas signature type, so a Pallas $\gamma$ has to ride in
-the payload and be checked separately, which turns the whole `DS` column from free into real cost.
-The Ed25519 case is better but not clean either: a fee token is spent by a fresh one-time key with
-no account behind it, so it is not an ordinary signed extrinsic whichever curve signs it, and the
-reuse needs a custom transaction extension to be real. Until that is settled the honest reading of
-the spend tables is the *with DS* column, not the *no DS* one, on all four combinations.
+Against that sits an interaction with the wire format, and batch Schnorr settles it in one direction.
+A batch signature over $\ell$ one-time keys is not a signature under any one of them, so it cannot be
+a Substrate extrinsic signature on either curve: `MultiSignature` has no such variant. So $\gamma$ is
+never free as an extrinsic signature, and a custom transaction extension has to verify it whichever
+curve it lives on. That was already the conclusion for Ed25519, since a fee token is spent by a fresh
+one-time key with no account behind it, so nothing is lost — and it is why every chain figure in this
+document includes the batch `DS` verify, on all four combinations, which removes the last argument for
+preferring Ed25519.
 
 ### Against the current mechanism, at one denomination
 
 The paper mints one unit per accepted spend, so a fee of $\ell$ base units costs $\ell$ tokens,
-while `6.md` pays any amount with a single proof. That makes the comparison a function of $\ell$
+while the current mechanism pays any amount with a single proof. That makes the comparison a function of $\ell$
 rather than a single ratio. Everything in this subsection is a single denomination. The two current
 proofs BAT would replace, measured on the same machine in the same run, with SCALE sizes because
 that is what goes on chain:
 
 | | prove | verify | size |
 |---|---|---|---|
-| `FeeAccountTopupProof` | 53.0 ms | 5.765 ms | 4,655 B |
-| `FeeAccountPaymentProof` | 52.9 ms | 5.714 ms | 4,787 B |
+| `FeeAccountTopupProof` | 51.7 ms | 3.683 ms | 4,655 B |
+| `FeeAccountPaymentProof` | 50.6 ms | 3.508 ms | 4,787 B |
 
 `FeeAccountRegistrationProof` is not measured. It has no BAT counterpart, since tokens are bearer
 objects and no fee account is ever created, so it appears in neither column of the comparison.
@@ -451,14 +493,14 @@ combination at $L = 100$ carries it, with the full sweep in the run output:
 
 | | client off chain | issuer off chain | chain, both transactions | on-chain bytes | vs top-up |
 |---|---|---|---|---|---|
-| BLS12-381 / Ed25519 | 34.3 ms | 10.3 ms | 0.587 ms | 228 B | 9.8x |
-| BLS12-381 / Pallas | 35.2 | 10.6 | 0.548 | 228 | 10.5x |
-| BN254 / Ed25519 | 16.4 | 6.39 | 0.378 | 196 | 15.2x |
-| BN254 / Pallas | 16.4 | 6.25 | 0.311 | 196 | 18.5x |
+| BLS12-381 / Ed25519 | 29.9 ms | 10.8 ms | 0.553 ms | 228 B | 6.7x |
+| BLS12-381 / Pallas | 29.2 | 10.8 | 0.515 | 228 | 7.2x |
+| BN254 / Ed25519 | 17.3 | 6.28 | 0.412 | 196 | 8.9x |
+| BN254 / Pallas | 17.2 | 6.45 | 0.321 | 196 | 11.5x |
 
-Against 5.765 ms and 4,655 B for a top-up that is 10x to 19x in chain time and 20x on bytes, flat in
+Against 3.683 ms and 4,655 B for a top-up that is 6.7x to 11.5x in chain time and 20x on bytes, flat in
 $L$, and the traffic that does scale with $L$ is off chain between client and issuer where it costs
-the chain nothing. The `DS` group is worth 7 to 18 percent here because most of the on-chain cost is
+the chain nothing. The `DS` group is worth 10 to 20 percent here because most of the on-chain cost is
 the $pk_{ref}$ subgroup check. Both reveals go through the checker; on a block carrying a single
 reveal the warm window table would cut those figures by about 0.36 ms, which roughly triples the
 ratio but buys a cache.
@@ -467,94 +509,89 @@ Payment is where the single denomination bites. Ratios above 1 favour BAT.
 
 BLS12-381 with Ed25519:
 
-| fee amount $\ell$ | `6.md` client | BAT client | `6.md` chain | BAT chain, no DS | BAT chain, with DS | BAT bytes | chain | bytes |
-|---|---|---|---|---|---|---|---|---|
-| 1 | 52.9 ms | 0.056 ms | 5.714 ms | 0.902 ms | 1.067 ms | 144 | 6.33x | 33.2x |
-| 5 | 52.9 | 0.281 | 5.714 | 1.626 | 1.894 | 720 | 3.51x | 6.65x |
-| 10 | 52.9 | 0.561 | 5.714 | 2.241 | 2.670 | 1,440 | 2.55x | 3.32x |
-| 20 | 52.9 | 1.13 | 5.714 | 3.463 | 4.239 | 2,880 | 1.65x | 1.66x |
-| 30 | 52.9 | 1.69 | 5.714 | 4.766 | 5.615 | 4,320 | 1.20x | 1.11x |
-| 40 | 52.9 | 2.25 | 5.714 | 6.053 | 7.118 | 5,760 | 0.94x | 0.83x |
-| 50 | 52.9 | 2.82 | 5.714 | 6.937 | 8.182 | 7,200 | 0.82x | 0.66x |
-| 100 | 52.9 | 5.62 | 5.714 | 12.5 | 14.6 | 14,400 | 0.46x | 0.33x |
-| 200 | 52.9 | 11.2 | 5.714 | 23.7 | 27.7 | 28,800 | 0.24x | 0.17x |
+| fee amount $\ell$ | current client | BAT client | current chain | BAT chain | BAT bytes | chain | bytes |
+|---|---|---|---|---|---|---|---|
+| 1 | 50.6 ms | 0.058 ms | 3.508 ms | 1.040 ms | 144 | 3.37x | 33.2x |
+| 5 | 50.6 | 0.057 | 3.508 | 1.616 | 464 | 2.17x | 10.3x |
+| 10 | 50.6 | 0.057 | 3.508 | 2.800 | 864 | 1.25x | 5.54x |
+| 20 | 50.6 | 0.060 | 3.508 | 3.680 | 1,664 | 0.95x | 2.88x |
+| 30 | 50.6 | 0.059 | 3.508 | 4.320 | 2,464 | 0.81x | 1.94x |
+| 40 | 50.6 | 0.060 | 3.508 | 4.757 | 3,264 | 0.74x | 1.47x |
+| 50 | 50.6 | 0.062 | 3.508 | 5.514 | 4,064 | 0.64x | 1.18x |
+| 100 | 50.6 | 0.067 | 3.508 | 8.868 | 8,064 | 0.40x | 0.59x |
+| 200 | 50.6 | 0.075 | 3.508 | 15.2 | 16,064 | 0.23x | 0.30x |
 
 BLS12-381 with Pallas:
 
-| fee amount $\ell$ | BAT client | BAT chain, no DS | BAT chain, with DS | BAT bytes | chain | bytes |
-|---|---|---|---|---|---|---|
-| 1 | 0.030 ms | 0.922 ms | 0.941 ms | 144 | 6.20x | 33.2x |
-| 5 | 0.146 | 1.628 | 1.717 | 720 | 3.51x | 6.65x |
-| 10 | 0.293 | 2.246 | 2.447 | 1,440 | 2.54x | 3.32x |
-| 20 | 0.584 | 3.489 | 3.902 | 2,880 | 1.64x | 1.66x |
-| 30 | 0.884 | 4.710 | 5.333 | 4,320 | 1.21x | 1.11x |
-| 40 | 1.18 | 5.954 | 6.892 | 5,760 | 0.96x | 0.83x |
-| 50 | 1.47 | 7.119 | 8.154 | 7,200 | 0.80x | 0.66x |
-| 100 | 2.92 | 12.5 | 14.5 | 14,400 | 0.46x | 0.33x |
-| 200 | 5.90 | 23.8 | 27.0 | 28,800 | 0.24x | 0.17x |
+| fee amount $\ell$ | BAT client | BAT chain | BAT bytes | chain | bytes |
+|---|---|---|---|---|---|
+| 1 | 0.030 ms | 0.838 ms | 144 | 4.19x | 33.2x |
+| 5 | 0.030 | 1.463 | 464 | 2.40x | 10.3x |
+| 10 | 0.032 | 2.401 | 864 | 1.46x | 5.54x |
+| 20 | 0.032 | 3.873 | 1,664 | 0.91x | 2.88x |
+| 30 | 0.033 | 4.044 | 2,464 | 0.87x | 1.94x |
+| 40 | 0.033 | 4.540 | 3,264 | 0.77x | 1.47x |
+| 50 | 0.035 | 6.190 | 4,064 | 0.57x | 1.18x |
+| 100 | 0.042 | 10.5 | 8,064 | 0.33x | 0.59x |
+| 200 | 0.052 | 15.5 | 16,064 | 0.23x | 0.30x |
 
 BN254 with Ed25519:
 
-| fee amount $\ell$ | BAT client | BAT chain, no DS | BAT chain, with DS | BAT bytes | chain | bytes |
-|---|---|---|---|---|---|---|
-| 1 | 0.056 ms | 0.494 ms | 0.640 ms | 128 | 11.6x | 37.4x |
-| 5 | 0.280 | 0.834 | 1.158 | 640 | 6.85x | 7.48x |
-| 10 | 0.560 | 0.952 | 1.430 | 1,280 | 6.00x | 3.74x |
-| 20 | 1.20 | 1.244 | 1.994 | 2,560 | 4.60x | 1.87x |
-| 30 | 1.68 | 1.417 | 2.365 | 3,840 | 4.03x | 1.25x |
-| 40 | 2.24 | 1.701 | 2.828 | 5,120 | 3.36x | 0.93x |
-| 50 | 2.81 | 1.926 | 3.212 | 6,400 | 2.97x | 0.75x |
-| 100 | 5.65 | 2.829 | 5.023 | 12,800 | 2.02x | 0.37x |
-| 200 | 11.2 | 4.922 | 8.796 | 25,600 | 1.16x | 0.19x |
+| fee amount $\ell$ | BAT client | BAT chain | BAT bytes | chain | bytes |
+|---|---|---|---|---|---|
+| 1 | 0.059 ms | 0.835 ms | 128 | 4.20x | 37.4x |
+| 5 | 0.059 | 1.289 | 384 | 2.72x | 12.5x |
+| 10 | 0.062 | 2.272 | 704 | 1.54x | 6.80x |
+| 20 | 0.060 | 2.831 | 1,344 | 1.24x | 3.56x |
+| 30 | 0.060 | 3.037 | 1,984 | 1.16x | 2.41x |
+| 40 | 0.064 | 3.097 | 2,624 | 1.13x | 1.82x |
+| 50 | 0.062 | 3.425 | 3,264 | 1.02x | 1.47x |
+| 100 | 0.065 | 5.113 | 6,464 | 0.69x | 0.74x |
+| 200 | 0.074 | 7.808 | 12,864 | 0.45x | 0.37x |
 
 BN254 with Pallas:
 
-| fee amount $\ell$ | BAT client | BAT chain, no DS | BAT chain, with DS | BAT bytes | chain | bytes |
-|---|---|---|---|---|---|---|
-| 1 | 0.030 ms | 0.471 ms | 0.547 ms | 128 | 12.1x | 37.4x |
-| 5 | 0.146 | 0.828 | 0.945 | 640 | 6.90x | 7.48x |
-| 10 | 0.292 | 0.934 | 1.152 | 1,280 | 6.12x | 3.74x |
-| 20 | 0.583 | 1.160 | 1.581 | 2,560 | 4.93x | 1.87x |
-| 30 | 0.877 | 1.425 | 2.044 | 3,840 | 4.01x | 1.25x |
-| 40 | 1.17 | 1.659 | 2.610 | 5,120 | 3.44x | 0.93x |
-| 50 | 1.46 | 1.849 | 2.944 | 6,400 | 3.09x | 0.75x |
-| 100 | 2.91 | 2.858 | 4.738 | 12,800 | 2.00x | 0.37x |
-| 200 | 5.86 | 4.702 | 7.915 | 25,600 | 1.22x | 0.19x |
+| fee amount $\ell$ | BAT client | BAT chain | BAT bytes | chain | bytes |
+|---|---|---|---|---|---|
+| 1 | 0.031 ms | 0.608 ms | 128 | 5.77x | 37.4x |
+| 5 | 0.031 | 0.985 | 384 | 3.56x | 12.5x |
+| 10 | 0.031 | 1.741 | 704 | 2.02x | 6.80x |
+| 20 | 0.032 | 2.156 | 1,344 | 1.63x | 3.56x |
+| 30 | 0.034 | 2.668 | 1,984 | 1.31x | 2.41x |
+| 40 | 0.034 | 3.032 | 2,624 | 1.16x | 1.82x |
+| 50 | 0.035 | 3.464 | 3,264 | 1.01x | 1.47x |
+| 100 | 0.038 | 4.804 | 6,464 | 0.73x | 0.74x |
+| 200 | 0.048 | 8.075 | 12,864 | 0.43x | 0.37x |
 
-The crossovers are the point, they are set by the pairing curve alone, and the two curves fail
-differently.
+The crossovers are set by the pairing curve alone, and batch Schnorr has moved the byte ones a long
+way, because it took 64 of the 144 bytes out of every token and put one 64-byte signature on the
+payment instead.
 
-On BLS12-381 bytes cross at $4787/144 = 33.2$ and chain time at $\ell \approx 37$ on both `DS`
-groups, going 1.20x at 30 to 0.94x at 40. Both land in the thirties, with payload binding first, and
-the byte crossover is fixed by serialization rather than tunable.
+The faster current-mechanism verify (3.5 ms, down from 5.7 in an earlier arkworks build) pulls the
+chain crossovers in sharply. On BLS12-381 chain time crosses at $\ell \approx 18$, going 1.25x at 10
+to 0.95x at 20, while bytes cross at $(4787-64)/80 = 59$; chain binds first. On BN254 chain crosses at
+$\ell \approx 52$, going 1.02x at 50 to 0.69x at 100, and bytes at $(4787-64)/64 = 74$; chain binds
+first there too.
 
-On BN254 they separate by most of an order of magnitude. Bytes cross at $4787/128 = 37.4$, confirmed
-by the 1.25x at 30 and 0.93x at 40, while chain time does not cross until $\ell \approx 250$, still
-at 1.16x at $\ell = 200$. So on BN254 the binding constraint is payload, not verification, and
-choosing BN254 for its cheaper pairings buys nothing past $\ell \approx 37$ because bytes bind first.
-Any argument that BN254's 100-bit security is worth taking for the speed has to contend with that:
-the speed is not what runs out.
+So BAT at one denomination beats the current mechanism for small fees, 3.4x to 5.8x on chain time and
+33x to 37x on bytes at $\ell = 1$, and now holds only to about 18 base units on BLS12-381 and about 52
+on BN254. The order-of-magnitude claim is real but it is a claim about a one-unit payment, and once
+the fee proofs verify in 3.5 ms the window where BAT is cheaper on chain has narrowed to small fees.
 
-So BAT at one denomination beats the current mechanism for small fees by a wide margin, 6.2x to
-12.1x on chain time and 33x to 37x on bytes at $\ell = 1$, and loses above roughly thirty-five base
-units on all four combinations once payload is counted. The order-of-magnitude claim is real but it
-is a claim about a one-unit payment, and a fee mechanism that only wins below thirty-five units is
-not a fee mechanism.
+Client cost is no longer a function of $\ell$ at all. Producing a payment is one batch signature,
+0.057 ms on Ed25519 and 0.030 on Pallas whether it spends one token or two hundred, against 50.6 ms
+for one curve-tree proof plus a Bulletproofs range proof. Charging the amortized issuance in as well
+at a hundred tokens per purchase:
 
-Client cost is the exception that holds everywhere, and it is the one place the `DS` group decides
-the answer, because producing a payment is $\ell$ signatures and nothing else. Against 52.9 ms for
-one curve-tree proof plus a Bulletproofs range proof, charging the amortized issuance in as well at
-a hundred tokens per purchase:
-
-| | per token, issuance | per token, signing | total per payment | crosses 52.9 ms at |
+| | per token, issuance | per payment, signing | total per payment | crosses 50.6 ms at |
 |---|---|---|---|---|
-| BLS12-381 / Ed25519 | 0.343 ms | 0.056 ms | $0.399\ell$ | $\ell = 133$ |
-| BLS12-381 / Pallas | 0.352 | 0.029 | $0.381\ell$ | $\ell = 139$ |
-| BN254 / Ed25519 | 0.164 | 0.057 | $0.221\ell$ | $\ell = 239$ |
-| BN254 / Pallas | 0.164 | 0.029 | $0.193\ell$ | $\ell = 274$ |
+| BLS12-381 / Ed25519 | 0.299 ms | 0.057 ms | $0.299\ell + 0.06$ | $\ell = 169$ |
+| BLS12-381 / Pallas | 0.292 | 0.030 | $0.292\ell + 0.03$ | $\ell = 173$ |
+| BN254 / Ed25519 | 0.173 | 0.056 | $0.173\ell + 0.06$ | $\ell = 293$ |
+| BN254 / Pallas | 0.172 | 0.030 | $0.172\ell + 0.03$ | $\ell = 294$ |
 
 The device and the wallet are comfortably better off under BAT across the whole realistic range even
-where the chain is not.
+where the chain is not, and the margin is now set entirely by issuance rather than by spending.
 
 **This is what makes denominations a precondition rather than an optimization.** Every number above
 is for one denomination, one unit per token. The next subsection prices the only denomination scheme
@@ -565,75 +602,75 @@ that fits BAT's token shape.
 A set of $D$ powers of two covers every fee up to $2^D - 1$. The worst case is all $D$ bits set, so
 $D$ tokens; the average over uniformly drawn fees is $D/2$. The scheme is the paper's §8 pools, one
 issuer key per denomination, which makes a payment spending $d$ denominations a spend over $d$ issuer
-keys. `DS` is excluded, since it is one signature per token under any scheme. Ratios above 1 favour
-BAT.
+keys. `DS` is included, one batch signature per payment under any scheme. Ratios above 1
+favour BAT.
 
 BLS12-381 with Ed25519:
 
-| $D$ | largest fee | worst case, $D$ tokens | average case, $D/2$ | worst vs `6.md` | average vs `6.md` | bytes, worst |
+| $D$ | largest fee | worst case, $D$ tokens | average case, $D/2$ | worst vs current | average vs current | bytes, worst |
 |---|---|---|---|---|---|---|
-| 8 | 255 | 3.483 ms | 2.117 ms | 1.64x | 2.70x | 1,152 B |
-| 16 | 65,535 | 6.194 | 3.531 | 0.92x | 1.62x | 2,304 |
-| 24 | 16.8M | 8.897 | 4.877 | 0.64x | 1.17x | 3,456 |
-| 32 | 4.29G | 11.3 | 6.221 | 0.51x | 0.92x | 4,608 |
-| 48 | 2.81e14 | 16.7 | 8.745 | 0.34x | 0.65x | 6,912 |
-| 64 | 1.84e19 | 22.0 | 11.4 | 0.26x | 0.50x | 9,216 |
+| 8 | 255 | 3.152 ms | 1.936 ms | 1.20x | 1.95x | 704 B |
+| 16 | 65,535 | 4.410 | 3.018 | 0.86x | 1.25x | 1,344 |
+| 24 | 16.8M | 5.721 | 3.995 | 0.66x | 0.95x | 1,984 |
+| 32 | 4.29G | 6.832 | 4.381 | 0.55x | 0.86x | 2,624 |
+| 48 | 2.81e14 | 9.387 | 5.660 | 0.40x | 0.67x | 3,904 |
+| 64 | 1.84e19 | 11.9 | 6.995 | 0.32x | 0.54x | 5,184 |
 
 BLS12-381 with Pallas:
 
-| $D$ | worst case, $D$ tokens | average case, $D/2$ | worst vs `6.md` | average vs `6.md` |
+| $D$ | worst case, $D$ tokens | average case, $D/2$ | worst vs current | average vs current |
 |---|---|---|---|---|
-| 8 | 3.531 ms | 2.138 ms | 1.62x | 2.67x |
-| 16 | 6.156 | 3.562 | 0.93x | 1.60x |
-| 24 | 8.917 | 4.842 | 0.64x | 1.18x |
-| 32 | 11.4 | 6.181 | 0.50x | 0.92x |
-| 48 | 16.6 | 8.789 | 0.34x | 0.65x |
-| 64 | 21.6 | 11.4 | 0.26x | 0.50x |
+| 8 | 2.656 ms | 1.784 ms | 1.42x | 2.12x |
+| 16 | 3.904 | 2.495 | 0.97x | 1.52x |
+| 24 | 5.102 | 3.275 | 0.74x | 1.16x |
+| 32 | 6.484 | 3.837 | 0.58x | 0.99x |
+| 48 | 9.221 | 5.231 | 0.41x | 0.72x |
+| 64 | 11.8 | 6.437 | 0.32x | 0.59x |
 
 BN254 with Ed25519:
 
-| $D$ | worst case, $D$ tokens | average case, $D/2$ | worst vs `6.md` | average vs `6.md` | bytes, worst |
+| $D$ | worst case, $D$ tokens | average case, $D/2$ | worst vs current | average vs current | bytes, worst |
 |---|---|---|---|---|---|
-| 8 | 1.978 ms | 1.286 ms | 2.89x | 4.44x | 1,024 B |
-| 16 | 3.355 | 2.046 | 1.70x | 2.79x | 2,048 |
-| 24 | 5.067 | 2.767 | 1.13x | 2.06x | 3,072 |
-| 32 | 6.214 | 3.391 | 0.92x | 1.68x | 4,096 |
-| 48 | 8.870 | 4.821 | 0.64x | 1.19x | 6,144 |
-| 64 | 11.7 | 6.214 | 0.49x | 0.92x | 8,192 |
+| 8 | 2.400 ms | 1.428 ms | 1.58x | 2.65x | 576 B |
+| 16 | 3.209 | 2.377 | 1.18x | 1.59x | 1,088 |
+| 24 | 4.011 | 2.979 | 0.94x | 1.27x | 1,600 |
+| 32 | 4.829 | 3.200 | 0.78x | 1.18x | 2,112 |
+| 48 | 6.496 | 4.092 | 0.58x | 0.92x | 3,136 |
+| 64 | 7.854 | 4.840 | 0.48x | 0.78x | 4,160 |
 
 BN254 with Pallas:
 
-| $D$ | worst case, $D$ tokens | average case, $D/2$ | worst vs `6.md` | average vs `6.md` |
+| $D$ | worst case, $D$ tokens | average case, $D/2$ | worst vs current | average vs current |
 |---|---|---|---|---|
-| 8 | 1.984 ms | 1.234 ms | 2.88x | 4.63x |
-| 16 | 3.355 | 1.927 | 1.70x | 2.97x |
-| 24 | 4.772 | 2.589 | 1.20x | 2.21x |
-| 32 | 6.104 | 3.308 | 0.94x | 1.73x |
-| 48 | 8.851 | 4.733 | 0.65x | 1.21x |
-| 64 | 11.6 | 6.158 | 0.49x | 0.93x |
+| 8 | 1.812 ms | 1.248 ms | 2.09x | 3.03x |
+| 16 | 2.686 | 1.826 | 1.41x | 2.07x |
+| 24 | 3.632 | 2.317 | 1.04x | 1.63x |
+| 32 | 4.369 | 2.727 | 0.87x | 1.39x |
+| 48 | 6.433 | 3.601 | 0.59x | 1.05x |
+| 64 | 7.912 | 4.503 | 0.48x | 0.84x |
 
-The `DS` group does not move these, as it should not, and the byte columns depend only on the
-pairing curve: a pool token is the paper's token unchanged, since the issuer index the payload
-already carries names the denomination.
+The choice of `DS` group barely moves these, since its batch signature is one per payment either way,
+and the byte columns depend only on the pairing curve: a pool token is the paper's token minus its
+signature, since the issuer index the payload already carries names the denomination.
 
-**Pools do not clear `6.md` at a realistic denomination set.** In the worst case they fall below it
-at $D = 16$ on BLS12-381 and $D = 32$ on BN254; in the average case at $D = 32$ and $D = 64$. Polymesh
-needs $D$ in the 20 to 30 range, with six decimals putting one POLYX at $10^6$ base units and a
-thousand at $10^9$. Over that range pools run at 0.64x to 0.51x worst case and 1.17x to 0.92x average
-case on BLS12-381, and 1.20x to 0.92x worst and 2.21x to 1.68x average on BN254.
+**Pools still do not clear the current mechanism at a realistic denomination set, and the faster fee
+proofs have pulled the crossings in.** In the worst case they fall below it at $D = 16$ on BLS12-381
+and $D = 24$ on BN254; in the average case at $D = 24$ on BLS12-381 and $D = 48$ on BN254.
+Polymesh needs $D$ in the 20 to 30 range, with six decimals putting one POLYX at $10^6$ base units
+and a thousand at $10^9$. Over that range pools run at 0.66x to 0.55x worst case and 0.95x to 0.86x
+average case on BLS12-381, and 0.94x to 0.78x worst and 1.27x to 1.18x average on BN254.
 
-So on BLS12-381 the mechanism is slower than the one it would replace for any fee that sets more than
-about half the bits, and slower on the average fee from $D = 32$. On BN254 it holds a small margin
-through the range that matters and loses it by $D = 32$ worst case. Bytes stay favourable throughout,
-4,608 B against 4,787 at $D = 32$ on BLS12-381 and half that on BN254, so payload is not what binds
-here; verification is.
+So on BLS12-381 the mechanism is slower than the one it would replace in the worst case from $D = 16$
+up, and on BN254 the worst case dips below at $D = 24$. Bytes are comfortably favourable throughout,
+2,624 B against 4,787 at $D = 32$ on BLS12-381 and 2,112 on BN254, so payload is not what binds;
+verification is.
 
 Two things drive the cost, and both are structural rather than implementation slack. Each denomination
 is a distinct $G_2$ element, so a $d$-denomination payment is a $1 + d$ pair multi-pairing instead of
 two pairs. And the $G_1$ side fragments with it: the checker groups by $G_2$ element, so $d$ keys give
 $d$ MSMs of size 1 where one key gives a single MSM of size $d$, which is where the batching that
 makes the single-denomination numbers good is lost. Comparing the $J = 1$ and $J = n$ rows of the
-spend tables isolates it: at $n = 16$ on BLS12-381, 3.00 ms against 6.19.
+spend tables isolates it: at $n = 16$ on BLS12-381, 3.18 ms against 4.30.
 
 One caveat the tables do not carry. $D$ is the size of the denomination set, and every denomination is
 a separate anonymity pool, because value is public at spend. A larger $D$ buys reach and costs
@@ -648,25 +685,25 @@ at $J = 1$, so two pairs for any $\ell_{ref}$. Chain time, milliseconds:
 
 | $\ell_{ref}$ | BLS / Ed25519 | BLS / Pallas | BN254 / Ed25519 | BN254 / Pallas | payload, BLS |
 |---|---|---|---|---|---|
-| 1 | 1.022 | 0.985 | 0.577 | 0.550 | 176 B |
-| 10 | 2.367 | 2.309 | 1.071 | 0.987 | 896 B |
-| 30 | 4.907 | 4.790 | 1.571 | 1.469 | 2,496 B |
-| 40 | 6.191 | 5.936 | 1.848 | 1.698 | 3,296 B |
-| 50 | 7.316 | 7.074 | 2.020 | 1.973 | 4,096 B |
-| 100 | 12.7 | 12.6 | 2.966 | 2.900 | 8,096 B |
-| 200 | 24.0 | 23.9 | 4.886 | 4.697 | 16,096 B |
+| 1 | 1.058 | 0.885 | 0.765 | 0.477 | 176 B |
+| 10 | 2.983 | 2.187 | 1.601 | 1.497 | 896 B |
+| 30 | 4.774 | 3.627 | 2.203 | 2.091 | 2,496 B |
+| 40 | 4.375 | 4.033 | 2.353 | 2.233 | 3,296 B |
+| 50 | 4.957 | 4.787 | 2.781 | 2.620 | 4,096 B |
+| 100 | 8.162 | 8.116 | 4.017 | 3.865 | 8,096 B |
+| 200 | 14.5 | 14.4 | 6.696 | 6.756 | 16,096 B |
 
-The `DS` group is worth almost nothing here, which is the construction working as intended: one
-signature authorizes the whole batch, so $\gamma_{ref}$ is a single verification against
-$\ell_{ref}$ pairings. The client side is where it shows, 0.087 ms against 0.090 to sign a
-200-token refund request, and neither is a cost worth optimizing. Under pools a refund batch spans
-$d$ issuer keys, so the $J = 1$ shape above is the single-denomination case and a real refund pays
-the same $1 + d$ pairs a spend does.
+Refund keeps the single-signature form, since it already authorizes its batch with one signature
+under $sk_{ref}$ and has nothing to gain from the batch protocol. The `DS` group is worth almost
+nothing here; the client side is where it shows, 0.110 ms against 0.068 to sign a 200-token refund
+request, and neither is a cost worth optimizing. Under pools a refund batch spans $d$ issuer keys, so
+the $J = 1$ shape above is the single-denomination case and a real refund pays the same $1 + d$ pairs
+a spend does.
 
 This puts a number on the collective-refund congestion gap. At $\ell_{ref} = 100$ a node spends
-12.7 ms on BLS12-381 or 2.97 on BN254 per refunding client. Give refunds 500 ms of a block's
-execution budget and that is 39 clients per block on BLS12-381, 168 on BN254. Over a $T_{grace}$ of
-half an hour at six-second blocks, roughly $1.2 \times 10^4$ and $5.1 \times 10^4$ clients. That is
+8.16 ms on BLS12-381 or 3.87 on BN254 per refunding client. Give refunds 500 ms of a block's
+execution budget and that is 61 clients per block on BLS12-381, 129 on BN254. Over a $T_{grace}$ of
+half an hour at six-second blocks, roughly $1.8 \times 10^4$ and $3.9 \times 10^4$ clients. That is
 the per-issuer client cap the paper never derives, and it is one to two orders of magnitude better
 than the paper's Ethereum figures, where gas is dominated by storage rather than arithmetic.
 
