@@ -337,7 +337,16 @@ impl<P: SWCurveConfig> TryFrom<&CompressedAffine> for Affine<P> {
 
     /// Converts an `Affine<P>` to a `CompressedAffine<P>`.
     fn try_from(affine: &CompressedAffine) -> Result<Self, Self::Error> {
-        Ok(Self::deserialize_compressed(&affine.0[..])?)
+        let point = Self::deserialize_compressed(&affine.0[..])?;
+        // The identity has more than one encoding, accept only the canonical one
+        if point.is_zero() {
+            let mut canonical = [0u8; ARK_EC_POINT_SIZE];
+            point.serialize_compressed(&mut canonical[..])?;
+            if canonical != affine.0 {
+                return Err(ark_serialize::SerializationError::InvalidData.into());
+            }
+        }
+        Ok(point)
     }
 }
 

@@ -560,6 +560,30 @@ mod tests {
     }
 
     #[test]
+    fn test_compressed_affine_rejects_non_canonical_identity() {
+        let canonical = CompressedAffine::zero::<ark_pallas::PallasConfig>();
+        assert!(PallasA::try_from(&canonical).unwrap().is_zero());
+
+        // Identity with the sign bit set decodes to the identity but is rejected.
+        let mut signed = *canonical.as_bytes();
+        signed[31] |= 0x80;
+        assert!(
+            PallasA::deserialize_compressed(&signed[..])
+                .unwrap()
+                .is_zero()
+        );
+        let signed = CompressedAffine::from_str(&hex::encode(signed)).unwrap();
+        assert!(PallasA::try_from(&signed).is_err());
+
+        // Non-identity points decode as before.
+        let point = dart_gens().sig_key_gen();
+        assert_eq!(
+            PallasA::try_from(&CompressedAffine::from(&point)).unwrap(),
+            point
+        );
+    }
+
+    #[test]
     fn key_distribution() {
         let mut rng = rand::thread_rng();
         let distributor = EncryptionKeyPair::rand(&mut rng).unwrap();
