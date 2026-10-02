@@ -23,7 +23,7 @@ use rand_core::CryptoRngCore;
 #[derive(Clone, Debug)]
 pub struct RegTxnProofChunk<
     G: AffineRepr,
-    const CHUNK_BITS: usize = 48,
+    const CHUNK_BITS: usize = 43,
     const NUM_CHUNKS: usize = 6,
 > {
     /// Per-registration sigma material; each has `partial.proof = None` (the BP proof is shared).
@@ -138,7 +138,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
 #[derive(Clone, Debug)]
 pub struct RegTxnProofBatch<
     G: AffineRepr,
-    const CHUNK_BITS: usize = 48,
+    const CHUNK_BITS: usize = 43,
     const NUM_CHUNKS: usize = 6,
 > {
     pub chunks: Vec<RegTxnProofChunk<G, CHUNK_BITS, NUM_CHUNKS>>,
@@ -374,7 +374,7 @@ mod tests {
         // Monolith = one BPProof over all N (chunk_size = N); chunked = smaller chunks,
         // batch-verified.
         const NUM_GENS: usize = 1 << 16;
-        const CHUNK_BITS: usize = 48;
+        const CHUNK_BITS: usize = 43;
         const NUM_CHUNKS: usize = 6;
 
         let num_regs: usize = 20;

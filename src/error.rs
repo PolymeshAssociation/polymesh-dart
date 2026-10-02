@@ -133,6 +133,10 @@ pub enum Error {
     #[error("Too many keys in a leg")]
     TooManyKeys,
 
+    /// Number of force-transfer keys doesn't match the number of proofs in the batch.
+    #[error("Number of force-transfer keys doesn't match the number of proofs in the batch")]
+    MismatchedAccountAssetRegProofAndKeyCount,
+
     /// RMC failed to verify.
     #[error("RMC failed to verify")]
     RMCVerifyError,

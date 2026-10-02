@@ -27,6 +27,48 @@ use std::time::Instant;
 type PallasParameters = PallasConfig;
 type VestaParameters = VestaConfig;
 
+#[test]
+fn asset_freeze_generator() {
+    let bp_gens = BulletproofGens::<ark_vesta::Affine>::new(128, 1);
+    for (num_enc_keys, num_med_keys) in [(0, 0), (1, 0), (2, 2), (4, 2)] {
+        let params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
+            b"asset-freeze-test",
+            num_enc_keys,
+            num_med_keys,
+            &bp_gens,
+        );
+        let old_len = 2 * (1 + num_enc_keys + num_med_keys) + 1;
+        let old_gens = bp_gens_for_vec_commitment(old_len, &bp_gens).collect::<Vec<_>>();
+        assert_eq!(params.comm_key, old_gens);
+        assert_eq!(params.count_gen(), old_gens[old_len as usize - 1]);
+        assert_eq!(params.comm_key.len(), old_len as usize);
+        assert!(!params.freeze_gen().is_zero());
+        assert_ne!(params.freeze_gen(), params.j_0);
+        assert_eq!(
+            params.freeze_gen(),
+            hash_to_pallas(b"asset-freeze-test", b" : freeze_gen").into_affine()
+        );
+        let asset_data = AssetData::new(0, vec![], vec![], &params).unwrap();
+        assert!(!asset_data.frozen);
+        let (asset_x, asset_y) = params.j_0.xy().unwrap();
+        assert_eq!(
+            asset_data.commitment,
+            (params.comm_key[0] * asset_x + params.comm_key[1] * asset_y).into_affine()
+        );
+        let frozen_point = (params.j_0 + params.freeze_gen()).into_affine();
+        let (frozen_x, frozen_y) = frozen_point.xy().unwrap();
+        let frozen_data = AssetData::new_with_freeze(0, vec![], vec![], true, &params).unwrap();
+        assert!(frozen_data.frozen);
+        assert_eq!(frozen_data.points(&params)[0], frozen_point);
+        let frozen_commitment = frozen_data.commitment;
+        assert_ne!(frozen_commitment, asset_data.commitment);
+        assert_eq!(
+            frozen_commitment,
+            (params.comm_key[0] * frozen_x + params.comm_key[1] * frozen_y).into_affine()
+        );
+    }
+}
+
 /// Generate account signing and encryption keys for all sender, receiver, and auditor.
 /// This is just for testing and in practice, each party generates its own keys.
 pub fn setup_keys<R: CryptoRngCore, G: AffineRepr>(
@@ -3296,6 +3338,114 @@ mod input_sanitation_disabled {
     use ark_pallas::Affine as PallasA;
     use ark_std::UniformRand;
     use curve_tree_relations::curve_tree::Root;
+
+    #[test]
+    fn asset_freeze_hidden_leg_rejected() {
+        let mut rng = rand::thread_rng();
+        const NUM_GENS: u32 = 1 << 13;
+        const L: usize = 64;
+        let tree_params = SelRerandProofParametersNew::<
+            VestaParameters,
+            PallasParameters,
+            VestaParams,
+            PallasParams,
+        >::new_using_label(b"asset-freeze-tree", NUM_GENS, NUM_GENS)
+        .unwrap();
+        let params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
+            b"asset-freeze-test",
+            1,
+            0,
+            &tree_params.even_parameters.bp_gens(),
+        );
+        let enc_key_gen = hash_to_pallas(b"asset-freeze-test", b"enc-key-g").into_affine();
+        let enc_gen = hash_to_pallas(b"asset-freeze-test", b"enc-key-h").into_affine();
+        let (_, sender) = keygen_enc(&mut rng, enc_key_gen);
+        let (_, receiver) = keygen_enc(&mut rng, enc_key_gen);
+        let (_, auditor) = keygen_enc(&mut rng, enc_key_gen);
+        let asset_data = AssetData::new(0, vec![auditor.0], vec![], &params).unwrap();
+        let leg = Leg::new(
+            sender.0,
+            receiver.0,
+            100,
+            0,
+            vec![auditor.0],
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        let (leg_enc, leg_rand) = leg
+            .encrypt(
+                &mut rng,
+                LegEncConfig {
+                    visibility: PartyVisibility::FullVisibility,
+                    reveal_asset_id: false,
+                },
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+        for frozen in [false, true] {
+            let frozen_data = AssetData::new_with_freeze(
+                asset_data.id,
+                asset_data.enc_keys.clone(),
+                asset_data.med_keys.clone(),
+                frozen,
+                &params,
+            )
+            .unwrap();
+            let tree = CurveTree::<L, 1, VestaParameters, PallasParameters>::from_leaves(
+                &[frozen_data.commitment],
+                &tree_params,
+                Some(2),
+            );
+            let root = tree.root_node();
+            let proof = LegCreationProof::new::<_, PallasParams, VestaParams>(
+                &mut rng,
+                leg.clone(),
+                leg_enc.clone(),
+                leg_rand.clone(),
+                tree.get_path_to_leaf_for_proof(0, 0).unwrap(),
+                frozen_data.clone(),
+                &root,
+                b"asset-freeze-nonce",
+                &tree_params,
+                &params,
+                enc_key_gen,
+                enc_gen,
+            );
+            if frozen {
+                if let Ok(proof) = proof {
+                    assert_leg_verify_fails_with_rmc(
+                        &proof,
+                        &mut rng,
+                        leg_enc.clone(),
+                        &root,
+                        b"asset-freeze-nonce",
+                        &tree_params,
+                        &params,
+                        enc_key_gen,
+                        enc_gen,
+                    );
+                }
+            } else {
+                proof
+                    .unwrap()
+                    .verify::<_, PallasParams, VestaParams>(
+                        &mut rng,
+                        leg_enc.clone(),
+                        &root,
+                        vec![],
+                        b"asset-freeze-nonce",
+                        &tree_params,
+                        &params,
+                        enc_key_gen,
+                        enc_gen,
+                        None,
+                    )
+                    .unwrap();
+            }
+        }
+    }
 
     fn assert_leg_verify_fails_with_rmc(
         proof: &LegCreationProof<64, PallasScalar, VestaScalar, PallasParameters, VestaParameters>,
