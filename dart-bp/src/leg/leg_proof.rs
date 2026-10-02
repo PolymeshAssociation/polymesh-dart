@@ -271,6 +271,9 @@ impl<
     ) -> Result<Self> {
         #[cfg(not(feature = "ignore_prover_input_sanitation"))]
         {
+            if asset_data.frozen {
+                return Err(Error::ProofGenerationError("asset is frozen".to_string()));
+            }
             if leg_enc.is_asset_id_revealed() {
                 return Err(Error::ProofGenerationError(
                     "asset-id is revealed in leg encryption".to_string(),

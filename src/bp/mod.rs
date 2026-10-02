@@ -500,6 +500,33 @@ mod tests {
     use rand_core::SeedableRng;
 
     #[test]
+    fn asset_frozen_state_commitment() {
+        let mut state = AssetState::new::<()>(0, &[], &[]).unwrap();
+        assert!(!state.frozen);
+        let unfrozen_leaf = state.commitment().unwrap();
+        assert_eq!(unfrozen_leaf, state.keys.commitment(state.asset_id).unwrap());
+        state.frozen = true;
+        let asset_data = state.asset_data().unwrap();
+        assert!(asset_data.frozen);
+        let frozen_leaf = state.commitment().unwrap();
+        assert_ne!(frozen_leaf, unfrozen_leaf);
+        assert_eq!(
+            frozen_leaf,
+            CompressedLeafValue::<AssetTreeConfig>::from_affine(asset_data.commitment).unwrap()
+        );
+        let decoded = AssetState::decode(&mut &state.encode()[..]).unwrap();
+        assert!(decoded.frozen);
+        assert_eq!(decoded.commitment().unwrap(), frozen_leaf);
+        let mut encoded_data = Vec::new();
+        asset_data.serialize_compressed(&mut encoded_data).unwrap();
+        let decoded_data = AssetCommitmentData::deserialize_compressed(&encoded_data[..]).unwrap();
+        assert!(decoded_data.frozen);
+        assert_eq!(decoded_data.commitment, asset_data.commitment);
+        state.frozen = false;
+        assert_eq!(state.commitment().unwrap(), unfrozen_leaf);
+    }
+
+    #[test]
     fn test_dart_bp_generators_encode_decode() {
         let gens = dart_gens().clone();
 

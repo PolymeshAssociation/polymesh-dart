@@ -47,6 +47,8 @@ pub struct AssetCommitmentParams<
     G1: SWCurveConfig<ScalarField = G0::BaseField, BaseField = G0::ScalarField> + Clone + Copy,
 > {
     pub j_0: Affine<G0>,
+    /// Added to the asset-id point when frozen; unfrozen points and leaf layout are unchanged.
+    pub freeze_gen: Affine<G0>,
     /// Generators for the leaf commitment. The first `2 * (1 + num_enc_keys + num_med_keys)`
     /// generators commit both coordinates of the asset-id point, the auditor encryption keys and the
     /// mediator affirmation keys (the "point block"), 2 generators per point. One trailing generator
@@ -67,6 +69,10 @@ impl<
     pub fn count_gen(&self) -> Affine<G1> {
         self.comm_key[2 * (1 + self.num_enc_keys as usize + self.num_med_keys as usize)]
     }
+
+    pub fn freeze_gen(&self) -> Affine<G0> {
+        self.freeze_gen
+    }
 }
 
 impl<
@@ -86,6 +92,7 @@ impl<
         leaf_layer_bp_gens: &BulletproofGens<Affine<G1>>,
     ) -> Self {
         let j_0 = hash_to_pallas(label, b" : j_0").into_affine();
+        let freeze_gen = hash_to_pallas(label, b" : freeze_gen").into_affine();
         // For committing (x,y) coords of asset-id point and enc and mediator keys and one for count
         let comm_key = bp_gens_for_vec_commitment(
             2 * (1 + num_enc_keys + num_med_keys) + 1,
@@ -94,6 +101,7 @@ impl<
         .collect();
         Self {
             j_0,
+            freeze_gen,
             comm_key,
             num_enc_keys,
             num_med_keys,
@@ -112,6 +120,7 @@ pub struct AssetData<
     G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
 > {
     pub id: AssetId,
+    pub frozen: bool,
     /// Encryption keys shared between auditors and mediators
     pub enc_keys: Vec<Affine<G0>>,
     /// Affirmation keys of mediators. These are not shared and each mediator has access to one of the encryption keys.
@@ -138,6 +147,16 @@ impl<
         med_keys: Vec<Affine<G0>>,
         params: &AssetCommitmentParams<G0, G1>,
     ) -> Result<Self> {
+        Self::new_with_freeze(id, enc_keys, med_keys, false, params)
+    }
+
+    pub fn new_with_freeze(
+        id: AssetId,
+        enc_keys: Vec<Affine<G0>>,
+        med_keys: Vec<Affine<G0>>,
+        frozen: bool,
+        params: &AssetCommitmentParams<G0, G1>,
+    ) -> Result<Self> {
         let n = enc_keys.len();
         let m = med_keys.len();
         if n > params.num_enc_keys as usize || m > params.num_med_keys as usize {
@@ -151,7 +170,7 @@ impl<
         // Point block: both coordinates of [asset_id, auditor pks, mediator pks] under
         // comm_key[0 .. 2*(1+n+m)], 2 generators per point. Committing both coordinates pins each
         // point (committing only the x-coordinate would leave the y-sign free).
-        let points = Self::_points(id, &enc_keys, &med_keys, params);
+        let points = Self::_points(id, &enc_keys, &med_keys, frozen, params);
         let num_points = points.len();
         let mut gens = params.comm_key[..2 * num_points].to_vec();
         let mut scalars = Vec::with_capacity(2 * num_points + 1);
@@ -166,6 +185,7 @@ impl<
         let commitment = G1::msm(&gens, scalars.as_slice()).unwrap();
         Ok(Self {
             id,
+            frozen,
             enc_keys,
             med_keys,
             commitment: commitment.into_affine(),
@@ -173,10 +193,10 @@ impl<
     }
 
     pub fn points(&self, params: &AssetCommitmentParams<G0, G1>) -> Vec<Affine<G0>> {
-        Self::_points(self.id, &self.enc_keys, &self.med_keys, params)
+        Self::_points(self.id, &self.enc_keys, &self.med_keys, self.frozen, params)
     }
 
-    /// Points `[(asset_id + 1) * j_0, en_1, ..., en_n, med_1, ..., med_m]`, mediator keys as bare
+    /// Points `[(asset_id + 1) * j_0 + frozen * freeze_gen, en_1, ..., en_n, med_1, ..., med_m]`, mediator keys as bare
     /// points. The asset-id scalar is offset by 1 so the asset-id point is never the identity (which
     /// the leaf commitment rejects) even for `asset_id == 0`. The point relation in the leg proof
     /// subtracts `j_0` so the asset-id it binds to the ciphertext stays the un-offset `asset_id`.
@@ -184,9 +204,14 @@ impl<
         asset_id: AssetId,
         enc_keys: &[Affine<G0>],
         med_keys: &[Affine<G0>],
+        frozen: bool,
         params: &AssetCommitmentParams<G0, G1>,
     ) -> Vec<Affine<G0>> {
-        iter::once((params.j_0 * (G0::ScalarField::from(asset_id + 1))).into_affine())
+        let mut asset_id_point = params.j_0 * G0::ScalarField::from(asset_id + 1);
+        if frozen {
+            asset_id_point += params.freeze_gen();
+        }
+        iter::once(asset_id_point.into_affine())
             .chain(enc_keys.iter().copied())
             .chain(med_keys.iter().copied())
             .collect()

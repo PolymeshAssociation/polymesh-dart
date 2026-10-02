@@ -164,9 +164,23 @@ impl AssetKeys {
 
     /// Generates the asset commitment data for this asset state, which includes the asset ID, encryption keys, mediator keys, and the parameters for the asset commitment scheme.
     pub fn asset_data(&self, asset_id: AssetId) -> Result<AssetCommitmentData, Error> {
+        self.asset_data_with_freeze(asset_id, false)
+    }
+
+    pub fn asset_data_with_freeze(
+        &self,
+        asset_id: AssetId,
+        frozen: bool,
+    ) -> Result<AssetCommitmentData, Error> {
         let asset_comm_params = get_asset_commitment_parameters();
         let (enc_keys, med_keys) = self.get_keys()?;
-        let asset_data = AssetCommitmentData::new(asset_id, enc_keys, med_keys, asset_comm_params)?;
+        let asset_data = AssetCommitmentData::new_with_freeze(
+            asset_id,
+            enc_keys,
+            med_keys,
+            frozen,
+            asset_comm_params,
+        )?;
         Ok(asset_data)
     }
 
@@ -175,7 +189,15 @@ impl AssetKeys {
         &self,
         asset_id: AssetId,
     ) -> Result<CompressedLeafValue<AssetTreeConfig>, Error> {
-        let asset_data = self.asset_data(asset_id)?;
+        self.commitment_with_freeze(asset_id, false)
+    }
+
+    pub fn commitment_with_freeze(
+        &self,
+        asset_id: AssetId,
+        frozen: bool,
+    ) -> Result<CompressedLeafValue<AssetTreeConfig>, Error> {
+        let asset_data = self.asset_data_with_freeze(asset_id, frozen)?;
         CompressedLeafValue::from_affine(asset_data.commitment)
     }
 }
@@ -188,6 +210,7 @@ impl AssetKeys {
 pub struct AssetState {
     /// The unique identifier for the asset.
     pub asset_id: AssetId,
+    pub frozen: bool,
     /// The encryption keys for auditors and mediators, along with the mapping of mediators to their encryption key indices.
     pub keys: AssetKeys,
 }
@@ -231,6 +254,7 @@ impl AssetState {
     ) -> Result<Self, Error> {
         Ok(Self {
             asset_id,
+            frozen: false,
             keys: AssetKeys::new_bounded::<T>(mediators, auditors)?,
         })
     }
@@ -242,12 +266,12 @@ impl AssetState {
 
     /// Generates the asset commitment data for this asset state, which includes the asset ID, encryption keys, mediator keys, and the parameters for the asset commitment scheme.
     pub fn asset_data(&self) -> Result<AssetCommitmentData, Error> {
-        self.keys.asset_data(self.asset_id)
+        self.keys.asset_data_with_freeze(self.asset_id, self.frozen)
     }
 
     /// Computes the commitment for this asset state, which is used in the Dart BP protocol to represent the asset state in a compact form.
     pub fn commitment(&self) -> Result<CompressedLeafValue<AssetTreeConfig>, Error> {
-        self.keys.commitment(self.asset_id)
+        self.keys.commitment_with_freeze(self.asset_id, self.frozen)
     }
 }
 
