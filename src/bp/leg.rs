@@ -147,8 +147,21 @@ impl LegRef {
     }
 }
 
-fn leg_proof_initial_ctx(memo: &[u8], idx: LegId) -> Vec<u8> {
-    (memo, idx).encode()
+/// Context of the proof of leg `idx`. Binds the memo, the root block and every leg encryption of the
+/// settlement.
+fn leg_proof_initial_ctx(
+    memo: &[u8],
+    root_block: BlockNumber,
+    legs_digest: &[u8; 32],
+    idx: LegId,
+) -> Vec<u8> {
+    (memo, root_block, legs_digest, idx).encode()
+}
+
+/// Digest of all the leg encryptions of a settlement.
+fn leg_encryptions_digest<'a>(leg_encs: impl IntoIterator<Item = &'a LegEncrypted>) -> [u8; 32] {
+    let leg_encs: Vec<&LegEncrypted> = leg_encs.into_iter().collect();
+    blake2_256(&leg_encs)
 }
 
 #[derive(
@@ -464,22 +477,11 @@ impl LegBuilder {
         }
     }
 
-    pub fn encrypt_and_prove<
-        R: RngCore + CryptoRng,
-        T: DartLimits,
-        C: CurveTreeConfig<
-                F0 = <VestaParameters as CurveConfig>::ScalarField,
-                F1 = <PallasParameters as CurveConfig>::ScalarField,
-                P0 = VestaParameters,
-                P1 = PallasParameters,
-            >,
-    >(
+    /// Encrypts the leg.
+    pub fn encrypt<R: RngCore + CryptoRng, T: DartLimits>(
         &self,
         rng: &mut R,
-        ctx: &[u8],
-        asset_tree: &impl CurveTreeLookup<ASSET_TREE_L, ASSET_TREE_M, C>,
-    ) -> Result<AnySettlementLegProof<T, C>, Error> {
-        let asset_id = self.asset.asset_id;
+    ) -> Result<EncryptedLeg<'_>, Error> {
         let leg = Leg::new(
             self.sender.enc,
             self.receiver.enc,
@@ -499,27 +501,69 @@ impl LegBuilder {
             med_keys,
             public_enc_keys,
         )?;
+        Ok(EncryptedLeg {
+            builder: self,
+            leg,
+            leg_enc,
+            leg_enc_rand,
+        })
+    }
+}
 
-        if self.config.reveal_asset_id {
+pub struct EncryptedLeg<'a> {
+    builder: &'a LegBuilder,
+    leg: bp_leg::Leg<PallasA>,
+    leg_enc: bp_leg::LegEncryption<PallasA>,
+    leg_enc_rand: bp_leg::LegEncryptionRandomness<PallasScalar>,
+}
+
+impl EncryptedLeg<'_> {
+    pub fn leg_enc(&self) -> Result<LegEncrypted, Error> {
+        LegEncrypted::new(self.leg_enc.clone())
+    }
+
+    pub fn prove<
+        R: RngCore + CryptoRng,
+        T: DartLimits,
+        C: CurveTreeConfig<
+                F0 = <VestaParameters as CurveConfig>::ScalarField,
+                F1 = <PallasParameters as CurveConfig>::ScalarField,
+                P0 = VestaParameters,
+                P1 = PallasParameters,
+            >,
+    >(
+        self,
+        rng: &mut R,
+        ctx: &[u8],
+        asset_tree: &impl CurveTreeLookup<ASSET_TREE_L, ASSET_TREE_M, C>,
+    ) -> Result<AnySettlementLegProof<T, C>, Error> {
+        let Self {
+            builder,
+            leg,
+            leg_enc,
+            leg_enc_rand,
+        } = self;
+        let asset_id = builder.asset.asset_id;
+        if builder.config.reveal_asset_id {
             let leg_proof = SettlementLegProofRevealedAssetId::new(
                 rng,
                 leg,
                 asset_id,
                 leg_enc,
                 leg_enc_rand,
-                self.public_enc_keys.clone(),
+                builder.public_enc_keys.clone(),
                 ctx,
             )?;
             Ok(AnySettlementLegProof::RevealedAssetId(leg_proof))
         } else {
-            let asset_data = self.asset.asset_data()?;
+            let asset_data = builder.asset.asset_data()?;
             let leg_proof = SettlementLegProof::new(
                 rng,
                 leg,
                 leg_enc,
                 leg_enc_rand,
                 asset_data,
-                self.public_enc_keys.clone(),
+                builder.public_enc_keys.clone(),
                 ctx,
                 asset_tree,
             )?;
@@ -718,17 +762,28 @@ impl<T: DartLimits> SettlementBuilder<T> {
             .map_err(|_| Error::BoundedContainerSizeLimitExceeded)?;
         // TODO: need to collect all asset leaf paths based on the `root_block` number.
         // To avoid getting paths based on different roots if a new block is produced during proof generation.
-        let root_block = asset_tree.get_block_number()?;
+        let root_block = try_block_number(asset_tree.get_block_number()?)?;
 
         if self.legs.len() > LegId::MAX as usize {
             return Err(Error::UnsupportedNumberOfLegs(self.legs.len()));
         }
 
-        let mut legs = Vec::with_capacity(self.legs.len());
+        let encrypted_legs = self
+            .legs
+            .iter()
+            .map(|leg_builder| leg_builder.encrypt::<_, T>(rng))
+            .collect::<Result<Vec<_>, _>>()?;
+        let leg_encs = encrypted_legs
+            .iter()
+            .map(|leg| leg.leg_enc())
+            .collect::<Result<Vec<_>, _>>()?;
+        let legs_digest = leg_encryptions_digest(&leg_encs);
 
-        for (idx, leg_builder) in self.legs.iter().enumerate() {
-            let ctx = leg_proof_initial_ctx(&memo, idx as LegId);
-            let leg_proof = leg_builder.encrypt_and_prove(rng, &ctx, &asset_tree)?;
+        let mut legs = Vec::with_capacity(encrypted_legs.len());
+
+        for (idx, encrypted_leg) in encrypted_legs.into_iter().enumerate() {
+            let ctx = leg_proof_initial_ctx(&memo, root_block, &legs_digest, idx as LegId);
+            let leg_proof = encrypted_leg.prove(rng, &ctx, &asset_tree)?;
             legs.push(leg_proof);
         }
 
@@ -736,7 +791,7 @@ impl<T: DartLimits> SettlementBuilder<T> {
             BoundedVec::try_from(legs).map_err(|_| Error::BoundedContainerSizeLimitExceeded)?;
         Ok(SettlementProof {
             memo,
-            root_block: try_block_number(root_block)?,
+            root_block,
             legs,
         })
     }
@@ -763,6 +818,10 @@ impl<
 {
     pub fn settlement_ref(&self) -> SettlementRef {
         SettlementRef(blake2_256(self))
+    }
+
+    fn legs_digest(&self) -> [u8; 32] {
+        leg_encryptions_digest(self.legs.iter().map(|leg| leg.leg_enc()))
     }
 
     /// Get leg and sender, receiver and mediator affirmation counts.
@@ -816,11 +875,12 @@ impl<
         if self.legs.len() > LegId::MAX as usize {
             return Err(Error::UnsupportedNumberOfLegs(self.legs.len()));
         }
+        let legs_digest = self.legs_digest();
         // NOTE: If we don't care which leg failed, then leg.verify could accept an RMC
         self.legs.par_iter().enumerate().try_for_each_init(
             || rng.clone(),
             |rng, (idx, leg)| {
-                let ctx = leg_proof_initial_ctx(memo, idx as LegId);
+                let ctx = leg_proof_initial_ctx(memo, self.root_block, &legs_digest, idx as LegId);
                 leg.verify(&ctx, &root, asset_lookup, rng)
             },
         )?;
@@ -845,8 +905,10 @@ impl<
         if self.legs.len() > LegId::MAX as usize {
             return Err(Error::UnsupportedNumberOfLegs(self.legs.len()));
         }
+        let legs_digest = self.legs_digest();
         for (idx, leg) in self.legs.iter().enumerate() {
-            let ctx = leg_proof_initial_ctx(&self.memo, idx as LegId);
+            let ctx =
+                leg_proof_initial_ctx(&self.memo, self.root_block, &legs_digest, idx as LegId);
             leg.verify(&ctx, &root, asset_lookup, rng)?;
         }
         Ok(())
@@ -877,6 +939,7 @@ impl<
         if self.legs.len() > LegId::MAX as usize {
             return Err(Error::UnsupportedNumberOfLegs(self.legs.len()));
         }
+        let legs_digest = self.legs_digest();
 
         let tuples = self
             .legs
@@ -885,7 +948,8 @@ impl<
             .map_init(
                 || rng.clone(),
                 |rng, (idx, leg)| {
-                    let ctx = leg_proof_initial_ctx(memo, idx as LegId);
+                    let ctx =
+                        leg_proof_initial_ctx(memo, self.root_block, &legs_digest, idx as LegId);
                     let guard = RandomizedMultCheckerGuard::new_using_rng(rng);
                     guard.with_err(Error::RMCVerifyError, |rmc| {
                         leg.batched_verify(&ctx, &root, asset_lookup, rng, Some(rmc))
@@ -935,12 +999,14 @@ impl<
             return Err(Error::UnsupportedNumberOfLegs(self.legs.len()));
         }
 
+        let legs_digest = self.legs_digest();
         let mut even_tuples = Vec::with_capacity(batch_size);
         let mut odd_tuples = Vec::with_capacity(batch_size);
         let guard = RandomizedMultCheckerGuard::new_using_rng(rng);
         guard.with_err(Error::RMCVerifyError, |rmc| {
             for (idx, leg) in self.legs.iter().enumerate() {
-                let ctx = leg_proof_initial_ctx(&self.memo, idx as LegId);
+                let ctx =
+                    leg_proof_initial_ctx(&self.memo, self.root_block, &legs_digest, idx as LegId);
                 let (even, odd) = leg.batched_verify(&ctx, &root, asset_lookup, rng, Some(rmc))?;
                 // If any tuple is empty which can happen when asset id is revealed
                 if !even.fixed_point_scalars.is_empty() {

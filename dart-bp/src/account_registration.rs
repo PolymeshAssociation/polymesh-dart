@@ -9,7 +9,10 @@ use crate::keys::{DecKey, EncKey, SigKey, VerKey, keygen_enc_given_sk, keygen_si
 use crate::poseidon_impls::poseidon_2::Poseidon_hash_2_constraints_simple;
 use crate::poseidon_impls::poseidon_2::params::Poseidon2Params;
 use crate::util::{bp_gens_for_vec_commitment, handle_verification_tuple};
-use crate::{ACCOUNT_COMMITMENT_LABEL, ASSET_ID_LABEL, ID_LABEL, NONCE_LABEL, PK_LABEL};
+use crate::{
+    ACCOUNT_COMMITMENT_LABEL, ASSET_ID_LABEL, ID_LABEL, NONCE_LABEL,
+    NULLIFIER_SK_GEN_COUNTER_LABEL, PK_LABEL,
+};
 use crate::{AUTH_PROOF_LABEL, TXN_CHALLENGE_LABEL};
 use ark_ec::{AffineRepr, CurveGroup, VariableBaseMSM};
 use ark_ff::BigInteger;
@@ -215,6 +218,8 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             nonce,
             ASSET_ID_LABEL,
             account.asset_id(),
+            NULLIFIER_SK_GEN_COUNTER_LABEL,
+            counter,
             ACCOUNT_COMMITMENT_LABEL,
             account_commitment,
             PK_LABEL,
@@ -774,6 +779,8 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             nonce,
             ASSET_ID_LABEL,
             asset_id,
+            NULLIFIER_SK_GEN_COUNTER_LABEL,
+            counter,
             ACCOUNT_COMMITMENT_LABEL,
             account_commitment,
             PK_LABEL,
