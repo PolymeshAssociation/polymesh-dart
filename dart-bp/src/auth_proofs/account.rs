@@ -38,6 +38,7 @@ use schnorr_pok::partial::{
 
 pub const LEG_ENCRYPTION_LABEL: &[u8; 14] = b"leg-encryption";
 pub const PARTY_EPH_PK_LABEL: &[u8; 19] = b"party-ephemeral-key";
+pub const LEG_ACTION_LABEL: &[u8; 10] = b"leg-action";
 
 /// For non-fee account related transactions, affirmation, counter update, reverse
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
@@ -155,7 +156,9 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
                 LEG_ENCRYPTION_LABEL,
                 conf.encryption,
                 PARTY_EPH_PK_LABEL,
-                conf.party_eph_pk
+                conf.party_eph_pk,
+                LEG_ACTION_LABEL,
+                conf.action_tag()
             );
         }
         txn_type.add_to_transcript(&mut transcript)?;
@@ -503,7 +506,9 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
                 LEG_ENCRYPTION_LABEL,
                 conf.encryption,
                 PARTY_EPH_PK_LABEL,
-                conf.party_eph_pk
+                conf.party_eph_pk,
+                LEG_ACTION_LABEL,
+                conf.action_tag()
             );
         }
         txn_type.add_to_transcript(&mut transcript)?;
@@ -1025,6 +1030,7 @@ mod tests {
             party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk_s.clone()),
             amount,
             has_balance_changed: true,
+            has_counter_decreased: Some(false),
         }];
         let proof = AuthProofAffirmation::<Affine<PallasConfig>>::new(
             &mut rng,
@@ -1072,5 +1078,91 @@ mod tests {
                 None,
             )
             .unwrap();
+    }
+
+    #[test]
+    fn auth_proof_binds_leg_action() {
+        let mut rng = thread_rng();
+        let sk_gen = Affine::<PallasConfig>::rand(&mut rng);
+        let enc_key_gen = Affine::<PallasConfig>::rand(&mut rng);
+        let comm_re_rand_gen = Affine::<PallasConfig>::rand(&mut rng);
+        let enc_gen = Affine::<PallasConfig>::rand(&mut rng);
+
+        let sk_e = Fr::rand(&mut rng);
+        let (sk_enc, ek) = keygen_enc(&mut rng, enc_key_gen);
+        let amount = 100u64;
+        let asset_id = 7u32;
+        let (_, pk_r_e) = keygen_enc(&mut rng, enc_key_gen);
+        let leg = Leg::new(ek.0, pk_r_e.0, amount, asset_id, vec![], vec![], vec![]).unwrap();
+        let cfg = LegEncConfig {
+            visibility: PartyVisibility::NoVisibility,
+            reveal_asset_id: false,
+        };
+        let (leg_enc, _) = leg.encrypt(&mut rng, cfg, enc_key_gen, enc_gen).unwrap();
+        let (leg_core, eph_pk_s) = leg_enc.core_and_eph_keys_for_sender();
+
+        let pk_e = (sk_gen * sk_e + enc_key_gen * sk_enc.0).into_affine();
+        let rand_old = Fr::rand(&mut rng);
+        let rand_new = Fr::rand(&mut rng);
+        let re_rand_leaf = (pk_e + comm_re_rand_gen * rand_old).into_affine();
+        let updated_comm = (pk_e + comm_re_rand_gen * rand_new).into_affine();
+        let nullifier = Affine::<PallasConfig>::rand(&mut rng);
+        let nonce = b"leg_action_binding";
+        let k_amount = Fr::rand(&mut rng);
+        let k_asset_id = Fr::rand(&mut rng);
+        let txn_type = DeviceTxnType::DeviceAffirmation {
+            typ: DeviceAffirmationType::SenderAffirmation,
+        };
+
+        let proof = AuthProofAffirmation::<Affine<PallasConfig>>::new(
+            &mut rng,
+            sk_e,
+            sk_enc.0,
+            rand_old,
+            rand_new,
+            vec![k_amount],
+            vec![k_asset_id],
+            vec![LegProverConfig {
+                encryption: leg_core.clone(),
+                party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk_s.clone()),
+                amount,
+                has_balance_changed: true,
+                has_counter_decreased: Some(false),
+            }],
+            &re_rand_leaf,
+            &updated_comm,
+            nullifier,
+            nonce,
+            &txn_type,
+            sk_gen,
+            enc_key_gen,
+            comm_re_rand_gen,
+            enc_gen,
+        )
+        .unwrap();
+
+        let verify = |has_counter_decreased: Option<bool>| {
+            proof.verify(
+                vec![LegVerifierConfig {
+                    encryption: leg_core.clone(),
+                    party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk_s.clone()),
+                    has_balance_decreased: Some(true),
+                    has_counter_decreased,
+                }],
+                &re_rand_leaf,
+                &updated_comm,
+                nullifier,
+                nonce,
+                &txn_type,
+                sk_gen,
+                enc_key_gen,
+                comm_re_rand_gen,
+                enc_gen,
+                None,
+            )
+        };
+        verify(Some(false)).unwrap();
+        assert!(verify(Some(true)).is_err());
+        assert!(verify(None).is_err());
     }
 }

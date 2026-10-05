@@ -1256,6 +1256,93 @@ mod tests {
     }
 
     #[test]
+    fn test_settlement_leg_proofs_bind_all_legs() {
+        let mut rng = rand::rngs::StdRng::from_entropy();
+        let sender_keys = AccountKeys::rand(&mut rng).unwrap();
+        let receiver_keys = AccountKeys::rand(&mut rng).unwrap();
+
+        let asset_state_0 = AssetState::new::<()>(0, &[], &[]).unwrap();
+        let asset_state_1 = AssetState::new::<()>(1, &[], &[]).unwrap();
+
+        let mut asset_tree =
+            ProverCurveTree::<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig>::new(ASSET_TREE_HEIGHT)
+                .unwrap();
+        asset_tree
+            .insert(asset_state_0.commitment().unwrap())
+            .unwrap();
+        asset_tree
+            .insert(asset_state_1.commitment().unwrap())
+            .unwrap();
+        asset_tree.store_root().unwrap();
+
+        let mut asset_lookup = AssetKeysLookup::new();
+        asset_lookup.add(asset_state_0.clone());
+        asset_lookup.add(asset_state_1.clone());
+
+        for reveal_asset_id in [true, false] {
+            let config = LegConfig {
+                reveal_asset_id,
+                visibility: PartyVisibility::FullVisibility,
+            };
+            let build = |rng: &mut rand::rngs::StdRng| {
+                SettlementBuilder::<()>::new(b"test")
+                    .leg(LegBuilder {
+                        sender: sender_keys.public_keys(),
+                        receiver: receiver_keys.public_keys(),
+                        asset: asset_state_0.clone(),
+                        amount: 300,
+                        config,
+                        public_enc_keys: vec![],
+                    })
+                    .leg(LegBuilder {
+                        sender: receiver_keys.public_keys(),
+                        receiver: sender_keys.public_keys(),
+                        asset: asset_state_1.clone(),
+                        amount: 175,
+                        config,
+                        public_enc_keys: vec![],
+                    })
+                    .encrypt_and_prove(rng, &asset_tree)
+                    .unwrap()
+            };
+            let settlement = build(&mut rng);
+            let other = build(&mut rng);
+
+            settlement
+                .verify(asset_tree.root().unwrap(), &asset_lookup, &mut rng)
+                .unwrap();
+            settlement
+                .batched_verify(asset_tree.root().unwrap(), &asset_lookup, &mut rng)
+                .unwrap();
+
+            let with_legs = |legs: Vec<AnySettlementLegProof<()>>| SettlementProof::<()> {
+                memo: settlement.memo.clone(),
+                root_block: settlement.root_block,
+                legs: BoundedVec::try_from(legs).unwrap(),
+            };
+            let rewritten = [
+                // Prefix of the settlement.
+                with_legs(vec![settlement.legs[0].clone()]),
+                // Leg of another settlement with the same memo and root block.
+                with_legs(vec![settlement.legs[0].clone(), other.legs[1].clone()]),
+                with_legs(vec![settlement.legs[1].clone(), settlement.legs[0].clone()]),
+            ];
+            for rewritten in rewritten {
+                assert!(
+                    rewritten
+                        .verify(asset_tree.root().unwrap(), &asset_lookup, &mut rng)
+                        .is_err()
+                );
+                assert!(
+                    rewritten
+                        .batched_verify(asset_tree.root().unwrap(), &asset_lookup, &mut rng)
+                        .is_err()
+                );
+            }
+        }
+    }
+
+    #[test]
     fn test_sender_affirmation_split() {
         let test_with_config = |reveal_asset_id: bool| {
             let mut rng = rand::thread_rng();

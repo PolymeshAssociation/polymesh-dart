@@ -51,11 +51,13 @@ pub mod documentation {
 
 pub const NONCE_LABEL: &'static [u8; 5] = b"nonce";
 pub const ASSET_ID_LABEL: &'static [u8; 8] = b"asset_id";
+pub const NULLIFIER_SK_GEN_COUNTER_LABEL: &'static [u8; 20] = b"nullifier_sk_counter";
 pub const ACCOUNT_COMMITMENT_LABEL: &'static [u8; 18] = b"account_commitment";
 pub const PK_LABEL: &'static [u8; 2] = b"pk";
 pub const PK_ENC_LABEL: &'static [u8; 6] = b"pk_enc";
 pub const ID_LABEL: &'static [u8; 2] = b"id";
 pub const LEG_ENC_LABEL: &'static [u8; 7] = b"leg_enc";
+pub const LEG_ACTION_LABEL: &'static [u8; 10] = b"leg_action";
 pub const RE_RANDOMIZED_PATH_LABEL: &'static [u8; 18] = b"re_randomized_path";
 pub const ROOT_LABEL: &'static [u8; 4] = b"root";
 pub const INCREASE_BAL_BY_LABEL: &'static [u8; 15] = b"increase_bal_by";
@@ -66,6 +68,9 @@ pub const TXN_EVEN_LABEL: &'static [u8; 14] = b"txn-even-level";
 pub const TXN_CHALLENGE_LABEL: &'static [u8; 13] = b"txn-challenge";
 pub const AUTH_PROOF_LABEL: &[u8] = b"auth-proof";
 pub const BALANCE_LABEL: &'static [u8; 7] = b"balance";
+pub const NUM_CHUNKS_LABEL: &'static [u8; 10] = b"num_chunks";
+pub const CHUNK_INDEX_LABEL: &'static [u8; 11] = b"chunk_index";
+pub const BATCH_DIGEST_LABEL: &'static [u8; 12] = b"batch_digest";
 
 #[macro_use]
 mod macros;

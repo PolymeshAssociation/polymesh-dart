@@ -16,8 +16,9 @@ use crate::util::{
     generate_account_commitment_responses, generate_null_bp_responses,
 };
 use crate::{
-    Error, LEG_ENC_LABEL, NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL, ROOT_LABEL, TXN_EVEN_LABEL,
-    TXN_ODD_LABEL, UPDATED_ACCOUNT_COMMITMENT_LABEL, add_to_transcript, error::Result,
+    Error, LEG_ACTION_LABEL, LEG_ENC_LABEL, NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL, ROOT_LABEL,
+    TXN_EVEN_LABEL, TXN_ODD_LABEL, UPDATED_ACCOUNT_COMMITMENT_LABEL, add_to_transcript,
+    error::Result,
 };
 use ark_dlog_gadget::dlog::DiscreteLogParameters;
 use ark_ec::short_weierstrass::{Affine, Projective, SWCurveConfig};
@@ -331,16 +332,18 @@ impl<
         let asset_id = account.asset_id();
 
         // For legs that have asset-id ciphertext, prove that asset-id ciphertext is correctly formed when is_asset_id_revealed = true
-        let (is_asset_id_revealed, legs, amounts, legs_balance_changed) =
+        let (is_asset_id_revealed, legs, amounts, legs_balance_changed, leg_actions) =
             legs_for_proof(legs_with_conf, asset_id)?;
 
-        for (leg_core, eph_pk) in &legs {
+        for ((leg_core, eph_pk), action) in legs.iter().zip(&leg_actions) {
             add_to_transcript!(
                 even_prover.transcript(),
                 LEG_ENC_LABEL,
                 leg_core,
                 LEG_ENC_LABEL,
-                eph_pk
+                eph_pk,
+                LEG_ACTION_LABEL,
+                action
             );
         }
 
@@ -813,7 +816,7 @@ impl<
         even_prover: &mut Prover<MerlinTranscript, Affine<G0>>,
     ) -> Result<(Self, Affine<G0>)> {
         let asset_id = account.asset_id();
-        let (_, legs, _, _) = legs_for_proof(legs_with_conf, asset_id)?;
+        let (_, legs, _, _, leg_actions) = legs_for_proof(legs_with_conf, asset_id)?;
 
         add_to_transcript!(
             even_prover.transcript(),
@@ -823,13 +826,15 @@ impl<
             updated_account_commitment
         );
 
-        for (leg_core, eph_pk) in &legs {
+        for ((leg_core, eph_pk), action) in legs.iter().zip(&leg_actions) {
             add_to_transcript!(
                 even_prover.transcript(),
                 LEG_ENC_LABEL,
                 leg_core,
                 LEG_ENC_LABEL,
-                eph_pk
+                eph_pk,
+                LEG_ACTION_LABEL,
+                action
             );
         }
 
@@ -1702,12 +1707,14 @@ pub(crate) fn legs_for_proof<G: AffineRepr>(
         Vec<(LegEncryptionCore<G>, PartyEphemeralPublicKey<G>)>,
         Vec<Balance>,
         Vec<bool>,
+        Vec<[u8; 2]>,
     ),
     Error,
 > {
     let mut legs = Vec::with_capacity(legs_with_conf.len());
     let mut amounts = Vec::with_capacity(legs_with_conf.len());
     let mut has_balance_changed = Vec::with_capacity(legs_with_conf.len());
+    let mut leg_actions = Vec::with_capacity(legs_with_conf.len());
     let mut is_asset_id_revealed = false;
     // If asset-id is revealed in any of the leg encryptions, then its assumed that its revealed and the proof
     // is done accordingly
@@ -1723,7 +1730,14 @@ pub(crate) fn legs_for_proof<G: AffineRepr>(
         }
         amounts.push(leg_conf.amount);
         has_balance_changed.push(leg_conf.has_balance_changed);
+        leg_actions.push(leg_conf.action_tag());
         legs.push((leg_conf.encryption, leg_conf.party_eph_pk));
     }
-    Ok((is_asset_id_revealed, legs, amounts, has_balance_changed))
+    Ok((
+        is_asset_id_revealed,
+        legs,
+        amounts,
+        has_balance_changed,
+        leg_actions,
+    ))
 }

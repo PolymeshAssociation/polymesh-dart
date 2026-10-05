@@ -110,6 +110,7 @@ impl<
             party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk),
             amount,
             has_balance_changed: true,
+            has_counter_decreased: Some(false),
         });
 
         self.balance_changes.push(BalanceChangeConfig {
@@ -134,6 +135,7 @@ impl<
             party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk_r),
             amount,
             has_balance_changed: false,
+            has_counter_decreased: Some(false),
         });
 
         self.net_counter_change += 1;
@@ -154,6 +156,7 @@ impl<
             party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk),
             amount,
             has_balance_changed: true,
+            has_counter_decreased: Some(true),
         });
 
         self.balance_changes.push(BalanceChangeConfig {
@@ -178,6 +181,7 @@ impl<
             party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk_s),
             amount,
             has_balance_changed: false,
+            has_counter_decreased: Some(true),
         });
 
         self.net_counter_change -= 1;
@@ -198,6 +202,7 @@ impl<
             party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk),
             amount,
             has_balance_changed: true,
+            has_counter_decreased: Some(true),
         });
 
         self.balance_changes.push(BalanceChangeConfig {
@@ -222,6 +227,7 @@ impl<
             party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk_r),
             amount,
             has_balance_changed: false,
+            has_counter_decreased: Some(true),
         });
 
         self.net_counter_change -= 1;
@@ -242,6 +248,7 @@ impl<
             party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk),
             amount,
             has_balance_changed: true,
+            has_counter_decreased: None,
         });
 
         self.balance_changes.push(BalanceChangeConfig {
@@ -265,6 +272,7 @@ impl<
             party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk),
             amount,
             has_balance_changed: true,
+            has_counter_decreased: None,
         });
 
         self.balance_changes.push(BalanceChangeConfig {
@@ -1616,8 +1624,8 @@ mod tests {
 
     #[test]
     fn test_send_receive_and_reverse() {
-        // Alice's single proof over 4 ops at once: a send, a receive, a sender-side reversal (un-doing a send),
-        // and a counter decrease — checks balance/counter bookkeeping across all four reversible op kinds together.
+        // Alice's single proof over 4 ops at once: a send, a receive, a sender reversal, and a
+        // counter decrease.
         let mut rng = thread_rng();
 
         const NUM_GENS: usize = 1 << 13;
@@ -1816,6 +1824,28 @@ mod tests {
         println!(
             "Proving time = {:?}, verification time = {:?}, verification time (RMC) = {:?}, proof size = {} bytes",
             proving_time, verification_time, verification_time_rmc, proof_size
+        );
+
+        // Swapping the receive affirmation and the receiver reversal between two legs keeps every leg's
+        // role and balance change and the net counter change, but not the per-leg counter change.
+        let mut swapped_verifier =
+            AccountStateTransitionProofVerifier::init(alice_updated_comm, alice_nullifier, nonce);
+        swapped_verifier.add_send_affirmation(leg_enc_1.core_and_eph_keys_for_sender());
+        swapped_verifier.add_receiver_reverse(leg_enc_2.core_and_eph_keys_for_receiver());
+        swapped_verifier.add_sender_reverse(leg_enc_3.core_and_eph_keys_for_sender());
+        swapped_verifier.add_receive_affirmation(leg_enc_4.core_and_eph_keys_for_receiver());
+        assert!(
+            swapped_verifier
+                .verify::<_, PallasParams, VestaParams>(
+                    &mut rng,
+                    &alice_proof,
+                    &account_tree_root,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    enc_gen,
+                    None,
+                )
+                .is_err()
         );
     }
 
