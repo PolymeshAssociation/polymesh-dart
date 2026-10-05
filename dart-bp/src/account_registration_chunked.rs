@@ -1,13 +1,19 @@
 //! PoC: chunked account registration.
 //!
 //! Experimental Same chunking idea as [`crate::leg::settlement_proof_chunked`], applied to account registration.
+//! Each chunk's transcript starts with the chunk's index, the number of chunks and a digest of the public
+//! inputs of all registrations.
 
-use crate::Error;
 use crate::account::state::AccountStateCommitment;
 use crate::account::{AccountCommitmentKeyTrait, AccountState};
 use crate::account_registration::{REG_TXN_LABEL, RegTxnProof};
 use crate::error::Result;
 use crate::poseidon_impls::poseidon_2::params::Poseidon2Params;
+use crate::util::{batch_digest, chunk_transcript};
+use crate::{
+    ACCOUNT_COMMITMENT_LABEL, ASSET_ID_LABEL, Error, ID_LABEL, NONCE_LABEL,
+    NULLIFIER_SK_GEN_COUNTER_LABEL, PK_ENC_LABEL, PK_LABEL, add_to_transcript,
+};
 use ark_ec::AffineRepr;
 use ark_serialize::CanonicalSerialize;
 use ark_std::string::ToString;
@@ -15,15 +21,49 @@ use ark_std::vec::Vec;
 use bulletproofs::r1cs::{Prover, R1CSProof, VerificationTuple, Verifier, batch_verify};
 use bulletproofs::{BulletproofGens, PedersenGens};
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
-use dock_crypto_utils::transcript::MerlinTranscript;
+use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use polymesh_dart_common::{AssetId, NullifierSkGenCounter};
 use rand_core::CryptoRngCore;
+
+pub const REGISTRATION_BATCH_LABEL: &[u8; 18] = b"registration-batch";
+
+/// Digest of the public inputs of all registrations, in registration order.
+fn registrations_digest<G: AffineRepr>(
+    ids: &[G::ScalarField],
+    pk_affs: &[G],
+    pk_encs: &[G],
+    asset_ids: &[AssetId],
+    account_commitments: &[AccountStateCommitment<G>],
+    nonces: &[Vec<u8>],
+    counter: NullifierSkGenCounter,
+) -> Result<[u8; 32]> {
+    let mut transcript = MerlinTranscript::new(REGISTRATION_BATCH_LABEL);
+    add_to_transcript!(transcript, NULLIFIER_SK_GEN_COUNTER_LABEL, counter);
+    for i in 0..ids.len() {
+        add_to_transcript!(
+            transcript,
+            NONCE_LABEL,
+            nonces[i],
+            ASSET_ID_LABEL,
+            asset_ids[i],
+            ACCOUNT_COMMITMENT_LABEL,
+            account_commitments[i],
+            PK_LABEL,
+            pk_affs[i],
+            PK_ENC_LABEL,
+            pk_encs[i],
+            ID_LABEL,
+            ids[i]
+        );
+    }
+    Ok(batch_digest(transcript))
+}
 
 /// One chunk: `K` registrations sharing a single prover and one `R1CSProof`.
 #[derive(Clone, Debug)]
 pub struct RegTxnProofChunk<
     G: AffineRepr,
-    const CHUNK_BITS: usize = 48,
+    const CHUNK_BITS: usize = 43,
     const NUM_CHUNKS: usize = 6,
 > {
     /// Per-registration sigma material; each has `partial.proof = None` (the BP proof is shared).
@@ -49,8 +89,12 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         leaf_level_bp_gens: &BulletproofGens<G>,
         poseidon_config: &Poseidon2Params<G::ScalarField>,
         T: Option<(G, G, G)>,
+        num_chunks: usize,
+        chunk_idx: usize,
+        registrations_digest: &[u8; 32],
     ) -> Result<Self> {
-        let transcript = MerlinTranscript::new(REG_TXN_LABEL);
+        let transcript =
+            chunk_transcript(REG_TXN_LABEL, num_chunks, chunk_idx, registrations_digest)?;
         let mut prover = Prover::new(leaf_level_pc_gens, transcript);
         let mut regs = Vec::with_capacity(accounts.len());
         // Optimz: Following can be parallelized by forking rng
@@ -94,9 +138,13 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         leaf_level_bp_gens: &BulletproofGens<G>,
         poseidon_config: &Poseidon2Params<G::ScalarField>,
         T: Option<(G, G, G)>,
+        num_chunks: usize,
+        chunk_idx: usize,
+        registrations_digest: &[u8; 32],
         mut rmc: Option<&mut RandomizedMultChecker<G>>,
     ) -> Result<VerificationTuple<G>> {
-        let transcript = MerlinTranscript::new(REG_TXN_LABEL);
+        let transcript =
+            chunk_transcript(REG_TXN_LABEL, num_chunks, chunk_idx, registrations_digest)?;
         let mut verifier = Verifier::new(transcript);
         let num_regs = self.regs.len();
         if ids.len() != num_regs
@@ -138,7 +186,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
 #[derive(Clone, Debug)]
 pub struct RegTxnProofBatch<
     G: AffineRepr,
-    const CHUNK_BITS: usize = 48,
+    const CHUNK_BITS: usize = 43,
     const NUM_CHUNKS: usize = 6,
 > {
     pub chunks: Vec<RegTxnProofChunk<G, CHUNK_BITS, NUM_CHUNKS>>,
@@ -189,7 +237,18 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             ));
         }
 
-        let mut chunks = Vec::with_capacity(num_regs.div_ceil(chunk_size));
+        let digest = registrations_digest(
+            &accounts.iter().map(|a| a.id()).collect::<Vec<_>>(),
+            &accounts.iter().map(|a| a.pk_aff()).collect::<Vec<_>>(),
+            &accounts.iter().map(|a| a.pk_enc()).collect::<Vec<_>>(),
+            &accounts.iter().map(|a| a.asset_id()).collect::<Vec<_>>(),
+            &account_commitments,
+            &nonces,
+            counter,
+        )?;
+        let num_chunks = num_regs.div_ceil(chunk_size);
+
+        let mut chunks = Vec::with_capacity(num_chunks);
         let mut start = 0;
         while start < num_regs {
             let end = (start + chunk_size).min(num_regs);
@@ -207,6 +266,9 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
                 leaf_level_bp_gens,
                 poseidon_config,
                 T,
+                num_chunks,
+                chunks.len(),
+                &digest,
             )?;
             chunks.push(chunk);
             start = end;
@@ -270,9 +332,20 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             ));
         }
 
-        let mut tuples = Vec::with_capacity(self.chunks.len());
+        let digest = registrations_digest(
+            &ids,
+            &pk_affs,
+            &pk_encs,
+            &asset_ids,
+            &account_commitments,
+            &nonces,
+            counter,
+        )?;
+        let num_chunks = self.chunks.len();
+
+        let mut tuples = Vec::with_capacity(num_chunks);
         let mut start = 0;
-        for chunk in &self.chunks {
+        for (chunk_idx, chunk) in self.chunks.iter().enumerate() {
             let end = start + chunk.regs.len();
             let tuple = chunk.verify_and_return_tuple(
                 rng,
@@ -288,6 +361,9 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
                 leaf_level_bp_gens,
                 poseidon_config,
                 T,
+                num_chunks,
+                chunk_idx,
+                &digest,
                 rmc.as_deref_mut(),
             )?;
             tuples.push(tuple);
@@ -374,7 +450,7 @@ mod tests {
         // Monolith = one BPProof over all N (chunk_size = N); chunked = smaller chunks,
         // batch-verified.
         const NUM_GENS: usize = 1 << 16;
-        const CHUNK_BITS: usize = 48;
+        const CHUNK_BITS: usize = 43;
         const NUM_CHUNKS: usize = 6;
 
         let num_regs: usize = 20;
@@ -525,6 +601,36 @@ mod tests {
             add_verification_tuples_to_rmc(tuples, &pc_gens, &bp_gens, &mut rmc).unwrap();
             rmc.verify().unwrap();
             let rmc_t = t0.elapsed();
+
+            // Chunks are bound to their position in this batch.
+            if k == 5 {
+                let verify_chunks = |order: &[usize], rng: &mut rand::rngs::ThreadRng| {
+                    let idxs: Vec<usize> = order.iter().flat_map(|&c| c * k..(c + 1) * k).collect();
+                    RegTxnProofBatch {
+                        chunks: order.iter().map(|&c| batch.chunks[c].clone()).collect(),
+                        num_regs: idxs.len() as u32,
+                    }
+                    .verify_batched(
+                        rng,
+                        idxs.iter().map(|&i| ids[i]).collect(),
+                        idxs.iter().map(|&i| pks[i]).collect(),
+                        idxs.iter().map(|&i| pk_encs[i]).collect(),
+                        idxs.iter().map(|&i| asset_ids[i]).collect(),
+                        idxs.iter().map(|&i| account_comms[i].clone()).collect(),
+                        idxs.iter().map(|&i| nonces[i].clone()).collect(),
+                        counter,
+                        account_comm_key.clone(),
+                        &pc_gens,
+                        &bp_gens,
+                        &poseidon_params,
+                        T,
+                    )
+                };
+                assert!(verify_chunks(&[0, 1, 2, 3], &mut rng).is_ok());
+                assert!(verify_chunks(&[1, 2, 3], &mut rng).is_err());
+                assert!(verify_chunks(&[1, 0, 2, 3], &mut rng).is_err());
+                assert!(verify_chunks(&[0, 0, 1, 2, 3], &mut rng).is_err());
+            }
 
             rows.push(Row {
                 label: if k == num_regs {

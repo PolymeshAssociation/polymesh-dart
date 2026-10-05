@@ -8,7 +8,9 @@ use crate::account::state::{
 };
 use crate::error::*;
 use crate::leg::{LegEncryptionCore, PartyEphemeralPublicKey};
-use crate::{AssetId, BALANCE_BITS, Balance, dst};
+use crate::{
+    AssetId, BALANCE_BITS, BATCH_DIGEST_LABEL, Balance, CHUNK_INDEX_LABEL, NUM_CHUNKS_LABEL, dst,
+};
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ec::{AffineRepr, CurveGroup};
 use ark_ff::{Field, PrimeField};
@@ -2324,6 +2326,37 @@ pub fn append_auth_proof_and_get_challenge<F: PrimeField, P: CanonicalSerialize,
     auth_proof.serialize_compressed(&mut bytes)?;
     transcript.append_message(crate::AUTH_PROOF_LABEL, &bytes);
     Ok(transcript.challenge_scalar::<F>(crate::TXN_CHALLENGE_LABEL))
+}
+
+/// Transcript for chunk `chunk_idx` of a proof split into `num_chunks` independently proven chunks.
+/// It starts with the chunk's position and `batch_digest`, a digest of the public inputs of all chunks,
+/// so a chunk verifies only at its position in its own batch.
+pub fn chunk_transcript(
+    label: &'static [u8],
+    num_chunks: usize,
+    chunk_idx: usize,
+    batch_digest: &[u8; 32],
+) -> Result<MerlinTranscript> {
+    let mut transcript = MerlinTranscript::new(label);
+    let num_chunks = num_chunks as u32;
+    let chunk_idx = chunk_idx as u32;
+    add_to_transcript!(
+        transcript,
+        NUM_CHUNKS_LABEL,
+        num_chunks,
+        CHUNK_INDEX_LABEL,
+        chunk_idx,
+        BATCH_DIGEST_LABEL,
+        batch_digest
+    );
+    Ok(transcript)
+}
+
+/// Digest of the public inputs of all chunks of a chunked proof.
+pub fn batch_digest(mut transcript: MerlinTranscript) -> [u8; 32] {
+    let mut digest = [0u8; 32];
+    transcript.challenge_bytes(BATCH_DIGEST_LABEL, &mut digest);
+    digest
 }
 
 #[cfg(test)]

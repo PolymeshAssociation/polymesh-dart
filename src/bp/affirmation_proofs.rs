@@ -156,6 +156,7 @@ macro_rules! with_balance {
                         ),
                         amount,
                         has_balance_changed: true,
+                        has_counter_decreased: $hcd,
                     };
 
                 let device_request = AffirmationDeviceRequest {
@@ -518,6 +519,7 @@ macro_rules! no_balance {
                         ),
                         amount,
                         has_balance_changed: false,
+                        has_counter_decreased: $hcd,
                     };
 
                 let device_request = AffirmationDeviceRequest {

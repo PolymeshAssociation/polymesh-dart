@@ -337,7 +337,16 @@ impl<P: SWCurveConfig> TryFrom<&CompressedAffine> for Affine<P> {
 
     /// Converts an `Affine<P>` to a `CompressedAffine<P>`.
     fn try_from(affine: &CompressedAffine) -> Result<Self, Self::Error> {
-        Ok(Self::deserialize_compressed(&affine.0[..])?)
+        let point = Self::deserialize_compressed(&affine.0[..])?;
+        // The identity has more than one encoding, accept only the canonical one
+        if point.is_zero() {
+            let mut canonical = [0u8; ARK_EC_POINT_SIZE];
+            point.serialize_compressed(&mut canonical[..])?;
+            if canonical != affine.0 {
+                return Err(ark_serialize::SerializationError::InvalidData.into());
+            }
+        }
+        Ok(point)
     }
 }
 
@@ -452,6 +461,13 @@ impl<T: Clone + CanonicalSerialize + CanonicalDeserialize> WrappedCanonical<T> {
     pub fn decode(&self) -> Result<T, Error> {
         Ok(deserialize_compressed_exact(self.wrapped.as_slice())?)
     }
+
+    /// Converts the wrapped value from another type `U` that implements `CanonicalDeserialize` and can be converted into `T`.
+    ///
+    /// This is useful to migrate from an old version of a type to a new version, where `U` is the old type and `T` is the new type.
+    pub fn convert_from<U: CanonicalDeserialize + Into<T>>(&self) -> Result<T, Error> {
+        Ok(deserialize_compressed_exact::<U>(self.wrapped.as_slice())?.into())
+    }
 }
 
 impl<T: 'static> TypeInfo for WrappedCanonical<T> {
@@ -553,6 +569,13 @@ impl<T: Clone + CanonicalSerialize + CanonicalDeserialize, S: Get<u32>> BoundedC
     pub fn decode(&self) -> Result<T, Error> {
         Ok(deserialize_compressed_exact(self.wrapped.as_slice())?)
     }
+
+    /// Converts the wrapped value from another type `U` that implements `CanonicalDeserialize` and can be converted into `T`.
+    ///
+    /// This is useful to migrate from an old version of a type to a new version, where `U` is the old type and `T` is the new type.
+    pub fn convert_from<U: CanonicalDeserialize + Into<T>>(&self) -> Result<T, Error> {
+        Ok(deserialize_compressed_exact::<U>(self.wrapped.as_slice())?.into())
+    }
 }
 
 impl<T: 'static, S: Get<u32> + 'static> TypeInfo for BoundedCanonical<T, S> {
@@ -602,5 +625,11 @@ impl<T: CanonicalDeserialize, S: Get<u32>> Decode for BoundedCanonical<T, S> {
             wrapped: BoundedVec::<u8, S>::decode(input)?,
             _marker: core::marker::PhantomData,
         })
+    }
+}
+
+impl<T: CanonicalSerialize, S: Get<u32>> MaxEncodedLen for BoundedCanonical<T, S> {
+    fn max_encoded_len() -> usize {
+        BoundedVec::<u8, S>::max_encoded_len()
     }
 }

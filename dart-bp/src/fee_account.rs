@@ -991,6 +991,10 @@ impl<
         even_verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
         odd_verifier: &mut Verifier<MerlinTranscript, Affine<G1>>,
     ) -> Result<()> {
+        // Identity nullifier means `rho = 0`
+        if nullifier.is_zero() {
+            return Err(Error::PointAtIdentity);
+        }
         self.re_randomized_path
             .select_and_rerandomize_verifier_gadget::<Parameters0, Parameters1>(
                 root,
@@ -2333,6 +2337,9 @@ impl<
         even_verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
         odd_verifier: &mut Verifier<MerlinTranscript, Affine<G1>>,
     ) -> Result<()> {
+        if nullifier.is_zero() {
+            return Err(Error::PointAtIdentity);
+        }
         self.re_randomized_path
             .select_and_rerandomize_verifier_gadget::<Parameters0, Parameters1>(
                 root,
@@ -4672,6 +4679,98 @@ pub mod tests {
             ),
             Error::ProofVerificationError(_),
             "Nullifier verification failed"
+        );
+    }
+
+    #[test]
+    fn fee_spend_with_identity_nullifier_rejected() {
+        // A fee account with `rho = 0` has the identity as nullifier; topup and payment verification reject it.
+        let mut rng = rand::thread_rng();
+
+        const NUM_GENS: usize = 1 << 13;
+        const L: usize = 64;
+        let (account_tree_params, account_comm_key, _) = setup_gens_new::<NUM_GENS>(b"testing");
+
+        let asset_id = 1;
+        let (sk, pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+        let mut account = new_fee_account::<_, PallasA>(&mut rng, asset_id, pk, 1000);
+        account.rho = F0::from(0u64);
+        account.initial_rho = F0::from(0u64);
+        let account_comm = account.commit(&account_comm_key).unwrap();
+
+        let account_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
+            &[account_comm.0],
+            &account_tree_params,
+            Some(6),
+        );
+        let root = account_tree.root_node();
+        let nonce = b"test-nonce";
+
+        let updated_account = account.get_state_for_topup(10).unwrap();
+        let updated_account_comm = updated_account.commit(&account_comm_key).unwrap();
+        let (proof, nullifier) = FeeAccountTopupTxnProof::new::<_, PallasParams, VestaParams>(
+            &mut rng,
+            sk.0,
+            10,
+            &account,
+            &updated_account,
+            updated_account_comm,
+            account_tree.get_path_to_leaf_for_proof(0, 0).unwrap(),
+            &root,
+            nonce,
+            &account_tree_params,
+            account_comm_key.clone(),
+        )
+        .unwrap();
+        assert!(nullifier.is_zero());
+        assert_err!(
+            proof.verify(
+                pk.0,
+                asset_id,
+                10,
+                updated_account_comm,
+                nullifier,
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                &mut rng,
+                None,
+            ),
+            Error::PointAtIdentity
+        );
+
+        let updated_account = account.get_state_for_payment(10).unwrap();
+        let updated_account_comm = updated_account.commit(&account_comm_key).unwrap();
+        let (proof, nullifier) = FeePaymentProof::new::<_, PallasParams, VestaParams>(
+            &mut rng,
+            10,
+            sk.0,
+            &account,
+            &updated_account,
+            updated_account_comm,
+            account_tree.get_path_to_leaf_for_proof(0, 0).unwrap(),
+            &root,
+            nonce,
+            &account_tree_params,
+            account_comm_key.clone(),
+        )
+        .unwrap();
+        assert!(nullifier.is_zero());
+        assert_err!(
+            proof.verify(
+                asset_id,
+                10,
+                updated_account_comm,
+                nullifier,
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                &mut rng,
+                None,
+            ),
+            Error::PointAtIdentity
         );
     }
 
