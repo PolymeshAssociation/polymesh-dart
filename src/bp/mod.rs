@@ -504,7 +504,10 @@ mod tests {
         let mut state = AssetState::new::<()>(0, &[], &[]).unwrap();
         assert!(!state.frozen);
         let unfrozen_leaf = state.commitment().unwrap();
-        assert_eq!(unfrozen_leaf, state.keys.commitment(state.asset_id).unwrap());
+        assert_eq!(
+            unfrozen_leaf,
+            state.keys.commitment(state.asset_id).unwrap()
+        );
         state.frozen = true;
         let asset_data = state.asset_data().unwrap();
         assert!(asset_data.frozen);
