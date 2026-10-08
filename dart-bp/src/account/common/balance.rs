@@ -82,19 +82,7 @@ impl<F0: PrimeField, G0: SWCurveConfig<ScalarField = F0> + Clone + Copy>
         pc_gens: &PedersenGens<Affine<G0>>,
         bp_gens: &BulletproofGens<Affine<G0>>,
     ) -> Result<Self> {
-        let mut delta = 0i64;
-        for config in &balance_change_config {
-            if config.has_balance_decreased {
-                delta = delta + (config.amount as i64);
-            } else {
-                delta = delta - (config.amount as i64);
-            }
-        }
-        let (amount, has_balance_decreased) = if delta > 0 {
-            (delta as Balance, true)
-        } else {
-            (-delta as Balance, false)
-        };
+        let (amount, has_balance_decreased) = net_balance_change(&balance_change_config)?;
         ensure_correct_balance_change(account, updated_account, amount, has_balance_decreased)?;
 
         let mut amounts = Vec::with_capacity(balance_change_config.len());
@@ -173,13 +161,19 @@ pub fn ensure_correct_balance_change<G: AffineRepr>(
         }
 
         if has_balance_decreased {
-            if new_state.balance() != old_state.balance() - amount {
+            let expected_balance = old_state.balance().checked_sub(amount).ok_or_else(|| {
+                Error::ProofGenerationError("Balance decrease underflow".to_string())
+            })?;
+            if new_state.balance() != expected_balance {
                 return Err(Error::ProofGenerationError(
                     "Balance decrease incorrect".to_string(),
                 ));
             }
         } else {
-            if new_state.balance() != old_state.balance() + amount {
+            let expected_balance = old_state.balance().checked_add(amount).ok_or_else(|| {
+                Error::ProofGenerationError("Balance increase overflow".to_string())
+            })?;
+            if new_state.balance() != expected_balance {
                 return Err(Error::ProofGenerationError(
                     "Balance increase incorrect".to_string(),
                 ));
@@ -271,5 +265,81 @@ impl<F0: PrimeField, G0: SWCurveConfig<ScalarField = F0> + Clone + Copy>
             comm_bp_bal: self.comm_bp_bal,
             resp_comm_bp_bal,
         })
+    }
+}
+
+fn net_balance_change(configs: &[BalanceChangeConfig]) -> Result<(Balance, bool)> {
+    let mut delta: i128 = 0;
+    for config in configs {
+        let amount = config.amount as i128;
+        if config.has_balance_decreased {
+            delta += amount;
+        } else {
+            delta -= amount;
+        }
+    }
+
+    let abs_delta = delta.abs();
+    #[cfg(not(feature = "ignore_prover_input_sanitation"))]
+    {
+        if abs_delta > MAX_BALANCE as i128 {
+            return Err(Error::AmountTooLarge(Balance::MAX));
+        }
+    }
+    if delta > 0 {
+        Ok((abs_delta as Balance, true))
+    } else {
+        Ok((abs_delta as Balance, false))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dec(amount: Balance) -> BalanceChangeConfig {
+        BalanceChangeConfig {
+            amount,
+            has_balance_decreased: true,
+        }
+    }
+
+    fn inc(amount: Balance) -> BalanceChangeConfig {
+        BalanceChangeConfig {
+            amount,
+            has_balance_decreased: false,
+        }
+    }
+
+    #[test]
+    fn net_balance_change_works() {
+        let (amount, decreased) = net_balance_change(&[dec(1u64 << 63)]).unwrap();
+        assert_eq!(amount, 1u64 << 63);
+        assert!(decreased);
+
+        let (amount, decreased) = net_balance_change(&[inc(1u64 << 63)]).unwrap();
+        assert_eq!(amount, 1u64 << 63);
+        assert!(!decreased);
+
+        let (amount, decreased) = net_balance_change(&[dec(MAX_BALANCE)]).unwrap();
+        assert_eq!(amount, MAX_BALANCE);
+        assert!(decreased);
+
+        let (amount, decreased) = net_balance_change(&[dec(MAX_BALANCE), inc(5)]).unwrap();
+        assert_eq!(amount, MAX_BALANCE - 5);
+        assert!(decreased);
+
+        let (amount, decreased) = net_balance_change(&[]).unwrap();
+        assert_eq!(amount, 0);
+        assert!(!decreased);
+
+        assert!(matches!(
+            net_balance_change(&[dec(MAX_BALANCE), dec(MAX_BALANCE)]),
+            Err(Error::AmountTooLarge(_))
+        ));
+        assert!(matches!(
+            net_balance_change(&[inc(MAX_BALANCE), inc(MAX_BALANCE)]),
+            Err(Error::AmountTooLarge(_))
+        ));
     }
 }

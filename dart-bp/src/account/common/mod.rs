@@ -1691,17 +1691,17 @@ pub fn ensure_same_accounts<G: AffineRepr>(
         }
         if old_state.current_rho * old_state.rho != new_state.current_rho {
             return Err(Error::ProofGenerationError(
-                "Randomness not correctly constructed".to_string(),
+                "New rho not correctly constructed".to_string(),
             ));
         }
         if old_state.randomness != new_state.randomness {
             return Err(Error::ProofGenerationError(
-                "Randomness not correctly constructed".to_string(),
+                "Initial mismatch between old and new account states".to_string(),
             ));
         }
         if old_state.current_randomness * old_state.randomness != new_state.current_randomness {
             return Err(Error::ProofGenerationError(
-                "Randomness not correctly constructed".to_string(),
+                "New randomness not correctly constructed".to_string(),
             ));
         }
         Ok(())

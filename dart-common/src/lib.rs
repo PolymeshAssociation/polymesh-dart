@@ -11,10 +11,10 @@ pub type MediatorId = u8;
 pub type SkGenCounter = u16;
 pub type NullifierSkGenCounter = u16;
 
-pub const BALANCE_BITS: u16 = 48;
-pub const MAX_BALANCE: u64 = (1 << BALANCE_BITS) - 1;
+pub const BALANCE_BITS: u16 = 64;
+pub const MAX_BALANCE: u64 = u64::MAX;
 
-// 40 bits is >1M WPolyX since WPolyX has 6 decimal places. BALANCE_BITS (48) bits certainly seems high
+// 40 bits is >1M WPolyX since WPolyX has 6 decimal places. BALANCE_BITS (64) bits certainly seems high
 pub const FEE_BALANCE_BITS: u16 = 40;
 pub const MAX_FEE_BALANCE: u64 = (1 << FEE_BALANCE_BITS) - 1;
 
