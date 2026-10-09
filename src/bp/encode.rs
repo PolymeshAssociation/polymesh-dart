@@ -365,7 +365,8 @@ impl TypeInfo for DartBPGenerators {
                     .field(|f| f.name("sig_key_gen").ty::<CompressedAffine>())
                     .field(|f| f.name("enc_key_gen").ty::<CompressedAffine>())
                     .field(|f| f.name("account_comm_key").ty::<AccountCommitmentKey>())
-                    .field(|f| f.name("leg_asset_value_gen").ty::<CompressedAffine>()),
+                    .field(|f| f.name("leg_asset_value_gen").ty::<CompressedAffine>())
+                    .field(|f| f.name("force_transfer_enc_gen").ty::<CompressedAffine>()),
             )
     }
 }

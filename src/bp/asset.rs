@@ -40,11 +40,8 @@ impl AssetPkTLookup {
         self.assets.insert(asset_id, pk_t);
     }
 
-    /// Retrieves the pk_T encryption key for the specified asset.
-    ///
-    /// # Errors
-    ///
-    /// Returns an `Error::AssetNotFound` if the asset is not present in the lookup table.
+    /// Retrieves the pk_T encryption key for the specified asset, or `None` if the asset is not
+    /// present in the lookup table.
     pub fn get(&self, asset_id: AssetId) -> Option<&EncryptionPublicKey> {
         self.assets.get(&asset_id)
     }

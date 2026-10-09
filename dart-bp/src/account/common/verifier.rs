@@ -53,6 +53,9 @@ pub struct StateChangeVerifier<
     pub odd_verifier: Option<Verifier<MerlinTranscript, Affine<G1>>>,
     pub re_randomized_leaf: Affine<G0>,
     pub legs_with_conf: Vec<LegVerifierConfig<Affine<G0>>>,
+    /// `y_elsewhere` (per revealed-elsewhere leg) computed once in the challenge phase and reused by
+    /// `verify_sigma_protocols`.
+    pub y_elsewhere: Vec<Affine<G0>>,
 }
 
 impl<
@@ -342,30 +345,32 @@ impl<
 
         let needs_ct_amount: Vec<bool> =
             legs_with_conf.iter().map(|c| c.needs_ct_amount()).collect();
-        enforce_constraints_and_take_challenge_contrib_of_sigma_t_values_for_common_state_change(
-            legs_with_conf
-                .iter()
-                .map(|l| (l.encryption.clone(), l.party_eph_pk.clone()))
-                .collect(),
-            asset_id,
-            &nullifier,
-            proof.partial.comm_bp_randomness_relations,
-            &proof.resp_acc_old,
-            &proof.resp_acc_new,
-            &proof.partial.resp_bp_randomness_relations,
-            &proof.partial.resp_null,
-            &proof.resp_leg_link,
-            &needs_ct_amount,
-            even_verifier,
-            account_comm_key,
-            enc_gen,
-        )?;
+        let y_elsewhere =
+            enforce_constraints_and_take_challenge_contrib_of_sigma_t_values_for_common_state_change(
+                legs_with_conf
+                    .iter()
+                    .map(|l| (l.encryption.clone(), l.party_eph_pk.clone()))
+                    .collect(),
+                asset_id,
+                &nullifier,
+                proof.partial.comm_bp_randomness_relations,
+                &proof.resp_acc_old,
+                &proof.resp_acc_new,
+                &proof.partial.resp_bp_randomness_relations,
+                &proof.partial.resp_null,
+                &proof.resp_leg_link,
+                &needs_ct_amount,
+                even_verifier,
+                account_comm_key,
+                enc_gen,
+            )?;
         // External `Verifier`s will be used to verify this
         Ok(Self {
             even_verifier: None,
             odd_verifier: None,
             re_randomized_leaf,
             legs_with_conf,
+            y_elsewhere,
         })
     }
 
@@ -457,6 +462,7 @@ impl<
             pc_gens,
             bp_gens,
             enc_gen,
+            Some(&self.y_elsewhere),
             rmc.as_deref_mut(),
         )?;
 
@@ -525,6 +531,14 @@ pub struct SplitStateChangeVerifier<
     pub odd_verifier: Option<Verifier<MerlinTranscript, Affine<G1>>>,
     pub re_randomized_leaf: Affine<G0>,
     pub legs_with_conf: Vec<LegVerifierConfig<Affine<G0>>>,
+    /// `ct_asset_id_2 = ct_asset_id - ct_asset_id_1` and `ct_amount_2 = ct_amount - ct_amount_1`
+    /// computed once in the challenge phase and reused by `verify_sigma_protocols`.
+    pub ct_asset_id_2s: Vec<Affine<G0>>,
+    pub ct_amount_2s: Vec<Affine<G0>>,
+    /// Host old/new account commitments computed once in the challenge phase and reused by
+    /// `verify_sigma_protocols`.
+    pub y_old: Affine<G0>,
+    pub y_new: Affine<G0>,
 }
 
 impl<
@@ -742,9 +756,10 @@ impl<
         }
 
         // ct_asset_id_2 challenge contributions
-        if !is_asset_id_revealed {
-            let mut transcript = even_verifier.transcript();
-            let mut asset_id_idx = 0;
+        let ct_asset_id_2s = if !is_asset_id_revealed {
+            // `ct_asset_id_2 = ct_asset_id - ct_asset_id_1` for every hidden-asset-id leg, computed
+            // with one shared batch normalization.
+            let mut ct_asset_id_2s = Vec::new();
             for leg_conf in &legs_with_conf {
                 if !leg_conf.encryption.is_asset_id_revealed() {
                     let ct_asset_id =
@@ -753,52 +768,63 @@ impl<
                                 "ct_asset_id missing for leg with hidden asset-id".to_string(),
                             )
                         })?;
-                    let ct_asset_id_1 = proof.auth_proof.partial_ct_asset_ids[asset_id_idx];
-                    let ct_asset_id_2 =
-                        (ct_asset_id.into_group() - ct_asset_id_1.into_group()).into_affine();
-                    proof.resp_ct_asset_id[asset_id_idx].challenge_contribution(
-                        &enc_gen,
-                        &B_blinding,
-                        &ct_asset_id_2,
-                        dst::HOST_CT_ASSET_ID_2,
-                        &mut transcript,
-                    )?;
-                    asset_id_idx += 1;
+                    let ct_asset_id_1 = proof.auth_proof.partial_ct_asset_ids[ct_asset_id_2s.len()];
+                    ct_asset_id_2s.push(ct_asset_id.into_group() - ct_asset_id_1.into_group());
                 }
             }
-        }
+            let ct_asset_id_2s =
+                <Affine<G0> as AffineRepr>::Group::normalize_batch(&ct_asset_id_2s);
+
+            let mut transcript = even_verifier.transcript();
+            for (asset_id_idx, &ct_asset_id_2) in ct_asset_id_2s.iter().enumerate() {
+                proof.resp_ct_asset_id[asset_id_idx].challenge_contribution(
+                    &enc_gen,
+                    &B_blinding,
+                    &ct_asset_id_2,
+                    dst::HOST_CT_ASSET_ID_2,
+                    &mut transcript,
+                )?;
+            }
+            ct_asset_id_2s
+        } else {
+            Vec::new()
+        };
 
         // ct_amount_2 challenge contributions (one per needs_ct_amount leg), mirroring the host
-        {
-            let mut transcript = even_verifier.transcript();
-            let mut amount_idx = 0;
+        let ct_amount_2s = {
+            // `ct_amount_2 = ct_amount - ct_amount_1` for every needs_ct_amount leg, computed with
+            // one shared batch normalization.
+            let mut ct_amount_2s = Vec::new();
             for leg_conf in &legs_with_conf {
                 if leg_conf.needs_ct_amount() {
                     let ct_amount = leg_conf.encryption.ct_amount;
-                    let ct_amount_1 = proof.auth_proof.partial_ct_amounts[amount_idx];
-                    let ct_amount_2 =
-                        (ct_amount.into_group() - ct_amount_1.into_group()).into_affine();
-                    proof.resp_ct_amount[amount_idx].challenge_contribution(
-                        &enc_gen,
-                        &B_blinding,
-                        &ct_amount_2,
-                        dst::HOST_CT_AMOUNT_2,
-                        &mut transcript,
-                    )?;
-                    amount_idx += 1;
+                    let ct_amount_1 = proof.auth_proof.partial_ct_amounts[ct_amount_2s.len()];
+                    ct_amount_2s.push(ct_amount.into_group() - ct_amount_1.into_group());
                 }
             }
-        }
+            let ct_amount_2s = <Affine<G0> as AffineRepr>::Group::normalize_batch(&ct_amount_2s);
 
+            let mut transcript = even_verifier.transcript();
+            for (amount_idx, &ct_amount_2) in ct_amount_2s.iter().enumerate() {
+                proof.resp_ct_amount[amount_idx].challenge_contribution(
+                    &enc_gen,
+                    &B_blinding,
+                    &ct_amount_2,
+                    dst::HOST_CT_AMOUNT_2,
+                    &mut transcript,
+                )?;
+            }
+            ct_amount_2s
+        };
+
+        let (y_old, y_new) = old_and_new_host_commitments(
+            proof,
+            re_randomized_leaf,
+            updated_account_commitment,
+            &legs_with_conf,
+            account_comm_key,
+        )?;
         {
-            let (y_old, y_new) = old_and_new_host_commitments(
-                proof,
-                re_randomized_leaf,
-                updated_account_commitment,
-                &legs_with_conf,
-                account_comm_key,
-            )?;
-
             let transcript = even_verifier.transcript();
             transcript.append(b"acc_comm_old", &y_old);
             transcript.append(b"acc_comm_new", &y_new);
@@ -809,6 +835,10 @@ impl<
             odd_verifier: None,
             re_randomized_leaf,
             legs_with_conf,
+            ct_asset_id_2s,
+            ct_amount_2s,
+            y_old,
+            y_new,
         })
     }
 
@@ -903,7 +933,6 @@ impl<
         common_proof: &CommonAffirmationSplitProof<L, F0, F1, G0, G1>,
         balance_proof: Option<&BalanceChangeSplitProof<F0, G0>>,
         challenge: &F0,
-        updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         nullifier: Affine<G0>,
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: &impl AccountCommitmentKeyTrait<Affine<G0>>,
@@ -924,7 +953,6 @@ impl<
             common_proof,
             balance_proof,
             challenge,
-            updated_account_commitment,
             nullifier,
             account_tree_params,
             account_comm_key,
@@ -955,7 +983,6 @@ impl<
         common_proof: &CommonAffirmationSplitProof<L, F0, F1, G0, G1>,
         balance_proof: Option<&BalanceChangeSplitProof<F0, G0>>,
         challenge: &F0,
-        updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         nullifier: Affine<G0>,
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: &impl AccountCommitmentKeyTrait<Affine<G0>>,
@@ -971,13 +998,7 @@ impl<
             .pc_gens()
             .B_blinding;
 
-        let (y_old, y_new) = old_and_new_host_commitments(
-            common_proof,
-            self.re_randomized_leaf,
-            updated_account_commitment,
-            &self.legs_with_conf,
-            account_comm_key,
-        )?;
+        let (y_old, y_new) = (self.y_old, self.y_new);
 
         let (gens_acc_old, gens_acc_new): (Vec<Affine<G0>>, Vec<Affine<G0>>) =
             if is_asset_id_revealed {
@@ -1130,13 +1151,16 @@ impl<
         // Recovering ct_amount from its two halves forces sk_enc^-1 to be the account's. For
         // balance-changed legs collect the amount response (response1) for the balance BP.
         let B_blinding = account_tree_params.even_parameters.pc_gens().B_blinding;
+        // `ct_amount_2 = ct_amount - ct_amount_1`, precomputed in the challenge phase from the same
+        // proof (`common_proof` here must be the proof this verifier was initialized for).
+        let ct_amount_2s = &self.ct_amount_2s;
         let mut balance_amount_resps: Vec<F0> = Vec::new();
         let mut amount_idx = 0;
         for leg_conf in &self.legs_with_conf {
             if leg_conf.needs_ct_amount() {
-                let ct_amount = leg_conf.encryption.ct_amount;
-                let ct_amount_1 = common_proof.auth_proof.partial_ct_amounts[amount_idx];
-                let ct_amount_2 = (ct_amount.into_group() - ct_amount_1.into_group()).into_affine();
+                let ct_amount_2 = ct_amount_2s.get(amount_idx).copied().ok_or_else(|| {
+                    Error::ProofVerificationError("Missing ct_amount_2 for leg".to_string())
+                })?;
                 verify_or_rmc_3!(
                     rmc,
                     common_proof.resp_ct_amount[amount_idx],
@@ -1205,18 +1229,18 @@ impl<
         // Verify ct_asset_id_2 PokPedersenCommitment proofs
         if !is_asset_id_revealed {
             let B_blinding = account_tree_params.even_parameters.pc_gens().B_blinding;
+            // `ct_asset_id_2 = ct_asset_id - ct_asset_id_1`, precomputed in the challenge phase.
+            let ct_asset_id_2s = &self.ct_asset_id_2s;
+
             let mut asset_id_idx = 0;
             for leg_conf in &self.legs_with_conf {
                 if !leg_conf.encryption.is_asset_id_revealed() {
-                    let ct_asset_id =
-                        leg_conf.encryption.asset_id_ciphertext().ok_or_else(|| {
+                    let ct_asset_id_2 =
+                        ct_asset_id_2s.get(asset_id_idx).copied().ok_or_else(|| {
                             Error::ProofVerificationError(
-                                "ct_asset_id missing for leg with hidden asset-id".to_string(),
+                                "Missing ct_asset_id_2 for leg".to_string(),
                             )
                         })?;
-                    let ct_asset_id_1 = common_proof.auth_proof.partial_ct_asset_ids[asset_id_idx];
-                    let ct_asset_id_2 =
-                        (ct_asset_id.into_group() - ct_asset_id_1.into_group()).into_affine();
 
                     verify_or_rmc_3!(
                         rmc,
@@ -1248,7 +1272,6 @@ impl<
         common_proof: &CommonAffirmationSplitProof<L, F0, F1, G0, G1>,
         balance_proof: Option<&BalanceChangeSplitProof<F0, G0>>,
         challenge: &F0,
-        updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         nullifier: Affine<G0>,
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: &impl AccountCommitmentKeyTrait<Affine<G0>>,
@@ -1266,7 +1289,6 @@ impl<
             common_proof,
             balance_proof,
             challenge,
-            updated_account_commitment,
             nullifier,
             account_tree_params,
             account_comm_key,
