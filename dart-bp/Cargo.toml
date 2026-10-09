@@ -68,7 +68,7 @@ name = "batch_decrypt"
 harness = false
 
 [features]
-default = ["std", "asm", "parallel", "build-tables"]
+default = ["std", "asm", "parallel"]
 
 no_std = []
 

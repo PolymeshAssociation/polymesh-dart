@@ -1763,7 +1763,11 @@ pub(crate) fn add_leg_link_verifier_challenge_contributions<G0: SWCurveConfig + 
                             "asset_id revealed elsewhere but no asset_id provided".to_string(),
                         )
                     })?;
-                    let y = y_elsewhere[elsewhere_idx];
+                    let y = y_elsewhere.get(elsewhere_idx).copied().ok_or_else(|| {
+                        Error::ProofVerificationError(
+                            "Missing y_elsewhere for a revealed-elsewhere leg".to_string(),
+                        )
+                    })?;
                     elsewhere_idx += 1;
                     resp.challenge_contribution(
                         &eph_pk_asset_id,
@@ -1974,7 +1978,11 @@ pub(crate) fn verify_leg_link_for_common_state_change<G0: SWCurveConfig + Copy>(
                                 .to_string(),
                         )
                     })?;
-                    let y = y_elsewhere[elsewhere_idx];
+                    let y = y_elsewhere.get(elsewhere_idx).copied().ok_or_else(|| {
+                        Error::ProofVerificationError(
+                            "Missing y_elsewhere for a revealed-elsewhere leg".to_string(),
+                        )
+                    })?;
                     elsewhere_idx += 1;
                     verify_or_rmc_2!(
                         rmc,

@@ -10439,7 +10439,6 @@ macro_rules! verify_split_proof {
             .verify_and_return_tuples::<_, PallasParams, VestaParams>(
                 verifier,
                 &challenge_h_v,
-                $uac,
                 $nullifier,
                 $atp,
                 $ack,
@@ -10544,7 +10543,6 @@ macro_rules! verify_split_proof {
             .verify_and_return_tuples::<_, PallasParams, VestaParams>(
                 verifier,
                 &challenge_h_final_v,
-                $uac,
                 $nullifier,
                 $atp,
                 $ack,
@@ -12700,7 +12698,6 @@ fn verify_sender_split(
         .verify_and_return_tuples::<_, PallasParams, VestaParams>(
             verifier,
             &challenge_h_v,
-            updated_account_comm,
             nullifier,
             account_tree_params,
             account_comm_key,
@@ -12784,7 +12781,6 @@ fn verify_receiver_split(
         .verify_and_return_tuples::<_, PallasParams, VestaParams>(
             verifier,
             &challenge_h_v,
-            updated_account_comm,
             nullifier,
             account_tree_params,
             account_comm_key,

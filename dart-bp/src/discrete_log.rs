@@ -347,3 +347,35 @@ fn solve_discrete_log_bsgs_tail<G: AdditiveGroup + CurveGroup>(
             scan_single_strided(baby_steps, base_m, starting_point, steps).map(|v| v + offset)
         })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ark_pallas::Projective;
+    use ark_std::{UniformRand, vec::Vec};
+    use rand_chacha::ChaCha20Rng;
+    use rand_core::SeedableRng;
+
+    #[test]
+    fn precomputed_single_and_batch() {
+        let mut rng = ChaCha20Rng::seed_from_u64(7);
+        let base = Projective::rand(&mut rng);
+        let max = 1u64 << 20;
+        let values: Vec<u64> = [0, 1, 5, 1 << 17, (1 << 17) + 3, max - 1, max].to_vec();
+        let targets: Vec<Projective> = values
+            .iter()
+            .map(|v| base * ark_pallas::Fr::from(*v))
+            .collect();
+        for (v, t) in values.iter().zip(targets.iter()) {
+            assert_eq!(solve_discrete_log_precomputed(max, base, *t), Some(*v));
+        }
+        let solved = solve_discrete_log_precomputed_batch(max, base, &targets);
+        assert_eq!(solved, values.iter().map(|v| Some(*v)).collect::<Vec<_>>());
+        assert!(solve_discrete_log_precomputed_batch(max, base, &[]).is_empty());
+        let out_of_range = base * ark_pallas::Fr::from(max + 1);
+        assert_eq!(
+            solve_discrete_log_precomputed(max, base, out_of_range),
+            None
+        );
+    }
+}

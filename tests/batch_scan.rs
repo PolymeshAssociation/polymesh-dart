@@ -207,3 +207,36 @@ fn try_decrypt_does_not_decrypt_amount_on_foreign_legs() {
 
     assert_eq!(found, n / 2);
 }
+
+#[test]
+fn is_party_identifies_sender_and_receiver() {
+    let mut rng = rand::thread_rng();
+    let a_keys = AccountKeys::rand(&mut rng).unwrap();
+    let b_keys = AccountKeys::rand(&mut rng).unwrap();
+    let c_keys = AccountKeys::rand(&mut rng).unwrap();
+    let (a, b) = (a_keys.public_keys(), b_keys.public_keys());
+    let no_auditor = None::<fn(&AssetId) -> Option<Balance>>;
+
+    for reveal_asset_id in [false, true] {
+        let leg = encrypt_leg(
+            &mut rng,
+            a.enc,
+            b.enc,
+            3,
+            500,
+            PartyVisibility::FullVisibility,
+            reveal_asset_id,
+        );
+        for (keys, expected) in [
+            (&a_keys, Some(LegRole::sender())),
+            (&b_keys, Some(LegRole::receiver())),
+            (&c_keys, None),
+        ] {
+            let role = leg
+                .is_party(&keys.enc, Some(keys.acct.public), None, no_auditor)
+                .unwrap();
+            assert_eq!(role, expected);
+            assert_eq!(role, leg.try_decrypt(keys).map(|(_, role)| role));
+        }
+    }
+}

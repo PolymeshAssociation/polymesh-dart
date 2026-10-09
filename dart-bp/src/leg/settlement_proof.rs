@@ -11,6 +11,7 @@ use crate::{
     error::Result,
 };
 use ark_dlog_gadget::dlog::DiscreteLogParameters;
+use ark_ec::AffineRepr;
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ec_divisors::DivisorCurve;
 use ark_ff::PrimeField;
@@ -248,8 +249,8 @@ impl<
         let mut leg_proofs = Vec::with_capacity(num_legs);
         let mut hidden_asset_idx = 0;
         let mut asset_data_iter = asset_data.into_iter();
-        // Legs of the same asset share one `asset_data.points()` list; memoize by asset id.
-        let mut asset_points_cache: BTreeMap<_, Vec<Affine<G0>>> = BTreeMap::new();
+        // Legs of the same asset share one `asset_data.points()` list; memoize by the coordinates of `asset_data.commitment`.
+        let mut asset_points_cache: BTreeMap<(F0, F0), Vec<Affine<G0>>> = BTreeMap::new();
 
         for ((leg, leg_enc), leg_enc_rand) in legs.into_iter().zip(leg_encs).zip(leg_enc_rands) {
             let leg_proof = if leg_enc.is_asset_id_revealed() {
@@ -270,8 +271,9 @@ impl<
                 let asset_data = asset_data_iter
                     .next()
                     .expect("asset_data length validated to equal hidden-asset legs");
+                let commitment_xy = asset_data.commitment.xy().ok_or(Error::PointAtIdentity)?;
                 let asset_data_points = asset_points_cache
-                    .entry(asset_data.id)
+                    .entry(commitment_xy)
                     .or_insert_with(|| asset_data.points(asset_comm_params))
                     .clone();
                 let proof =

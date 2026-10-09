@@ -1926,19 +1926,6 @@ impl<
             );
         }
 
-        // `y = ct_med - re_rand_point` for every mediator, with one shared batch normalization.
-        let y_meds_ct = <Affine<G0> as AffineRepr>::Group::normalize_batch(
-            &mediators
-                .iter()
-                .zip(
-                    self.re_randomized_points
-                        .re_randomized_points
-                        .iter()
-                        .skip(num_enc_keys + 1),
-                )
-                .map(|(mediator, re_rand_point)| mediator.ct_med - re_rand_point)
-                .collect::<Vec<_>>(),
-        );
         for (i, (((p_0, p_1, p_2), mediator), _re_rand_point)) in self
             .resp_eph_pk_meds
             .iter()

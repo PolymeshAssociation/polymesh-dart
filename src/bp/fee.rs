@@ -880,27 +880,37 @@ impl<
         let odd_gates = tree_mult_gate_estimate(odd_levels, FEE_ACCOUNT_TREE_L, 1);
         let (even_chunk_len, odd_chunk_len) =
             get_chunk_lengths::<C::DLogParams0, C::DLogParams1>(None, (even_gates, odd_gates));
+
+        // 2 * C::DLogParams0::decomposition_size() because it contains the scalar decomposition and
+        // divisor coefficients.
         let even_chunks = 2 * C::DLogParams0::decomposition_size() / even_chunk_len;
         let odd_chunks = 2 * C::DLogParams1::decomposition_size() / odd_chunk_len;
+
         let compact_len = |length: usize| codec::Compact(length as u64).encoded_size();
         let point_size = ARK_EC_BASE_FIELD_SIZE;
 
-        let path_size = 2 * compact_len(even_levels)
-            + 2 * compact_len(odd_levels)
-            + height * point_size
+        let path_size =
+            // 2 `Compact` per level. Each `Compact` is for length of a vector; vectors at each level
+            // being for randomized nodes and divisor commitments.
+            2 * (compact_len(even_levels) + compact_len(odd_levels))
+            + height * point_size // 1 point per randomized node
+                // For divisor commitments at each level.
             + even_levels * (compact_len(even_chunks) + even_chunks * point_size)
             + odd_levels * (compact_len(odd_chunks) + odd_chunks * point_size);
 
         let r1cs_size =
             |levels: usize, chunks: usize, chunk_len: usize, gates: usize, root: bool| {
                 let non_root_levels = levels - usize::from(root);
+                // Only non-root levels have divisor coefficients and hence commitments.
                 let vector_commitments = levels * chunks + non_root_levels;
                 let coefficient_commitments = 3 * vector_commitments + 5;
                 let dimension = gates.max(if levels > 0 { chunk_len } else { 1 });
                 let rounds = dimension.next_power_of_two().ilog2() as usize;
+                // Points and scalars each R1CS proof contains like commitment to input, output wires,
+                // blinding, the evaluation of combined polynomial, etc
                 let fixed_points_and_scalars = 8 * point_size;
                 fixed_points_and_scalars
-                    + 1
+                    + 1         // Option for second phase of R1CS
                     + compact_len(coefficient_commitments)
                     + coefficient_commitments * point_size
                     + 2 * (compact_len(rounds) + rounds * point_size)
@@ -909,7 +919,7 @@ impl<
             even_levels,
             even_chunks,
             even_chunk_len,
-            even_gates + usize::from(polymesh_dart_common::FEE_BALANCE_BITS),
+            even_gates + usize::from(FEE_BALANCE_BITS),
             height % 2 == 0,
         );
         let odd_proof_size = r1cs_size(

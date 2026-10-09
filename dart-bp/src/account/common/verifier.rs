@@ -535,6 +535,10 @@ pub struct SplitStateChangeVerifier<
     /// computed once in the challenge phase and reused by `verify_sigma_protocols`.
     pub ct_asset_id_2s: Vec<Affine<G0>>,
     pub ct_amount_2s: Vec<Affine<G0>>,
+    /// Host old/new account commitments computed once in the challenge phase and reused by
+    /// `verify_sigma_protocols`.
+    pub y_old: Affine<G0>,
+    pub y_new: Affine<G0>,
 }
 
 impl<
@@ -813,15 +817,14 @@ impl<
             ct_amount_2s
         };
 
+        let (y_old, y_new) = old_and_new_host_commitments(
+            proof,
+            re_randomized_leaf,
+            updated_account_commitment,
+            &legs_with_conf,
+            account_comm_key,
+        )?;
         {
-            let (y_old, y_new) = old_and_new_host_commitments(
-                proof,
-                re_randomized_leaf,
-                updated_account_commitment,
-                &legs_with_conf,
-                account_comm_key,
-            )?;
-
             let transcript = even_verifier.transcript();
             transcript.append(b"acc_comm_old", &y_old);
             transcript.append(b"acc_comm_new", &y_new);
@@ -834,6 +837,8 @@ impl<
             legs_with_conf,
             ct_asset_id_2s,
             ct_amount_2s,
+            y_old,
+            y_new,
         })
     }
 
@@ -928,7 +933,6 @@ impl<
         common_proof: &CommonAffirmationSplitProof<L, F0, F1, G0, G1>,
         balance_proof: Option<&BalanceChangeSplitProof<F0, G0>>,
         challenge: &F0,
-        updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         nullifier: Affine<G0>,
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: &impl AccountCommitmentKeyTrait<Affine<G0>>,
@@ -949,7 +953,6 @@ impl<
             common_proof,
             balance_proof,
             challenge,
-            updated_account_commitment,
             nullifier,
             account_tree_params,
             account_comm_key,
@@ -980,7 +983,6 @@ impl<
         common_proof: &CommonAffirmationSplitProof<L, F0, F1, G0, G1>,
         balance_proof: Option<&BalanceChangeSplitProof<F0, G0>>,
         challenge: &F0,
-        updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         nullifier: Affine<G0>,
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: &impl AccountCommitmentKeyTrait<Affine<G0>>,
@@ -996,13 +998,7 @@ impl<
             .pc_gens()
             .B_blinding;
 
-        let (y_old, y_new) = old_and_new_host_commitments(
-            common_proof,
-            self.re_randomized_leaf,
-            updated_account_commitment,
-            &self.legs_with_conf,
-            account_comm_key,
-        )?;
+        let (y_old, y_new) = (self.y_old, self.y_new);
 
         let (gens_acc_old, gens_acc_new): (Vec<Affine<G0>>, Vec<Affine<G0>>) =
             if is_asset_id_revealed {
@@ -1162,7 +1158,9 @@ impl<
         let mut amount_idx = 0;
         for leg_conf in &self.legs_with_conf {
             if leg_conf.needs_ct_amount() {
-                let ct_amount_2 = ct_amount_2s[amount_idx];
+                let ct_amount_2 = ct_amount_2s.get(amount_idx).copied().ok_or_else(|| {
+                    Error::ProofVerificationError("Missing ct_amount_2 for leg".to_string())
+                })?;
                 verify_or_rmc_3!(
                     rmc,
                     common_proof.resp_ct_amount[amount_idx],
@@ -1237,7 +1235,12 @@ impl<
             let mut asset_id_idx = 0;
             for leg_conf in &self.legs_with_conf {
                 if !leg_conf.encryption.is_asset_id_revealed() {
-                    let ct_asset_id_2 = ct_asset_id_2s[asset_id_idx];
+                    let ct_asset_id_2 =
+                        ct_asset_id_2s.get(asset_id_idx).copied().ok_or_else(|| {
+                            Error::ProofVerificationError(
+                                "Missing ct_asset_id_2 for leg".to_string(),
+                            )
+                        })?;
 
                     verify_or_rmc_3!(
                         rmc,
@@ -1269,7 +1272,6 @@ impl<
         common_proof: &CommonAffirmationSplitProof<L, F0, F1, G0, G1>,
         balance_proof: Option<&BalanceChangeSplitProof<F0, G0>>,
         challenge: &F0,
-        updated_account_commitment: AccountStateCommitment<Affine<G0>>,
         nullifier: Affine<G0>,
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: &impl AccountCommitmentKeyTrait<Affine<G0>>,
@@ -1287,7 +1289,6 @@ impl<
             common_proof,
             balance_proof,
             challenge,
-            updated_account_commitment,
             nullifier,
             account_tree_params,
             account_comm_key,

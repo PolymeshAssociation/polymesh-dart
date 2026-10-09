@@ -405,7 +405,6 @@ macro_rules! with_balance {
                             .verify_and_return_tuples::<_, C::DLogParams0, C::DLogParams1>(
                                 verifier,
                                 &challenge_h_final_v,
-                                updated_comm,
                                 nullifier,
                                 C::parameters(),
                                 &comm_key,
@@ -789,7 +788,6 @@ macro_rules! no_balance {
                             .verify_and_return_tuples::<_, C::DLogParams0, C::DLogParams1>(
                                 verifier,
                                 &challenge_h_final_v,
-                                updated_comm,
                                 nullifier,
                                 C::parameters(),
                                 &comm_key,

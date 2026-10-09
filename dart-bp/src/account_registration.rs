@@ -14,7 +14,6 @@ use crate::{
     NULLIFIER_SK_GEN_COUNTER_LABEL, PK_LABEL,
 };
 use crate::{AUTH_PROOF_LABEL, TXN_CHALLENGE_LABEL};
-use ark_ec::scalar_mul::BatchMulPreprocessing;
 use ark_ec::{AffineRepr, CurveGroup, VariableBaseMSM};
 use ark_ff::BigInteger;
 use ark_ff::field_hashers::{DefaultFieldHasher, HashToField};
@@ -633,19 +632,8 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         let enc_rands_blindings = (0..NUM_CHUNKS)
             .map(|_| G::ScalarField::rand(rng))
             .collect::<Vec<_>>();
-        // `enc_key_gen` and `pk_T` are each multiplied by `NUM_CHUNKS` randomness scalars.
-        let pk_t_table = BatchMulPreprocessing::<G::Group>::new((*pk_T).into_group(), NUM_CHUNKS);
-        let ek_table =
-            BatchMulPreprocessing::<G::Group>::new((*enc_key_gen).into_group(), NUM_CHUNKS);
         let ciphertexts = (0..NUM_CHUNKS)
-            .map(|i| {
-                Ciphertext::new_given_randomness_and_window_tables(
-                    &encs[i],
-                    &enc_rands[i],
-                    &pk_t_table,
-                    &ek_table,
-                )
-            })
+            .map(|i| Ciphertext::new_given_randomness(&encs[i], &enc_rands[i], pk_T, enc_key_gen))
             .collect::<Vec<_>>();
 
         let mut eph_proto = Vec::with_capacity(NUM_CHUNKS);

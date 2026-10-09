@@ -41,10 +41,6 @@ pub fn batch_decrypt_amounts<P: GLVConfig>(
 ) -> Result<Vec<Option<u64>>> {
     let pts = batch_decrypt_points::<P>(eph_pks, cts, sk)?;
     let base = enc_gen.into_group();
-    // Ok(pts
-    //     .iter()
-    //     .map(|pt| solve_discrete_log_precomputed::<Projective<P>>(max, base, pt.into_group()))
-    //     .collect())
     let targets = pts
         .iter()
         .map(|pt| pt.into_group())

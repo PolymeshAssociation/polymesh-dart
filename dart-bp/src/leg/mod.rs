@@ -17,7 +17,6 @@ use crate::batch_decrypt::batch_decrypt_points;
 use crate::discrete_log::{solve_discrete_log_precomputed, solve_discrete_log_precomputed_batch};
 use crate::util::bp_gens_for_vec_commitment;
 use crate::{Error, error::Result};
-use ark_ec::scalar_mul::BatchMulPreprocessing;
 use ark_ec::scalar_mul::glv::GLVConfig;
 use ark_ec::short_weierstrass::{Affine, Projective, SWCurveConfig};
 use ark_ec::{AffineRepr, CurveConfig, CurveGroup};
@@ -605,61 +604,43 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> Leg<G> {
         let r_meds: Option<Vec<F>> = (!config.reveal_asset_id)
             .then(|| (0..self.med_keys.len()).map(|_| F::rand(rng)).collect());
 
-        // Fixed-base window tables: each base below is multiplied by several scalars, so build one
-        // table per base and reuse it.
-        let n_ek = 4 + self.med_keys.len();
-        let ek_table = BatchMulPreprocessing::<G::Group>::new(enc_key_gen.into_group(), n_ek);
-        let eg_table = BatchMulPreprocessing::<G::Group>::new(enc_gen.into_group(), 2);
-        let pks_table = BatchMulPreprocessing::<G::Group>::new(pk_s_enc.into_group(), 4);
-        let pkr_table = BatchMulPreprocessing::<G::Group>::new(pk_r_enc.into_group(), 4);
-        let enc_key_tables: Vec<_> = self
-            .enc_keys
-            .iter()
-            .map(|pk| BatchMulPreprocessing::<G::Group>::new((*pk).into_group(), n_ek))
-            .collect();
-        let public_key_tables: Vec<_> = self
-            .public_enc_keys
-            .iter()
-            .map(|pk| BatchMulPreprocessing::<G::Group>::new((*pk).into_group(), 4))
-            .collect();
-
         let mut proj: Vec<G::Group> = Vec::new();
-        proj.push(ek_table.windowed_mul(&r1) + pk_s_enc); // ct_s
-        proj.push(ek_table.windowed_mul(&r2) + pk_r_enc); // ct_r
-        proj.push(ek_table.windowed_mul(&r3) + eg_table.windowed_mul(&amount)); // ct_amount
+        proj.push(enc_key_gen * r1 + pk_s_enc); // ct_s
+        proj.push(enc_key_gen * r2 + pk_r_enc); // ct_r
+        proj.push(enc_key_gen * r3 + enc_gen * amount); // ct_amount
         if !config.reveal_asset_id {
-            proj.push(ek_table.windowed_mul(&r4.unwrap()) + eg_table.windowed_mul(&asset_id)); // ct_asset_id
+            proj.push(enc_key_gen * r4.unwrap() + enc_gen * asset_id); // ct_asset_id
         }
-        proj.push(pks_table.windowed_mul(&r1)); // eph_pk_s.r1
-        proj.push(pks_table.windowed_mul(&r3)); // eph_pk_s.r3
+        proj.push(pk_s_enc * r1); // eph_pk_s.r1
+        proj.push(pk_s_enc * r3); // eph_pk_s.r3
         if let Some(r) = r4 {
-            proj.push(pks_table.windowed_mul(&r)); // eph_pk_s.r4
+            proj.push(pk_s_enc * r); // eph_pk_s.r4
         }
         if config.visibility.sender_sees_receiver() {
-            proj.push(pks_table.windowed_mul(&r2)); // eph_pk_s.r2 (cross)
+            proj.push(pk_s_enc * r2); // eph_pk_s.r2 (cross)
         }
-        proj.push(pkr_table.windowed_mul(&r2)); // eph_pk_r.r2
-        proj.push(pkr_table.windowed_mul(&r3)); // eph_pk_r.r3
+        proj.push(pk_r_enc * r2); // eph_pk_r.r2
+        proj.push(pk_r_enc * r3); // eph_pk_r.r3
         if let Some(r) = r4 {
-            proj.push(pkr_table.windowed_mul(&r)); // eph_pk_r.r4
+            proj.push(pk_r_enc * r); // eph_pk_r.r4
         }
         if config.visibility.receiver_sees_sender() {
-            proj.push(pkr_table.windowed_mul(&r1)); // eph_pk_r.r1 (cross)
+            proj.push(pk_r_enc * r1); // eph_pk_r.r1 (cross)
         }
-        for table in &enc_key_tables {
-            proj.push(table.windowed_mul(&r1));
-            proj.push(table.windowed_mul(&r2));
-            proj.push(table.windowed_mul(&r3));
+        for pk in self.enc_keys.iter() {
+            proj.push(*pk * r1);
+            proj.push(*pk * r2);
+            proj.push(*pk * r3);
             if let Some(r) = r4 {
-                proj.push(table.windowed_mul(&r));
+                proj.push(*pk * r);
             }
         }
-        for table in &public_key_tables {
-            proj.push(table.windowed_mul(&r1));
-            proj.push(table.windowed_mul(&r2));
-            proj.push(table.windowed_mul(&r3));
+        for pk in self.public_enc_keys.iter() {
+            proj.push(*pk * r1);
+            proj.push(*pk * r2);
+            proj.push(*pk * r3);
             if let Some(r) = r4 {
-                proj.push(table.windowed_mul(&r));
+                proj.push(*pk * r);
             }
         }
         // Mediator entries: one ephemeral per encryption key plus `ct_med`, all in the same batch.
@@ -667,10 +648,10 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> Leg<G> {
         let num_enc = self.enc_keys.len();
         if let Some(r_meds) = r_meds.as_ref() {
             for i in 0..self.med_keys.len() {
-                for table in &enc_key_tables {
-                    proj.push(table.windowed_mul(&r_meds[i])); // eph_pk_med_keys[k]
+                for pk in self.enc_keys.iter() {
+                    proj.push(*pk * r_meds[i]); // eph_pk_med_keys[k]
                 }
-                proj.push(ek_table.windowed_mul(&r_meds[i]) + self.med_keys[i]); // ct_med
+                proj.push(enc_key_gen * r_meds[i] + self.med_keys[i]); // ct_med
             }
         }
 
@@ -1272,25 +1253,11 @@ impl<P: GLVConfig> LegEncryption<Affine<P>> {
 
         let mut out = Vec::with_capacity(n);
         for i in 0..n {
-            // let amount = solve_discrete_log_precomputed::<Projective<P>>(
-            //     max_amount,
-            //     base,
-            //     pts[i].into_group(),
-            // )
-            // .ok_or_else(|| Error::DecryptionFailed("Discrete log of `amount` failed.".into()))?;
             let amount = amounts[i].ok_or_else(|| {
                 Error::DecryptionFailed("Discrete log of `amount` failed.".into())
             })?;
             let asset_id = match assets[i] {
                 Either::Left(id) => id,
-                // Either::Right(j) => solve_discrete_log_precomputed::<Projective<P>>(
-                //     max_asset_id as u64,
-                //     base,
-                //     pts[j].into_group(),
-                // )
-                // .ok_or_else(|| {
-                //     Error::DecryptionFailed("Discrete log of `asset_id` failed.".into())
-                // })? as AssetId,
                 Either::Right(j) => asset_ids[j - n].ok_or_else(|| {
                     Error::DecryptionFailed("Discrete log of `asset_id` failed.".into())
                 })? as AssetId,

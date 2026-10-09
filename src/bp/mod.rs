@@ -905,14 +905,10 @@ mod tests {
         let canonical = CompressedAffine::zero::<ark_pallas::PallasConfig>();
         assert!(PallasA::try_from(&canonical).unwrap().is_zero());
 
-        // Identity with the sign bit set decodes to the identity but is rejected.
+        // Identity with the sign bit set is rejected by arkworks and by the wrapper.
         let mut signed = *canonical.as_bytes();
         signed[31] |= 0x80;
-        assert!(
-            PallasA::deserialize_compressed(&signed[..])
-                .unwrap()
-                .is_zero()
-        );
+        assert!(PallasA::deserialize_compressed(&signed[..]).is_err());
         let signed = CompressedAffine::from_str(&hex::encode(signed)).unwrap();
         assert!(PallasA::try_from(&signed).is_err());
 

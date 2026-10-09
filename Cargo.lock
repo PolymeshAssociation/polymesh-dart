@@ -1258,7 +1258,7 @@ dependencies = [
 [[package]]
 name = "dock_crypto_utils"
 version = "0.22.0"
-source = "git+https://github.com/PolymeshAssociation/crypto?branch=main#3b095f40e5275359346a2af70860be5dce4a0d83"
+source = "git+https://github.com/PolymeshAssociation/crypto?branch=patch35#b782d0fd15bcc2d8287883a0b141e5dea0e0f7aa"
 dependencies = [
  "aead",
  "ark-ec",
@@ -1279,13 +1279,14 @@ dependencies = [
  "serde",
  "sha2",
  "smallvec",
+ "spin",
  "zeroize",
 ]
 
 [[package]]
 name = "dock_merlin"
 version = "3.0.0"
-source = "git+https://github.com/PolymeshAssociation/crypto?branch=main#3b095f40e5275359346a2af70860be5dce4a0d83"
+source = "git+https://github.com/PolymeshAssociation/crypto?branch=patch35#b782d0fd15bcc2d8287883a0b141e5dea0e0f7aa"
 dependencies = [
  "ark-serialize",
  "ark-std",
@@ -3266,7 +3267,7 @@ dependencies = [
 [[package]]
 name = "schnorr_pok"
 version = "0.22.0"
-source = "git+https://github.com/PolymeshAssociation/crypto?branch=main#3b095f40e5275359346a2af70860be5dce4a0d83"
+source = "git+https://github.com/PolymeshAssociation/crypto?branch=patch35#b782d0fd15bcc2d8287883a0b141e5dea0e0f7aa"
 dependencies = [
  "ark-ec",
  "ark-ff",

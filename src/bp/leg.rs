@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
 use scale_info::TypeInfo;
 
-use ark_ec::{AffineRepr, CurveConfig, CurveGroup, short_weierstrass::Affine};
+use ark_ec::{AffineRepr, CurveConfig, short_weierstrass::Affine};
 use ark_ff::Field;
 use ark_std::{
     collections::{BTreeMap, BTreeSet},
@@ -36,6 +36,7 @@ use polymesh_dart_common::{
     AssetId, Balance, LegId, MAX_ASSET_ID, MAX_BALANCE, MAX_LEG_ENCRYPTION_SIZE,
     MAX_MEDIATOR_ENCRYPTION_SIZE, MediatorId,
 };
+use zeroize::Zeroizing;
 
 pub mod proofs;
 pub use proofs::*;
@@ -1594,10 +1595,11 @@ impl LegEncrypted {
         Some((Self::decrypt_decoded(leg_enc, role, keys).ok()?, role))
     }
 
-    /// Check if the given key and account correspond to a party in this leg.
+    /// Check if the given key corresponds to a party in this leg.
     ///
     /// Investors should:
-    /// - Provide their account public key in the `account` parameter.
+    /// - Provide `Some(account)` in the `account` parameter. Legs carry encryption keys, so the
+    ///   sender and receiver are identified by `key.public`; the account value is not inspected.
     /// - `max_asset_id` and `auditor_check` should be `None`.
     ///
     /// Mediators and auditors should:
@@ -1613,47 +1615,26 @@ impl LegEncrypted {
         max_asset_id: Option<AssetId>,
         auditor_check: Option<F>,
     ) -> Result<Option<LegRole>, Error> {
-        use polymesh_dart_bp::leg::LegEncryption;
-
         let leg_enc = self.decode()?;
 
-        let sk_enc_inv = key
-            .secret
-            .0
-            .0
-            .inverse()
-            .ok_or_else(|| Error::LegDecryptionError("Inverse failed".into()))?;
-
-        // If we have the account public key, we can check if this key corresponds to the sender or receiver in the leg.
-        if let Some(account) = account {
-            let account = account.get_affine()?;
-            // Try to decrypt as the sender.
-            {
-                let sender = LegEncryption::decrypt_element_with_sk_inv(
-                    &sk_enc_inv,
-                    leg_enc.leg_enc_core_and_eph_keys.core.ct_s,
-                    leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
-                )
-                .into_affine();
-                if sender == account {
-                    return Ok(Some(LegRole::sender()));
-                }
-            }
-            // Try to decrypt as the receiver.
-            {
-                let receiver = LegEncryption::decrypt_element_with_sk_inv(
-                    &sk_enc_inv,
-                    leg_enc.leg_enc_core_and_eph_keys.core.ct_r,
-                    leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
-                )
-                .into_affine();
-                if receiver == account {
-                    return Ok(Some(LegRole::receiver()));
-                }
+        if account.is_some() {
+            let pk_enc = key.public.get_affine()?;
+            match leg_enc.identify_role(&key.secret.0.0, pk_enc)? {
+                Some(bp_leg::Role::Sender) => return Ok(Some(LegRole::sender())),
+                Some(bp_leg::Role::Receiver) => return Ok(Some(LegRole::receiver())),
+                None => {}
             }
         }
 
         if let Some(auditor_check) = auditor_check {
+            let sk_enc_inv = key
+                .secret
+                .0
+                .0
+                .inverse()
+                .ok_or_else(|| Error::LegDecryptionError("Inverse failed".into()))?;
+            let sk_enc_inv = Zeroizing::new(sk_enc_inv);
+
             let enc_gen = dart_gens().leg_asset_value_gen().into_group();
 
             let num_enc_keys = leg_enc.eph_pk_enc_keys.len();

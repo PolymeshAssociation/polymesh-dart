@@ -665,11 +665,10 @@ impl<
 
         let issuer_pk_proj = issuer_aff_pk.into_group();
         let issuer_pk_enc_proj = issuer_enc_pk.into_group();
-        let y = self.re_randomized_path.path.get_rerandomized_leaf()?
-            - asset_id_comm
-            - issuer_pk_proj
-            - issuer_pk_enc_proj
-            - id_comm;
+
+        let common_known = asset_id_comm + issuer_pk_proj + issuer_pk_enc_proj + id_comm;
+
+        let y = self.re_randomized_path.path.get_rerandomized_leaf()? - common_known;
         self.resp_acc_old.is_valid(
             &MintTxnProof::<L, F0, F1, G0, G1>::leaf_gens(
                 account_comm_key.clone(),
@@ -684,10 +683,7 @@ impl<
         )?;
 
         let y = updated_account_commitment.0
-            - asset_id_comm
-            - issuer_pk_proj
-            - issuer_pk_enc_proj
-            - id_comm
+            - common_known
             - (account_comm_key.balance_gen() * increase_bal_by);
         let mut missing_resps = BTreeMap::new();
         missing_resps.insert(0, self.resp_acc_old.0[0]);
