@@ -14,9 +14,9 @@ use crate::util::{
     verify_sigma_for_balance_change, verify_sigma_for_common_state_change,
 };
 use crate::{
-    Error, LEG_ACTION_LABEL, LEG_ENC_LABEL, NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL, ROOT_LABEL,
-    TXN_EVEN_LABEL, TXN_ODD_LABEL, UPDATED_ACCOUNT_COMMITMENT_LABEL, add_to_transcript, dst,
-    error::Result,
+    Error, LEG_ACTION_LABEL, LEG_ENC_LABEL, NONCE_LABEL, PARTY_EPH_PK_LABEL,
+    RE_RANDOMIZED_PATH_LABEL, ROOT_LABEL, TXN_EVEN_LABEL, TXN_ODD_LABEL,
+    UPDATED_ACCOUNT_COMMITMENT_LABEL, add_to_transcript, dst, error::Result,
 };
 use ark_dlog_gadget::dlog::DiscreteLogParameters;
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
@@ -336,7 +336,7 @@ impl<
                 even_verifier.transcript(),
                 LEG_ENC_LABEL,
                 leg_conf.encryption,
-                LEG_ENC_LABEL,
+                PARTY_EPH_PK_LABEL,
                 leg_conf.party_eph_pk,
                 LEG_ACTION_LABEL,
                 leg_conf.action_tag()
@@ -725,7 +725,7 @@ impl<
                 even_verifier.transcript(),
                 LEG_ENC_LABEL,
                 leg_conf.encryption,
-                LEG_ENC_LABEL,
+                PARTY_EPH_PK_LABEL,
                 leg_conf.party_eph_pk,
                 LEG_ACTION_LABEL,
                 leg_conf.action_tag()

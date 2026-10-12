@@ -16,9 +16,9 @@ use crate::util::{
     generate_account_commitment_responses, generate_null_bp_responses,
 };
 use crate::{
-    Error, LEG_ACTION_LABEL, LEG_ENC_LABEL, NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL, ROOT_LABEL,
-    TXN_EVEN_LABEL, TXN_ODD_LABEL, UPDATED_ACCOUNT_COMMITMENT_LABEL, add_to_transcript,
-    error::Result,
+    Error, LEG_ACTION_LABEL, LEG_ENC_LABEL, NONCE_LABEL, PARTY_EPH_PK_LABEL,
+    RE_RANDOMIZED_PATH_LABEL, ROOT_LABEL, TXN_EVEN_LABEL, TXN_ODD_LABEL,
+    UPDATED_ACCOUNT_COMMITMENT_LABEL, add_to_transcript, error::Result,
 };
 use ark_dlog_gadget::dlog::DiscreteLogParameters;
 use ark_ec::short_weierstrass::{Affine, Projective, SWCurveConfig};
@@ -343,7 +343,7 @@ impl<
                 even_prover.transcript(),
                 LEG_ENC_LABEL,
                 leg_core,
-                LEG_ENC_LABEL,
+                PARTY_EPH_PK_LABEL,
                 eph_pk,
                 LEG_ACTION_LABEL,
                 action
@@ -841,7 +841,7 @@ impl<
                 even_prover.transcript(),
                 LEG_ENC_LABEL,
                 leg_core,
-                LEG_ENC_LABEL,
+                PARTY_EPH_PK_LABEL,
                 eph_pk,
                 LEG_ACTION_LABEL,
                 action

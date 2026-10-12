@@ -2,8 +2,9 @@ use crate::account::{LegProverConfig, LegVerifierConfig};
 use crate::auth_proofs::helpers::{init_acc_comm_protocol, resp_acc_comm, verify_acc_comm};
 use crate::auth_proofs::{AUTH_TXN_LABEL, DeviceTxnType, NULLIFIER_LABEL};
 use crate::{
-    ACCOUNT_COMMITMENT_LABEL, Error, NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL, TXN_CHALLENGE_LABEL,
-    add_to_transcript, dst, error,
+    ACCOUNT_COMMITMENT_LABEL, Error, LEG_ACTION_LABEL, LEG_ENC_LABEL, NONCE_LABEL,
+    PARTY_EPH_PK_LABEL, RE_RANDOMIZED_PATH_LABEL, TXN_CHALLENGE_LABEL, add_to_transcript, dst,
+    error,
 };
 use ark_ec::AffineRepr;
 use ark_ec::CurveGroup;
@@ -35,10 +36,6 @@ use schnorr_pok::partial::{
 // Note that ct_amount_1 + ct_amount_2 = ct_amount and ct_asset_id_1 + ct_asset_id_2 = ct_asset_id
 //
 // Reason is challenge being different for auth proof and host so even if the blindings are same response will be different.
-
-pub const LEG_ENCRYPTION_LABEL: &[u8; 14] = b"leg-encryption";
-pub const PARTY_EPH_PK_LABEL: &[u8; 19] = b"party-ephemeral-key";
-pub const LEG_ACTION_LABEL: &[u8; 10] = b"leg-action";
 
 /// For non-fee account related transactions, affirmation, counter update, reverse
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
@@ -153,7 +150,7 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
         for conf in &legs_with_conf {
             add_to_transcript!(
                 transcript,
-                LEG_ENCRYPTION_LABEL,
+                LEG_ENC_LABEL,
                 conf.encryption,
                 PARTY_EPH_PK_LABEL,
                 conf.party_eph_pk,
@@ -503,7 +500,7 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
         for conf in &legs_conf {
             add_to_transcript!(
                 transcript,
-                LEG_ENCRYPTION_LABEL,
+                LEG_ENC_LABEL,
                 conf.encryption,
                 PARTY_EPH_PK_LABEL,
                 conf.party_eph_pk,

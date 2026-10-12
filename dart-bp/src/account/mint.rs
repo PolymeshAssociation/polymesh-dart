@@ -38,7 +38,7 @@ use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrRespons
 use zeroize::Zeroize;
 
 pub const ISSUER_PK_LABEL: &'static [u8; 9] = b"issuer_pk";
-pub const ISSUER_PK_ENC_LABEL: &'static [u8; 9] = b"issuer_pk";
+pub const ISSUER_PK_ENC_LABEL: &'static [u8; 13] = b"issuer_pk_enc";
 
 // Split proof follows similar approach as top up txn of fee but here there a are 2 public keys and not 1
 
