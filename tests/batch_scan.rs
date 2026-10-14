@@ -232,9 +232,7 @@ fn is_party_identifies_sender_and_receiver() {
             (&b_keys, Some(LegRole::receiver())),
             (&c_keys, None),
         ] {
-            let role = leg
-                .is_party(&keys.enc, Some(keys.acct.public), None, no_auditor)
-                .unwrap();
+            let role = leg.is_party(&keys.enc, true, None, no_auditor).unwrap();
             assert_eq!(role, expected);
             assert_eq!(role, leg.try_decrypt(keys).map(|(_, role)| role));
         }

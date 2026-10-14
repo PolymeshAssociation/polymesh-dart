@@ -1598,26 +1598,29 @@ impl LegEncrypted {
     /// Check if the given key corresponds to a party in this leg.
     ///
     /// Investors should:
-    /// - Provide `Some(account)` in the `account` parameter. Legs carry encryption keys, so the
-    ///   sender and receiver are identified by `key.public`; the account value is not inspected.
+    /// - Set `is_investor` to `true`.
     /// - `max_asset_id` and `auditor_check` should be `None`.
     ///
     /// Mediators and auditors should:
-    /// - Provide `None` for the `account` parameter.
+    /// - Set `is_investor` to `false`.
     /// - Provide the appropriate `max_asset_id` and `auditor_check` values.
+    ///
+    /// If `key` is used as both an investor and an auditor:
+    /// - Set `is_investor` to `true` to check the investor role.
+    /// - Provide the appropriate `max_asset_id` and `auditor_check` values for the auditor role.
     ///
     /// The `auditor_check` closure is used to filter asset IDs the auditor isn't interested in.  The closure should return `Some(balance)` if the auditor wants to check the asset ID, or `None` otherwise.
     /// If possible the auditor check closure should return the asset's total supply as the `Balance` value for faster decryption.
     pub fn is_party<F: Fn(&AssetId) -> Option<Balance>>(
         &self,
         key: &EncryptionKeyPair,
-        account: Option<AccountPublicKey>,
+        is_investor: bool,
         max_asset_id: Option<AssetId>,
         auditor_check: Option<F>,
     ) -> Result<Option<LegRole>, Error> {
         let leg_enc = self.decode()?;
 
-        if account.is_some() {
+        if is_investor {
             let pk_enc = key.public.get_affine()?;
             match leg_enc.identify_role(&key.secret.0.0, pk_enc)? {
                 Some(bp_leg::Role::Sender) => return Ok(Some(LegRole::sender())),
