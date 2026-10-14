@@ -958,7 +958,7 @@ impl<
         let mut even_verifier = Verifier::<_, Affine<G0>>::new(even_transcript);
         let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
         let mut odd_verifier = Verifier::<_, Affine<G1>>::new(odd_transcript);
-        let _ = self.challenge_contribution_with_verifier::<Parameters0, Parameters1>(
+        let (_old, _new) = self.challenge_contribution_with_verifier::<Parameters0, Parameters1>(
             pk,
             asset_id,
             increase_bal_by,

@@ -1758,7 +1758,7 @@ pub(crate) fn add_leg_link_verifier_challenge_contributions<G0: SWCurveConfig + 
                     &mut *transcript,
                 )?,
                 RespAssetId::Elsewhere(resp) => {
-                    let _ = h_at.ok_or_else(|| {
+                    let _h_at = h_at.ok_or_else(|| {
                         Error::ProofVerificationError(
                             "asset_id revealed elsewhere but no asset_id provided".to_string(),
                         )
@@ -1972,7 +1972,7 @@ pub(crate) fn verify_leg_link_for_common_state_change<G0: SWCurveConfig + Copy>(
                 }
                 RespAssetId::Elsewhere(resp) => {
                     // ct_asset_id - enc_gen * at = Eph_at * sk_enc^-1
-                    let _ = asset_id.ok_or_else(|| {
+                    let _asset_id = asset_id.ok_or_else(|| {
                         Error::ProofVerificationError(
                             "Asset id expected known (h_at) for a revealed-elsewhere leg"
                                 .to_string(),
