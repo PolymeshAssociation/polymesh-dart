@@ -5,8 +5,7 @@ use ark_std::{vec, vec::Vec};
 use super::*;
 
 /// Mediator entry of the scheme that predates the broadcast one, where the affirmation key is
-/// encrypted to a single encryption key identified by its index in [`AssetData`]. Kept so legs
-/// created under that scheme can still be affirmed, using [`crate::leg::mediator::MediatorTxnOldProof`].
+/// encrypted to a single encryption key identified by its index in [`AssetData`].
 #[derive(Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct MediatorEncryptionV0<G: AffineRepr> {
     /// The index corresponds to the encryption key from [`AssetData`].
