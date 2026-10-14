@@ -1,4 +1,5 @@
 use ark_ec::CurveGroup;
+use ark_std::vec::Vec;
 use dock_crypto_utils::solve_discrete_log::{
     solve_discrete_log_bsgs_precomputed_batch, solve_discrete_log_bsgs_precomputed_with_table_size,
 };
