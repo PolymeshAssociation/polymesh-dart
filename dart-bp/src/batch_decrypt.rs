@@ -1,7 +1,6 @@
 //! Batch trial decryption for Twisted ElGamal amount ciphertexts that share one decryption key.
 
-#[allow(unused_imports)]
-use crate::discrete_log::{solve_discrete_log_precomputed, solve_discrete_log_precomputed_batch};
+use crate::discrete_log::solve_discrete_log_precomputed_batch;
 use crate::{Error, error::Result};
 use ark_ec::scalar_mul::glv::GLVConfig;
 use ark_ec::scalar_mul::glv::eisenstein::glv_mul_same_scalar;
