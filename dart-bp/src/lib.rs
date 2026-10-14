@@ -57,6 +57,7 @@ pub const PK_LABEL: &'static [u8; 2] = b"pk";
 pub const PK_ENC_LABEL: &'static [u8; 6] = b"pk_enc";
 pub const ID_LABEL: &'static [u8; 2] = b"id";
 pub const LEG_ENC_LABEL: &'static [u8; 7] = b"leg_enc";
+pub const PARTY_EPH_PK_LABEL: &'static [u8; 12] = b"party_eph_pk";
 pub const LEG_ACTION_LABEL: &'static [u8; 10] = b"leg_action";
 pub const RE_RANDOMIZED_PATH_LABEL: &'static [u8; 18] = b"re_randomized_path";
 pub const ROOT_LABEL: &'static [u8; 4] = b"root";
@@ -91,6 +92,7 @@ mod error;
 pub mod poseidon_impls;
 
 pub mod auth_proofs;
+pub mod batch_decrypt;
 pub mod discrete_log;
 pub mod dst;
 pub mod fee_account;

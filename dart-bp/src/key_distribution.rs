@@ -1,6 +1,6 @@
 use crate::account_registration::{ENC_PK_LABEL, digits, powers_of_base};
 use crate::add_to_transcript;
-use crate::discrete_log::solve_discrete_log_bsgs;
+use crate::discrete_log::solve_discrete_log_precomputed;
 use crate::dst;
 use crate::error::*;
 use crate::util::{bp_gens_for_vec_commitment, handle_verification_tuple};
@@ -462,7 +462,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             .map(|(i, &c)| {
                 let eph_pk = self.recipient_cts[recipient_index][i];
                 let enc_sk_i = c.into_group() - (eph_pk.into_group() * sk_enc_inv);
-                solve_discrete_log_bsgs(max, enc_gen, enc_sk_i)
+                solve_discrete_log_precomputed(max, enc_gen, enc_sk_i)
                     .map(|d| G::ScalarField::from(d))
                     .ok_or_else(|| Error::SolvingDiscreteLogFailed(i))
             })

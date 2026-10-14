@@ -16,8 +16,8 @@ use crate::util::{
     prove_with_rng,
 };
 use crate::{
-    Error, LEG_ACTION_LABEL, LEG_ENC_LABEL, NONCE_LABEL, TXN_EVEN_LABEL, TXN_ODD_LABEL,
-    UPDATED_ACCOUNT_COMMITMENT_LABEL, add_to_transcript,
+    Error, LEG_ACTION_LABEL, LEG_ENC_LABEL, NONCE_LABEL, PARTY_EPH_PK_LABEL, TXN_EVEN_LABEL,
+    TXN_ODD_LABEL, UPDATED_ACCOUNT_COMMITMENT_LABEL, add_to_transcript,
 };
 use ark_dlog_gadget::dlog::DiscreteLogParameters;
 use ark_ec::short_weierstrass::Affine;
@@ -169,7 +169,7 @@ impl<
                     transcript,
                     LEG_ENC_LABEL,
                     leg.encryption,
-                    LEG_ENC_LABEL,
+                    PARTY_EPH_PK_LABEL,
                     leg.party_eph_pk,
                     LEG_ACTION_LABEL,
                     leg.action_tag()
@@ -199,7 +199,7 @@ impl<
                     transcript,
                     LEG_ENC_LABEL,
                     leg.encryption,
-                    LEG_ENC_LABEL,
+                    PARTY_EPH_PK_LABEL,
                     leg.party_eph_pk,
                     LEG_ACTION_LABEL,
                     leg.action_tag()

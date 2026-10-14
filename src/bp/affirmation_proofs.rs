@@ -22,6 +22,7 @@ use super::split_types::*;
 use super::*;
 use crate::Error;
 use crate::curve_tree::CurveTreeLookup;
+use curve_tree_relations::curve_tree::Root;
 
 macro_rules! bp_types {
     ($proto:ident, $proof:ident) => {
@@ -298,6 +299,22 @@ macro_rules! with_balance {
                 let root = root.root_node()?;
 
                 let proof = self.inner.decode()?;
+                self.verify_core(&proof, leg_enc, &root, rng)
+            }
+
+            pub(crate) fn verify_core<R: RngCore + CryptoRng>(
+                &self,
+                proof: &bp_account::$BPProof<
+                    ACCOUNT_TREE_L,
+                    <C as CurveTreeConfig>::F0,
+                    <C as CurveTreeConfig>::F1,
+                    <C as CurveTreeConfig>::P0,
+                    <C as CurveTreeConfig>::P1,
+                >,
+                leg_enc: &LegEncrypted,
+                root: &Root<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C::P0, C::P1>,
+                rng: &mut R,
+            ) -> Result<(), Error> {
                 let updated_comm = self.updated_account_state_commitment.as_commitment()?;
                 let nullifier = self.nullifier.get_affine()?;
                 let ctx = self.leg_ref.context();
@@ -388,7 +405,6 @@ macro_rules! with_balance {
                             .verify_and_return_tuples::<_, C::DLogParams0, C::DLogParams1>(
                                 verifier,
                                 &challenge_h_final_v,
-                                updated_comm,
                                 nullifier,
                                 C::parameters(),
                                 &comm_key,
@@ -666,6 +682,22 @@ macro_rules! no_balance {
                 let root = root.root_node()?;
 
                 let proof = self.inner.decode()?;
+                self.verify_core(&proof, leg_enc, &root, rng)
+            }
+
+            pub(crate) fn verify_core<R: RngCore + CryptoRng>(
+                &self,
+                proof: &bp_account::$BPProof<
+                    ACCOUNT_TREE_L,
+                    <C as CurveTreeConfig>::F0,
+                    <C as CurveTreeConfig>::F1,
+                    <C as CurveTreeConfig>::P0,
+                    <C as CurveTreeConfig>::P1,
+                >,
+                leg_enc: &LegEncrypted,
+                root: &Root<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C::P0, C::P1>,
+                rng: &mut R,
+            ) -> Result<(), Error> {
                 let updated_comm = self.updated_account_state_commitment.as_commitment()?;
                 let nullifier = self.nullifier.get_affine()?;
                 let ctx = self.leg_ref.context();
@@ -756,7 +788,6 @@ macro_rules! no_balance {
                             .verify_and_return_tuples::<_, C::DLogParams0, C::DLogParams1>(
                                 verifier,
                                 &challenge_h_final_v,
-                                updated_comm,
                                 nullifier,
                                 C::parameters(),
                                 &comm_key,

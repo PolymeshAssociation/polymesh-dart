@@ -7,9 +7,15 @@ use serde::{Deserialize, Serialize};
 use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
 use scale_info::TypeInfo;
 
-use ark_ec::{AffineRepr, CurveConfig, CurveGroup, short_weierstrass::Affine};
+use ark_ec::{AffineRepr, CurveConfig, short_weierstrass::Affine};
 use ark_ff::Field;
-use ark_std::{collections::BTreeSet, format, string::ToString, vec, vec::Vec};
+use ark_std::{
+    collections::BTreeSet,
+    format,
+    string::{String, ToString},
+    vec,
+    vec::Vec,
+};
 use bulletproofs::r1cs::{VerificationTuple, batch_verify_with_rng};
 use bulletproofs::{BulletproofGens, PedersenGens};
 use curve_tree_relations::curve_tree::Root;
@@ -27,8 +33,10 @@ use dock_crypto_utils::randomized_mult_checker::{
 use polymesh_dart_bp::leg as bp_leg;
 use polymesh_dart_bp::util::batch_verify_bp_with_rng;
 use polymesh_dart_common::{
-    LegId, MAX_LEG_ENCRYPTION_SIZE, MAX_MEDIATOR_ENCRYPTION_SIZE, MediatorId,
+    AssetId, Balance, LegId, MAX_ASSET_ID, MAX_LEG_ENCRYPTION_SIZE, MAX_MEDIATOR_ENCRYPTION_SIZE,
+    MediatorId,
 };
+use zeroize::Zeroizing;
 
 pub mod proofs;
 pub use proofs::*;
@@ -817,6 +825,16 @@ impl<
         leg_encryptions_digest(self.legs.iter().map(|leg| leg.leg_enc()))
     }
 
+    #[cfg(test)]
+    pub(crate) fn leg_ctx(&self, idx: usize) -> Vec<u8> {
+        leg_proof_initial_ctx(
+            &self.memo,
+            self.root_block,
+            &self.legs_digest(),
+            idx as LegId,
+        )
+    }
+
     /// Get leg and sender, receiver and mediator affirmation counts.
     pub fn count_leg_affirmations(
         &self,
@@ -1072,7 +1090,7 @@ pub struct SettlementLegProof<T: DartLimits, C: CurveTreeConfig = AssetTreeConfi
     /// Public encryption keys specified by the leg creator (not tied to the asset).
     pub public_enc_keys: BoundedVec<EncryptionPublicKey, T::MaxPublicEncKeys>,
 
-    inner: BoundedCanonical<BPSettlementTxnProof<C>, T::MaxInnerProofSize>,
+    pub(crate) inner: BoundedCanonical<BPSettlementTxnProof<C>, T::MaxInnerProofSize>,
 }
 
 impl<
@@ -1136,10 +1154,20 @@ impl<
         root: &Root<ASSET_TREE_L, ASSET_TREE_M, C::P0, C::P1>,
         rng: &mut R,
     ) -> Result<(), Error> {
+        let proof = self.inner.decode()?;
+        self.verify_core(&proof, ctx, root, rng)
+    }
+
+    pub(crate) fn verify_core<R: RngCore + CryptoRng>(
+        &self,
+        proof: &BPSettlementTxnProof<C>,
+        ctx: &[u8],
+        root: &Root<ASSET_TREE_L, ASSET_TREE_M, C::P0, C::P1>,
+        rng: &mut R,
+    ) -> Result<(), Error> {
         let asset_comm_params = get_asset_commitment_parameters();
         let leg_enc = self.leg_enc.decode()?;
         log::debug!("Verify leg: {:?}", leg_enc);
-        let proof = self.inner.decode()?;
 
         PairRandomizedMultCheckerGuard::new_using_rng(rng).with(
             |even_rmc, odd_rmc| -> Result<(), Error> {
@@ -1232,7 +1260,7 @@ pub struct SettlementLegProofRevealedAssetId<T: DartLimits> {
     /// Public encryption keys specified by the leg creator (not tied to the asset).
     pub public_enc_keys: BoundedVec<EncryptionPublicKey, T::MaxPublicEncKeys>,
 
-    inner: BoundedCanonical<
+    pub(crate) inner: BoundedCanonical<
         bp_leg::public_asset_leg_proof::PublicAssetLegCreationProof<PallasParameters>,
         T::MaxInnerProofSize,
     >,
@@ -1551,78 +1579,64 @@ impl LegEncrypted {
 
     /// Try to decrypt the leg as either sender or receiver.
     ///
+    /// The role is settled first with two scalar multiplications rather than by attempting one role
+    /// and falling back on its error: a wrong-role attempt on a leg with a revealed asset-id runs
+    /// the discrete-log solver over the whole balance range on a garbage point.
+    ///
     /// Auditors and mediators should use `try_decrypt_with_key` instead.
     pub fn try_decrypt(&self, keys: &AccountKeys) -> Option<(Leg, LegRole)> {
         let leg_enc = &self.decode().ok()?;
-        if let Ok(leg) = Self::decrypt_decoded(leg_enc, LegRole::sender(), keys) {
-            Some((leg, LegRole::sender()))
-        } else if let Ok(leg) = Self::decrypt_decoded(leg_enc, LegRole::receiver(), keys) {
-            Some((leg, LegRole::receiver()))
-        } else {
-            None
-        }
+        let pk_enc = keys.enc.public.get_affine().ok()?;
+        let role = match leg_enc.identify_role(&keys.enc.secret.0.0, pk_enc).ok()?? {
+            bp_leg::Role::Sender => LegRole::sender(),
+            bp_leg::Role::Receiver => LegRole::receiver(),
+        };
+        Some((Self::decrypt_decoded(leg_enc, role, keys).ok()?, role))
     }
 
-    /// Check if the given key and account correspond to a party in this leg.
+    /// Check if the given key corresponds to a party in this leg.
     ///
     /// Investors should:
-    /// - Provide their account public key in the `account` parameter.
+    /// - Set `is_investor` to `true`.
     /// - `max_asset_id` and `auditor_check` should be `None`.
     ///
     /// Mediators and auditors should:
-    /// - Provide `None` for the `account` parameter.
+    /// - Set `is_investor` to `false`.
     /// - Provide the appropriate `max_asset_id` and `auditor_check` values.
+    ///
+    /// If `key` is used as both an investor and an auditor:
+    /// - Set `is_investor` to `true` to check the investor role.
+    /// - Provide the appropriate `max_asset_id` and `auditor_check` values for the auditor role.
     ///
     /// The `auditor_check` closure is used to filter asset IDs the auditor isn't interested in.  The closure should return `Some(balance)` if the auditor wants to check the asset ID, or `None` otherwise.
     /// If possible the auditor check closure should return the asset's total supply as the `Balance` value for faster decryption.
     pub fn is_party<F: Fn(&AssetId) -> Option<Balance>>(
         &self,
         key: &EncryptionKeyPair,
-        account: Option<AccountPublicKey>,
+        is_investor: bool,
         max_asset_id: Option<AssetId>,
         auditor_check: Option<F>,
     ) -> Result<Option<LegRole>, Error> {
-        use polymesh_dart_bp::leg::LegEncryption;
-
         let leg_enc = self.decode()?;
 
-        let sk_enc_inv = key
-            .secret
-            .0
-            .0
-            .inverse()
-            .ok_or_else(|| Error::LegDecryptionError("Inverse failed".into()))?;
-
-        // If we have the account public key, we can check if this key corresponds to the sender or receiver in the leg.
-        if let Some(account) = account {
-            let account = account.get_affine()?;
-            // Try to decrypt as the sender.
-            {
-                let sender = LegEncryption::decrypt_element_with_sk_inv(
-                    &sk_enc_inv,
-                    leg_enc.leg_enc_core_and_eph_keys.core.ct_s,
-                    leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
-                )
-                .into_affine();
-                if sender == account {
-                    return Ok(Some(LegRole::sender()));
-                }
-            }
-            // Try to decrypt as the receiver.
-            {
-                let receiver = LegEncryption::decrypt_element_with_sk_inv(
-                    &sk_enc_inv,
-                    leg_enc.leg_enc_core_and_eph_keys.core.ct_r,
-                    leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
-                )
-                .into_affine();
-                if receiver == account {
-                    return Ok(Some(LegRole::receiver()));
-                }
+        if is_investor {
+            let pk_enc = key.public.get_affine()?;
+            match leg_enc.identify_role(&key.secret.0.0, pk_enc)? {
+                Some(bp_leg::Role::Sender) => return Ok(Some(LegRole::sender())),
+                Some(bp_leg::Role::Receiver) => return Ok(Some(LegRole::receiver())),
+                None => {}
             }
         }
 
         if let Some(auditor_check) = auditor_check {
+            let sk_enc_inv = key
+                .secret
+                .0
+                .0
+                .inverse()
+                .ok_or_else(|| Error::LegDecryptionError("Inverse failed".into()))?;
+            let sk_enc_inv = Zeroizing::new(sk_enc_inv);
+
             let enc_gen = dart_gens().leg_asset_value_gen().into_group();
 
             let num_enc_keys = leg_enc.eph_pk_enc_keys.len();
