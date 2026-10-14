@@ -10,7 +10,7 @@ use scale_info::TypeInfo;
 use ark_ec::{AffineRepr, CurveConfig, short_weierstrass::Affine};
 use ark_ff::Field;
 use ark_std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeSet,
     format,
     string::{String, ToString},
     vec,
@@ -33,8 +33,8 @@ use dock_crypto_utils::randomized_mult_checker::{
 use polymesh_dart_bp::leg as bp_leg;
 use polymesh_dart_bp::util::batch_verify_bp_with_rng;
 use polymesh_dart_common::{
-    AssetId, Balance, LegId, MAX_ASSET_ID, MAX_BALANCE, MAX_LEG_ENCRYPTION_SIZE,
-    MAX_MEDIATOR_ENCRYPTION_SIZE, MediatorId,
+    AssetId, Balance, LegId, MAX_ASSET_ID, MAX_LEG_ENCRYPTION_SIZE, MAX_MEDIATOR_ENCRYPTION_SIZE,
+    MediatorId,
 };
 use zeroize::Zeroizing;
 
@@ -1583,8 +1583,7 @@ impl LegEncrypted {
     /// and falling back on its error: a wrong-role attempt on a leg with a revealed asset-id runs
     /// the discrete-log solver over the whole balance range on a garbage point.
     ///
-    /// Auditors and mediators should use `try_decrypt_with_key` instead. Use
-    /// [`Self::scan_legs`] for many legs at once.
+    /// Auditors and mediators should use `try_decrypt_with_key` instead.
     pub fn try_decrypt(&self, keys: &AccountKeys) -> Option<(Leg, LegRole)> {
         let leg_enc = &self.decode().ok()?;
         let pk_enc = keys.enc.public.get_affine().ok()?;
@@ -1766,79 +1765,6 @@ impl LegEncrypted {
             asset_id,
             amount,
         })
-    }
-
-    /// Scan many encrypted legs seen by the same participant role, batching the amount and asset-id
-    /// point decryptions across all of them into one shared-scalar GLV ladder. Returns
-    /// `(asset_id, amount)` per leg in the input order. Sender and receiver roles only;
-    /// auditor/mediator use per-leg [`Self::decrypt`]. Use [`Self::scan_legs`] when the role is not
-    /// already known.
-    pub fn scan_values_as_participant(
-        legs: &[Self],
-        role: LegRole,
-        keys: &AccountKeys,
-    ) -> Result<Vec<(AssetId, Balance)>, Error> {
-        let is_sender = match role.kind {
-            LegRoleKind::Sender => true,
-            LegRoleKind::Receiver => false,
-            _ => {
-                return Err(Error::LegDecryptionError(
-                    "scan_values_as_participant supports only sender and receiver roles"
-                        .to_string(),
-                ));
-            }
-        };
-        let decoded = legs
-            .iter()
-            .map(|l| l.decode())
-            .collect::<Result<Vec<_>, Error>>()?;
-        let enc_gen = dart_gens().leg_asset_value_gen();
-        Ok(
-            bp_leg::LegEncryption::<PallasA>::batch_decrypt_values_as_participant(
-                &decoded,
-                is_sender,
-                &keys.enc.secret.0.0,
-                enc_gen,
-                MAX_ASSET_ID,
-                MAX_BALANCE,
-            )?,
-        )
-    }
-
-    /// Scan many encrypted legs under one account's encryption key without knowing the roles up
-    /// front. Returns `(role, asset_id, amount)` for each leg `keys` is the sender or receiver of,
-    /// keyed by that leg's index in `legs`; legs the account is not a party to are absent.
-    ///
-    /// One shared-scalar GLV ladder identifies the roles across the whole batch, a second recovers
-    /// the values of the identified legs only, senders and receivers together. Auditor and mediator
-    /// roles are not covered; those use per-leg [`Self::decrypt`].
-    pub fn scan_legs(
-        legs: &[Self],
-        keys: &AccountKeys,
-    ) -> Result<BTreeMap<u32, (LegRole, AssetId, Balance)>, Error> {
-        let decoded = legs
-            .iter()
-            .map(|l| l.decode())
-            .collect::<Result<Vec<_>, Error>>()?;
-        let enc_gen = dart_gens().leg_asset_value_gen();
-        let scanned = bp_leg::LegEncryption::<PallasA>::batch_decrypt_legs(
-            &decoded,
-            &keys.enc.secret.0.0,
-            keys.enc.public.get_affine()?,
-            enc_gen,
-            MAX_ASSET_ID,
-            MAX_BALANCE,
-        )?;
-        Ok(scanned
-            .into_iter()
-            .map(|(idx, (role, asset_id, amount))| {
-                let role = match role {
-                    bp_leg::Role::Sender => LegRole::sender(),
-                    bp_leg::Role::Receiver => LegRole::receiver(),
-                };
-                (idx, (role, asset_id, amount))
-            })
-            .collect())
     }
 }
 
