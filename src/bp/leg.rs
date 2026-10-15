@@ -1443,11 +1443,13 @@ impl LegEncrypted {
     }
 
     /// Convert from the old LegEncryptionV0 format to the new LegEncryption format.
-    pub fn from_v0(&self) -> Result<LegEncrypted, Error> {
-        let leg_enc_v1 = self
+    pub fn from_v0(&self) -> Result<(LegEncrypted, Option<AssetId>, usize), Error> {
+        let (leg_enc_v0, leg_enc_v1) = self
             .0
             .convert_from::<bp_leg::old::LegEncryptionV0<PallasA>>()?;
-        LegEncrypted::new(leg_enc_v1)
+        let asset_id = leg_enc_v0.asset_id();
+        let mediator_count = leg_enc_v0.mediator_count();
+        Ok((LegEncrypted::new(leg_enc_v1)?, asset_id, mediator_count))
     }
 
     pub fn decode(&self) -> Result<bp_leg::LegEncryption<PallasA>, Error> {

@@ -37,6 +37,18 @@ pub struct LegEncryptionV0<G: AffineRepr> {
     pub mediators: Vec<MediatorEncryptionV0<G>>,
 }
 
+impl<G: AffineRepr> LegEncryptionV0<G> {
+    /// Returns the asset ID of the leg, if it is revealed. Returns `None` if the asset ID is encrypted.
+    pub fn asset_id(&self) -> Option<AssetId> {
+        self.leg_enc_core_and_eph_keys.core.asset_id()
+    }
+
+    /// Mediator count.
+    pub fn mediator_count(&self) -> usize {
+        self.mediators.len()
+    }
+}
+
 impl<G: AffineRepr> From<LegEncryptionV0<G>> for LegEncryption<G> {
     fn from(old: LegEncryptionV0<G>) -> Self {
         let mediators = if old.leg_enc_core_and_eph_keys.core.is_asset_id_revealed() {

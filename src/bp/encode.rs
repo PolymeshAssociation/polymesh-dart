@@ -466,8 +466,10 @@ impl<T: Clone + CanonicalSerialize + CanonicalDeserialize> WrappedCanonical<T> {
     /// Converts the wrapped value from another type `U` that implements `CanonicalDeserialize` and can be converted into `T`.
     ///
     /// This is useful to migrate from an old version of a type to a new version, where `U` is the old type and `T` is the new type.
-    pub fn convert_from<U: CanonicalDeserialize + Into<T>>(&self) -> Result<T, Error> {
-        Ok(deserialize_compressed_exact::<U>(self.wrapped.as_slice())?.into())
+    pub fn convert_from<U: CanonicalDeserialize + Clone + Into<T>>(&self) -> Result<(U, T), Error> {
+        let u = deserialize_compressed_exact::<U>(self.wrapped.as_slice())?;
+        let t = u.clone().into();
+        Ok((u, t))
     }
 }
 
@@ -574,8 +576,10 @@ impl<T: Clone + CanonicalSerialize + CanonicalDeserialize, S: Get<u32>> BoundedC
     /// Converts the wrapped value from another type `U` that implements `CanonicalDeserialize` and can be converted into `T`.
     ///
     /// This is useful to migrate from an old version of a type to a new version, where `U` is the old type and `T` is the new type.
-    pub fn convert_from<U: CanonicalDeserialize + Into<T>>(&self) -> Result<T, Error> {
-        Ok(deserialize_compressed_exact::<U>(self.wrapped.as_slice())?.into())
+    pub fn convert_from<U: CanonicalDeserialize + Clone + Into<T>>(&self) -> Result<(U, T), Error> {
+        let u = deserialize_compressed_exact::<U>(self.wrapped.as_slice())?;
+        let t = u.clone().into();
+        Ok((u, t))
     }
 }
 
