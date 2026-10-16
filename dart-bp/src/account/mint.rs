@@ -130,7 +130,11 @@ impl<
             if increase_bal_by > MAX_BALANCE {
                 return Err(Error::AmountTooLarge(increase_bal_by));
             }
-            if account.balance + increase_bal_by != updated_account.balance {
+            let new_balance = account
+                .balance
+                .checked_add(increase_bal_by)
+                .ok_or_else(|| Error::AmountTooLarge(Balance::MAX))?;
+            if new_balance != updated_account.balance {
                 return Err(Error::AmountTooLarge(updated_account.balance));
             }
             if updated_account.balance > MAX_BALANCE {

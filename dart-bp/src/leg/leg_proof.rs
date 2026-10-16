@@ -31,7 +31,7 @@ use curve_tree_relations::ped_comm_group_elems::{
 use curve_tree_relations::range_proof::range_proof;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
-use polymesh_dart_common::{BALANCE_BITS, Balance};
+use polymesh_dart_common::{AMOUNT_BITS, Balance};
 use rand_core::CryptoRngCore;
 use schnorr_pok::discrete_log::{
     PokDiscreteLogProtocol, PokPedersenCommitment, PokPedersenCommitmentProtocol,
@@ -2166,7 +2166,7 @@ impl<
             cs,
             var_amount.into(),
             amount.map(|a| a as u128),
-            BALANCE_BITS.into(),
+            AMOUNT_BITS.into(),
         )?;
         Ok(())
     }

@@ -74,7 +74,7 @@ fn decrypt_benchmark(c: &mut Criterion) {
         ]
         .into_iter()
         .filter_map(|(amount, s_amount)| {
-            if amount >= MAX_BALANCE {
+            if amount >= MAX_AMOUNT {
                 return None;
             }
             eprintln!("Preparing leg for amount {}", s_amount);

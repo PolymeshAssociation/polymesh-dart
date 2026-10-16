@@ -2523,6 +2523,7 @@ pub fn batch_digest(mut transcript: MerlinTranscript) -> [u8; 32] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::MAX_BALANCE;
     use ark_pallas::{Affine as PallasA, Fr};
     use ark_std::UniformRand;
 
@@ -2665,10 +2666,21 @@ mod tests {
         ));
 
         let amount = 5;
-        let old_bal = (1 << BALANCE_BITS) - amount;
-        let new_bal = 1 << BALANCE_BITS;
+
+        // 2^BALANCE_BITS - amount and 2^BALANCE_BITS
+        let old_bal = MAX_BALANCE - amount + 1;
+        let new_bal = MAX_BALANCE + 1;
         assert!(!prove_verify_balance_change(
             &pc_gens, &bp_gens, old_bal, new_bal, amount, false
+        ));
+
+        assert!(prove_verify_balance_change(
+            &pc_gens,
+            &bp_gens,
+            MAX_BALANCE - amount,
+            MAX_BALANCE,
+            amount,
+            false
         ));
 
         assert!(prove_verify_balance_change_multi(

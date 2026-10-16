@@ -3789,6 +3789,67 @@ fn leg_creator_tries_to_portray_mediator_as_auditor() {
     );
 }
 
+#[test]
+fn leg_amount_limit() {
+    let mut rng = rand::thread_rng();
+    let enc_key_gen = hash_to_pallas(b"test", b"enc-key-g").into_affine();
+    let (_, pk_s_e) = keygen_enc(&mut rng, enc_key_gen);
+    let (_, pk_r_e) = keygen_enc(&mut rng, enc_key_gen);
+    assert!(Leg::new(pk_s_e.0, pk_r_e.0, MAX_AMOUNT, 1, vec![], vec![], vec![]).is_ok());
+    assert!(matches!(
+        Leg::new(pk_s_e.0, pk_r_e.0, MAX_AMOUNT + 1, 1, vec![], vec![], vec![]),
+        Err(Error::AmountTooLarge(a)) if a == MAX_AMOUNT + 1
+    ));
+}
+
+#[test]
+fn decrypt_leg_with_max_amount() {
+    let mut rng = rand::thread_rng();
+    let label = b"test";
+    let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into_affine();
+    let enc_gen = hash_to_pallas(label, b"enc-key-h").into_affine();
+    let (sk_s_e, pk_s_e) = keygen_enc(&mut rng, enc_key_gen);
+    let (sk_r_e, pk_r_e) = keygen_enc(&mut rng, enc_key_gen);
+    let (_, pk_a_0) = keygen_enc(&mut rng, enc_key_gen);
+    let (sk_a_1, pk_a_1) = keygen_enc(&mut rng, enc_key_gen);
+    let leg = Leg::new(
+        pk_s_e.0,
+        pk_r_e.0,
+        MAX_AMOUNT,
+        1,
+        vec![pk_a_0.0, pk_a_1.0],
+        vec![],
+        vec![],
+    )
+    .unwrap();
+    let (leg_enc, _) = leg
+        .encrypt(
+            &mut rng,
+            LegEncConfig {
+                visibility: PartyVisibility::FullVisibility,
+                reveal_asset_id: true,
+            },
+            enc_key_gen,
+            enc_gen,
+        )
+        .unwrap();
+
+    let (_, _, _, amount) = leg_enc.decrypt_as_sender(&sk_s_e.0, enc_gen).unwrap();
+    assert_eq!(amount, MAX_AMOUNT);
+    let (_, _, _, amount) = leg_enc.decrypt_as_receiver(&sk_r_e.0, enc_gen).unwrap();
+    assert_eq!(amount, MAX_AMOUNT);
+
+    assert!(
+        leg_enc
+            .decrypt_given_key(&sk_a_1.0, false, 0, enc_gen)
+            .is_err()
+    );
+    let (_, _, _, amount) = leg_enc
+        .decrypt_given_key(&sk_a_1.0, false, 1, enc_gen)
+        .unwrap();
+    assert_eq!(amount, MAX_AMOUNT);
+}
+
 // Run these tests as cargo test --features=ignore_prover_input_sanitation input_sanitation_disabled
 
 #[cfg(feature = "ignore_prover_input_sanitation")]
@@ -3906,6 +3967,104 @@ mod input_sanitation_disabled {
                         None,
                     )
                     .unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn leg_amount_above_max_rejected() {
+        let mut rng = rand::thread_rng();
+        const NUM_GENS: u32 = 1 << 13;
+        const L: usize = 64;
+        let tree_params = SelRerandProofParametersNew::<
+            VestaParameters,
+            PallasParameters,
+            VestaParams,
+            PallasParams,
+        >::new_using_label(b"leg-amount-tree", NUM_GENS, NUM_GENS)
+        .unwrap();
+        let params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
+            b"leg-amount-test",
+            1,
+            0,
+            &tree_params.even_parameters.bp_gens(),
+        );
+        let enc_key_gen = hash_to_pallas(b"leg-amount-test", b"enc-key-g").into_affine();
+        let enc_gen = hash_to_pallas(b"leg-amount-test", b"enc-key-h").into_affine();
+        let (_, sender) = keygen_enc(&mut rng, enc_key_gen);
+        let (_, receiver) = keygen_enc(&mut rng, enc_key_gen);
+        let (_, auditor) = keygen_enc(&mut rng, enc_key_gen);
+        let asset_data = AssetData::new(0, vec![auditor.0], vec![], &params).unwrap();
+        let tree = CurveTree::<L, 1, VestaParameters, PallasParameters>::from_leaves(
+            &[asset_data.commitment],
+            &tree_params,
+            Some(2),
+        );
+        let root = tree.root_node();
+        for amount in [MAX_AMOUNT, MAX_AMOUNT + 1] {
+            let leg = Leg::new(
+                sender.0,
+                receiver.0,
+                amount,
+                0,
+                vec![auditor.0],
+                vec![],
+                vec![],
+            )
+            .unwrap();
+            let (leg_enc, leg_rand) = leg
+                .encrypt(
+                    &mut rng,
+                    LegEncConfig {
+                        visibility: PartyVisibility::FullVisibility,
+                        reveal_asset_id: false,
+                    },
+                    enc_key_gen,
+                    enc_gen,
+                )
+                .unwrap();
+            let proof = LegCreationProof::new::<_, PallasParams, VestaParams>(
+                &mut rng,
+                leg,
+                leg_enc.clone(),
+                leg_rand,
+                tree.get_path_to_leaf_for_proof(0, 0).unwrap(),
+                asset_data.clone(),
+                &root,
+                b"leg-amount-nonce",
+                &tree_params,
+                &params,
+                enc_key_gen,
+                enc_gen,
+            );
+            if amount == MAX_AMOUNT {
+                proof
+                    .unwrap()
+                    .verify::<_, PallasParams, VestaParams>(
+                        &mut rng,
+                        leg_enc,
+                        &root,
+                        vec![],
+                        b"leg-amount-nonce",
+                        &tree_params,
+                        &params,
+                        enc_key_gen,
+                        enc_gen,
+                        None,
+                    )
+                    .unwrap();
+            } else {
+                assert_leg_verify_fails_with_rmc(
+                    &proof.unwrap(),
+                    &mut rng,
+                    leg_enc,
+                    &root,
+                    b"leg-amount-nonce",
+                    &tree_params,
+                    &params,
+                    enc_key_gen,
+                    enc_gen,
+                );
             }
         }
     }

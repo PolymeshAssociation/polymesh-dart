@@ -29,7 +29,7 @@ use bulletproofs::BulletproofGens;
 use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
 use core::iter;
 use itertools::Either;
-use polymesh_dart_common::{AssetId, Balance, MAX_ASSET_ID, MAX_BALANCE};
+use polymesh_dart_common::{AssetId, Balance, MAX_AMOUNT, MAX_ASSET_ID};
 use rand_core::CryptoRngCore;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -556,7 +556,7 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> Leg<G> {
     ) -> Result<Self> {
         #[cfg(not(feature = "ignore_prover_input_sanitation"))]
         {
-            if amount > MAX_BALANCE {
+            if amount > MAX_AMOUNT {
                 return Err(Error::AmountTooLarge(amount));
             }
             if asset_id > MAX_ASSET_ID {
@@ -909,7 +909,7 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
     ) -> Result<(G, Option<G>, AssetId, Balance)> {
         let enc_gen = enc_gen.into_group();
         let max_asset_id = max_asset_id.unwrap_or(MAX_ASSET_ID);
-        let max_amount = max_amount.unwrap_or(MAX_BALANCE);
+        let max_amount = max_amount.unwrap_or(MAX_AMOUNT);
 
         let mut sk_enc_inv = sk_enc
             .inverse()
@@ -965,7 +965,7 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
     ) -> Result<(Option<G>, G, AssetId, Balance)> {
         let enc_gen = enc_gen.into_group();
         let max_asset_id = max_asset_id.unwrap_or(MAX_ASSET_ID);
-        let max_amount = max_amount.unwrap_or(MAX_BALANCE);
+        let max_amount = max_amount.unwrap_or(MAX_AMOUNT);
 
         let mut sk_enc_inv = sk_enc
             .inverse()
@@ -1033,7 +1033,7 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
             return Err(Error::InvalidKeyIndex(key_index));
         }
         let max_asset_id = max_asset_id.unwrap_or(MAX_ASSET_ID);
-        let max_amount = max_amount.unwrap_or(MAX_BALANCE);
+        let max_amount = max_amount.unwrap_or(MAX_AMOUNT);
 
         // Compute inverse of secret key once.
         let mut sk_inv = sk
