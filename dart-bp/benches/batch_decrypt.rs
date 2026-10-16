@@ -16,7 +16,7 @@ use polymesh_dart_bp::batch_decrypt::batch_decrypt_points;
 use polymesh_dart_bp::discrete_log::{MAX_NUM_BABY_STEPS, solve_discrete_log_precomputed};
 use polymesh_dart_bp::keys::keygen_enc;
 use polymesh_dart_bp::leg::{Leg, LegEncConfig, LegEncryption, PartyVisibility};
-use polymesh_dart_common::{AssetId, Balance, MAX_ASSET_ID, MAX_BALANCE};
+use polymesh_dart_common::{AssetId, Balance, MAX_AMOUNT, MAX_ASSET_ID};
 use rand_core::CryptoRngCore;
 
 /// Amount width that keeps every discrete log inside the solver's first window, so a scan's cost is
@@ -109,7 +109,7 @@ fn scan_legs_role_and_amount_separately(s: &Setup) -> usize {
                 &s.sk,
                 s.enc_gen,
                 MAX_ASSET_ID,
-                MAX_BALANCE,
+                MAX_AMOUNT,
             )
             .ok()
         })
@@ -117,7 +117,7 @@ fn scan_legs_role_and_amount_separately(s: &Setup) -> usize {
 }
 
 fn scan_legs_role_and_amount_together(s: &Setup) -> usize {
-    LegEncryption::batch_decrypt_legs(&s.legs, &s.sk, s.pk, s.enc_gen, MAX_ASSET_ID, MAX_BALANCE)
+    LegEncryption::batch_decrypt_legs(&s.legs, &s.sk, s.pk, s.enc_gen, MAX_ASSET_ID, MAX_AMOUNT)
         .unwrap()
         .len()
 }
@@ -267,8 +267,8 @@ fn bench_batch_decrypt(c: &mut Criterion) {
         let base = PallasA::rand(&mut rng).into_group();
         let solved = base * Fr::from(123_456u64);
         let garbage = Projective::rand(&mut rng);
-        assert!(solve_discrete_log_precomputed::<Projective>(MAX_BALANCE, base, solved).is_some());
-        assert!(solve_discrete_log_precomputed::<Projective>(MAX_BALANCE, base, garbage).is_none());
+        assert!(solve_discrete_log_precomputed::<Projective>(MAX_AMOUNT, base, solved).is_some());
+        assert!(solve_discrete_log_precomputed::<Projective>(MAX_AMOUNT, base, garbage).is_none());
         println!(
             "\n=== discrete log per value, Pallas, {} baby steps ({}) ===",
             MAX_NUM_BABY_STEPS,
@@ -280,11 +280,9 @@ fn bench_batch_decrypt(c: &mut Criterion) {
         );
         println!(
             "{:>34}  {:>12.1}us",
-            "solved, max = MAX_BALANCE",
+            "solved, max = MAX_AMOUNT",
             time(200, || solve_discrete_log_precomputed::<Projective>(
-                MAX_BALANCE,
-                base,
-                solved
+                MAX_AMOUNT, base, solved
             )) * 1e6
         );
         println!(
@@ -298,11 +296,9 @@ fn bench_batch_decrypt(c: &mut Criterion) {
         );
         println!(
             "{:>34}  {:>12.1}us",
-            "failed, max = MAX_BALANCE",
+            "failed, max = MAX_AMOUNT",
             time(3, || solve_discrete_log_precomputed::<Projective>(
-                MAX_BALANCE,
-                base,
-                garbage
+                MAX_AMOUNT, base, garbage
             )) * 1e6
         );
 

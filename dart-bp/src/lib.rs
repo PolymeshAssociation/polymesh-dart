@@ -102,5 +102,6 @@ pub mod leg;
 pub use error::Error;
 
 pub use polymesh_dart_common::{
-    AssetId, BALANCE_BITS, Balance, MAX_ASSET_ID, MAX_BALANCE, PendingTxnCounter,
+    AMOUNT_BITS, AssetId, BALANCE_BITS, Balance, MAX_AMOUNT, MAX_ASSET_ID, MAX_BALANCE,
+    PendingTxnCounter,
 };

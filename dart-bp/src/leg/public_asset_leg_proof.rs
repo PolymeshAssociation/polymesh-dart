@@ -20,7 +20,7 @@ use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::transcript::MerlinTranscript;
 use dock_crypto_utils::transcript::Transcript;
 use polymesh_dart_common::AssetId;
-use polymesh_dart_common::{BALANCE_BITS, Balance};
+use polymesh_dart_common::{AMOUNT_BITS, Balance};
 use rand_core::CryptoRngCore;
 use schnorr_pok::discrete_log::{PokDiscreteLogProtocol, PokPedersenCommitmentProtocol};
 use schnorr_pok::partial::{PartialPokDiscreteLog, PartialPokPedersenCommitment};
@@ -1182,7 +1182,7 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             cs,
             var_amount.into(),
             amount.map(|a| a as u128),
-            BALANCE_BITS.into(),
+            AMOUNT_BITS.into(),
         )?;
         Ok(())
     }
@@ -2309,6 +2309,7 @@ mod tests {
     mod input_sanitation_disabled {
         use super::*;
         use crate::keys::{keygen_enc, keygen_sig};
+        use polymesh_dart_common::MAX_AMOUNT;
 
         fn assert_public_asset_leg_verify_fails_with_rmc(
             proof: &PublicAssetLegCreationProof<PallasConfig>,
@@ -2344,6 +2345,94 @@ mod tests {
                     Err(Error::ProofVerificationError(_) | Error::SchnorrError(_))
                 ) || rmc_result.is_err()
             );
+        }
+
+        #[test]
+        fn public_asset_leg_amount_above_max_rejected() {
+            let mut rng = rand::thread_rng();
+            const NUM_GENS: usize = 1 << 13;
+
+            let label = b"pub-asset-amount";
+            let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into();
+            let enc_gen = hash_to_pallas(label, b"enc-key-h").into();
+
+            let leaf_level_pc_gens = PedersenGens::<Affine<PallasConfig>>::default();
+            let leaf_level_bp_gens =
+                BulletproofGens::<Affine<PallasConfig>>::new(NUM_GENS as u32, 1);
+
+            let (_, pk_s_e) = keygen_enc(&mut rng, enc_key_gen);
+            let (_, pk_r_e) = keygen_enc(&mut rng, enc_key_gen);
+            let (_, pk_a_e) = keygen_enc(&mut rng, enc_key_gen);
+            let enc_keys = vec![pk_a_e.0];
+            let asset_id = 1;
+            let nonce = b"test-nonce";
+
+            for amount in [MAX_AMOUNT, MAX_AMOUNT + 1] {
+                let leg = Leg::new(
+                    pk_s_e.0,
+                    pk_r_e.0,
+                    amount,
+                    asset_id,
+                    enc_keys.clone(),
+                    vec![],
+                    vec![],
+                )
+                .unwrap();
+                let (leg_enc, leg_enc_rand) = leg
+                    .encrypt(
+                        &mut rng,
+                        LegEncConfig {
+                            visibility: PartyVisibility::FullVisibility,
+                            reveal_asset_id: true,
+                        },
+                        enc_key_gen,
+                        enc_gen,
+                    )
+                    .unwrap();
+                let proof = PublicAssetLegCreationProof::<PallasConfig>::new(
+                    &mut rng,
+                    leg,
+                    leg_enc.clone(),
+                    leg_enc_rand,
+                    nonce,
+                    &leaf_level_pc_gens,
+                    &leaf_level_bp_gens,
+                    enc_key_gen,
+                    enc_gen,
+                );
+                if amount == MAX_AMOUNT {
+                    proof
+                        .unwrap()
+                        .verify(
+                            &mut rng,
+                            leg_enc,
+                            asset_id,
+                            enc_keys.clone(),
+                            vec![],
+                            nonce,
+                            &leaf_level_pc_gens,
+                            &leaf_level_bp_gens,
+                            enc_key_gen,
+                            enc_gen,
+                            None,
+                        )
+                        .unwrap();
+                } else {
+                    assert_public_asset_leg_verify_fails_with_rmc(
+                        &proof.unwrap(),
+                        &mut rng,
+                        leg_enc,
+                        asset_id,
+                        enc_keys.clone(),
+                        vec![],
+                        nonce,
+                        &leaf_level_pc_gens,
+                        &leaf_level_bp_gens,
+                        enc_key_gen,
+                        enc_gen,
+                    );
+                }
+            }
         }
 
         #[test]

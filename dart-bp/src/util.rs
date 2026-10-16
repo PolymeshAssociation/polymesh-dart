@@ -2667,10 +2667,9 @@ mod tests {
 
         let amount = 5;
 
-        // 2^BALANCE_BITS - amount and 2^BALANCE_BITS for BALANCE_BITS < 64. For BALANCE_BITS == 64
-        // the latter wraps past u64::MAX to 0.
+        // 2^BALANCE_BITS - amount and 2^BALANCE_BITS
         let old_bal = MAX_BALANCE - amount + 1;
-        let new_bal = MAX_BALANCE.wrapping_add(1);
+        let new_bal = MAX_BALANCE + 1;
         assert!(!prove_verify_balance_change(
             &pc_gens, &bp_gens, old_bal, new_bal, amount, false
         ));

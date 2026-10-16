@@ -313,12 +313,12 @@ mod tests {
 
     #[test]
     fn net_balance_change_works() {
-        let (amount, decreased) = net_balance_change(&[dec(1u64 << 63)]).unwrap();
-        assert_eq!(amount, 1u64 << 63);
+        let (amount, decreased) = net_balance_change(&[dec(1u64 << 62)]).unwrap();
+        assert_eq!(amount, 1u64 << 62);
         assert!(decreased);
 
-        let (amount, decreased) = net_balance_change(&[inc(1u64 << 63)]).unwrap();
-        assert_eq!(amount, 1u64 << 63);
+        let (amount, decreased) = net_balance_change(&[inc(1u64 << 62)]).unwrap();
+        assert_eq!(amount, 1u64 << 62);
         assert!(!decreased);
 
         let (amount, decreased) = net_balance_change(&[dec(MAX_BALANCE)]).unwrap();
@@ -333,6 +333,10 @@ mod tests {
         assert_eq!(amount, 0);
         assert!(!decreased);
 
+        assert!(matches!(
+            net_balance_change(&[dec(MAX_BALANCE + 1)]),
+            Err(Error::AmountTooLarge(_))
+        ));
         assert!(matches!(
             net_balance_change(&[dec(MAX_BALANCE), dec(MAX_BALANCE)]),
             Err(Error::AmountTooLarge(_))

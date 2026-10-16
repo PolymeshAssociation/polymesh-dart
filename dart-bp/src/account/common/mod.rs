@@ -1696,7 +1696,7 @@ pub fn ensure_same_accounts<G: AffineRepr>(
         }
         if old_state.randomness != new_state.randomness {
             return Err(Error::ProofGenerationError(
-                "Initial mismatch between old and new account states".to_string(),
+                "Initial randomness mismatch between old and new account states".to_string(),
             ));
         }
         if old_state.current_randomness * old_state.randomness != new_state.current_randomness {
