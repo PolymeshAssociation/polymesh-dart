@@ -2,8 +2,9 @@ use crate::account::{LegProverConfig, LegVerifierConfig};
 use crate::auth_proofs::helpers::{init_acc_comm_protocol, resp_acc_comm, verify_acc_comm};
 use crate::auth_proofs::{AUTH_TXN_LABEL, DeviceTxnType, NULLIFIER_LABEL};
 use crate::{
-    ACCOUNT_COMMITMENT_LABEL, Error, NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL, TXN_CHALLENGE_LABEL,
-    add_to_transcript, dst, error,
+    ACCOUNT_COMMITMENT_LABEL, Error, LEG_ACTION_LABEL, LEG_ENC_LABEL, NONCE_LABEL,
+    PARTY_EPH_PK_LABEL, RE_RANDOMIZED_PATH_LABEL, TXN_CHALLENGE_LABEL, add_to_transcript, dst,
+    error,
 };
 use ark_ec::AffineRepr;
 use ark_ec::CurveGroup;
@@ -35,9 +36,6 @@ use schnorr_pok::partial::{
 // Note that ct_amount_1 + ct_amount_2 = ct_amount and ct_asset_id_1 + ct_asset_id_2 = ct_asset_id
 //
 // Reason is challenge being different for auth proof and host so even if the blindings are same response will be different.
-
-pub const LEG_ENCRYPTION_LABEL: &[u8; 14] = b"leg-encryption";
-pub const PARTY_EPH_PK_LABEL: &[u8; 19] = b"party-ephemeral-key";
 
 /// For non-fee account related transactions, affirmation, counter update, reverse
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
@@ -152,10 +150,12 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
         for conf in &legs_with_conf {
             add_to_transcript!(
                 transcript,
-                LEG_ENCRYPTION_LABEL,
+                LEG_ENC_LABEL,
                 conf.encryption,
                 PARTY_EPH_PK_LABEL,
-                conf.party_eph_pk
+                conf.party_eph_pk,
+                LEG_ACTION_LABEL,
+                conf.action_tag()
             );
         }
         txn_type.add_to_transcript(&mut transcript)?;
@@ -500,10 +500,12 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
         for conf in &legs_conf {
             add_to_transcript!(
                 transcript,
-                LEG_ENCRYPTION_LABEL,
+                LEG_ENC_LABEL,
                 conf.encryption,
                 PARTY_EPH_PK_LABEL,
-                conf.party_eph_pk
+                conf.party_eph_pk,
+                LEG_ACTION_LABEL,
+                conf.action_tag()
             );
         }
         txn_type.add_to_transcript(&mut transcript)?;
@@ -553,8 +555,33 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
 
         let h_at = asset_id.map(|a| enc_gen * G::ScalarField::from(a));
 
+        // `y = ct_asset_id - h_at` for every revealed-elsewhere leg, with one shared batch
+        // normalization.
+        let y_elsewhere = match h_at {
+            Some(h_at) => <G as AffineRepr>::Group::normalize_batch(
+                &legs_conf
+                    .iter()
+                    .zip(self.leg_links.iter())
+                    .filter_map(|(conf, link)| {
+                        match (
+                            conf.is_asset_id_revealed(),
+                            link.resp_asset_id(),
+                            conf.encryption.asset_id_ciphertext(),
+                        ) {
+                            (false, Some(RespAssetId::Elsewhere(_)), Some(ct)) => {
+                                Some(ct.into_group() - h_at)
+                            }
+                            _ => None,
+                        }
+                    })
+                    .collect::<Vec<_>>(),
+            ),
+            None => Vec::new(),
+        };
+
         let mut offset_amount = 0;
         let mut offset_asset_id = 0;
+        let mut elsewhere_idx = 0usize;
 
         for (i, (conf, link)) in legs_conf.iter().zip(self.leg_links.iter()).enumerate() {
             if conf.needs_ct_amount() {
@@ -594,12 +621,13 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
                                 "Leg {i}: auth proof claims asset_id is revealed elsewhere but no leg reveals it"
                             )));
                         }
-                        let y = (conf.encryption.asset_id_ciphertext().ok_or_else(|| {
+                        let _ = conf.encryption.asset_id_ciphertext().ok_or_else(|| {
                             Error::ProofVerificationError(format!(
                                 "Leg {i}: encryption is missing the asset-id ciphertext but the leg hides the asset-id"
                             ))
-                        })? - h_at.unwrap())
-                            .into_affine();
+                        })?;
+                        let y = y_elsewhere[elsewhere_idx];
+                        elsewhere_idx += 1;
                         r.challenge_contribution(
                             &eph_pk_base,
                             &y,
@@ -659,6 +687,7 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
 
         let mut offset_amount = 0;
         let mut offset_asset_id = 0;
+        let mut elsewhere_idx = 0usize;
 
         for (i, (conf, link)) in legs_conf.iter().zip(self.leg_links.iter()).enumerate() {
             if conf.needs_ct_amount() {
@@ -695,12 +724,13 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
                 })?;
                 match resp_asset_id {
                     RespAssetId::Elsewhere(r) => {
-                        let y = (conf.encryption.asset_id_ciphertext().ok_or_else(|| {
+                        let _ = conf.encryption.asset_id_ciphertext().ok_or_else(|| {
                             Error::ProofVerificationError(format!(
                                 "Leg {i}: encryption is missing the asset-id ciphertext but the leg hides the asset-id"
                             ))
-                        })? - h_at.unwrap())
-                            .into_affine();
+                        })?;
+                        let y = y_elsewhere[elsewhere_idx];
+                        elsewhere_idx += 1;
                         verify_or_rmc_2!(
                             rmc,
                             r,
@@ -1025,6 +1055,7 @@ mod tests {
             party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk_s.clone()),
             amount,
             has_balance_changed: true,
+            has_counter_decreased: Some(false),
         }];
         let proof = AuthProofAffirmation::<Affine<PallasConfig>>::new(
             &mut rng,
@@ -1072,5 +1103,91 @@ mod tests {
                 None,
             )
             .unwrap();
+    }
+
+    #[test]
+    fn auth_proof_binds_leg_action() {
+        let mut rng = thread_rng();
+        let sk_gen = Affine::<PallasConfig>::rand(&mut rng);
+        let enc_key_gen = Affine::<PallasConfig>::rand(&mut rng);
+        let comm_re_rand_gen = Affine::<PallasConfig>::rand(&mut rng);
+        let enc_gen = Affine::<PallasConfig>::rand(&mut rng);
+
+        let sk_e = Fr::rand(&mut rng);
+        let (sk_enc, ek) = keygen_enc(&mut rng, enc_key_gen);
+        let amount = 100u64;
+        let asset_id = 7u32;
+        let (_, pk_r_e) = keygen_enc(&mut rng, enc_key_gen);
+        let leg = Leg::new(ek.0, pk_r_e.0, amount, asset_id, vec![], vec![], vec![]).unwrap();
+        let cfg = LegEncConfig {
+            visibility: PartyVisibility::NoVisibility,
+            reveal_asset_id: false,
+        };
+        let (leg_enc, _) = leg.encrypt(&mut rng, cfg, enc_key_gen, enc_gen).unwrap();
+        let (leg_core, eph_pk_s) = leg_enc.core_and_eph_keys_for_sender();
+
+        let pk_e = (sk_gen * sk_e + enc_key_gen * sk_enc.0).into_affine();
+        let rand_old = Fr::rand(&mut rng);
+        let rand_new = Fr::rand(&mut rng);
+        let re_rand_leaf = (pk_e + comm_re_rand_gen * rand_old).into_affine();
+        let updated_comm = (pk_e + comm_re_rand_gen * rand_new).into_affine();
+        let nullifier = Affine::<PallasConfig>::rand(&mut rng);
+        let nonce = b"leg_action_binding";
+        let k_amount = Fr::rand(&mut rng);
+        let k_asset_id = Fr::rand(&mut rng);
+        let txn_type = DeviceTxnType::DeviceAffirmation {
+            typ: DeviceAffirmationType::SenderAffirmation,
+        };
+
+        let proof = AuthProofAffirmation::<Affine<PallasConfig>>::new(
+            &mut rng,
+            sk_e,
+            sk_enc.0,
+            rand_old,
+            rand_new,
+            vec![k_amount],
+            vec![k_asset_id],
+            vec![LegProverConfig {
+                encryption: leg_core.clone(),
+                party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk_s.clone()),
+                amount,
+                has_balance_changed: true,
+                has_counter_decreased: Some(false),
+            }],
+            &re_rand_leaf,
+            &updated_comm,
+            nullifier,
+            nonce,
+            &txn_type,
+            sk_gen,
+            enc_key_gen,
+            comm_re_rand_gen,
+            enc_gen,
+        )
+        .unwrap();
+
+        let verify = |has_counter_decreased: Option<bool>| {
+            proof.verify(
+                vec![LegVerifierConfig {
+                    encryption: leg_core.clone(),
+                    party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk_s.clone()),
+                    has_balance_decreased: Some(true),
+                    has_counter_decreased,
+                }],
+                &re_rand_leaf,
+                &updated_comm,
+                nullifier,
+                nonce,
+                &txn_type,
+                sk_gen,
+                enc_key_gen,
+                comm_re_rand_gen,
+                enc_gen,
+                None,
+            )
+        };
+        verify(Some(false)).unwrap();
+        assert!(verify(Some(true)).is_err());
+        assert!(verify(None).is_err());
     }
 }

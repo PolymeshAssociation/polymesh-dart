@@ -38,7 +38,7 @@ use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrRespons
 use zeroize::Zeroize;
 
 pub const ISSUER_PK_LABEL: &'static [u8; 9] = b"issuer_pk";
-pub const ISSUER_PK_ENC_LABEL: &'static [u8; 9] = b"issuer_pk";
+pub const ISSUER_PK_ENC_LABEL: &'static [u8; 13] = b"issuer_pk_enc";
 
 // Split proof follows similar approach as top up txn of fee but here there a are 2 public keys and not 1
 
@@ -658,17 +658,17 @@ impl<
             ));
         }
 
-        let asset_id_comm = (account_comm_key.asset_id_gen() * F0::from(asset_id)).into_affine();
+        let asset_id_comm = account_comm_key.asset_id_gen() * F0::from(asset_id);
+        let id_comm = account_comm_key.id_gen() * id;
 
         let increase_bal_by = F0::from(increase_bal_by);
 
         let issuer_pk_proj = issuer_aff_pk.into_group();
         let issuer_pk_enc_proj = issuer_enc_pk.into_group();
-        let y = self.re_randomized_path.path.get_rerandomized_leaf()?
-            - asset_id_comm
-            - issuer_pk_proj
-            - issuer_pk_enc_proj
-            - (account_comm_key.id_gen() * id);
+
+        let common_known = asset_id_comm + issuer_pk_proj + issuer_pk_enc_proj + id_comm;
+
+        let y = self.re_randomized_path.path.get_rerandomized_leaf()? - common_known;
         self.resp_acc_old.is_valid(
             &MintTxnProof::<L, F0, F1, G0, G1>::leaf_gens(
                 account_comm_key.clone(),
@@ -683,10 +683,7 @@ impl<
         )?;
 
         let y = updated_account_commitment.0
-            - asset_id_comm
-            - issuer_pk_proj
-            - issuer_pk_enc_proj
-            - (account_comm_key.id_gen() * id)
+            - common_known
             - (account_comm_key.balance_gen() * increase_bal_by);
         let mut missing_resps = BTreeMap::new();
         missing_resps.insert(0, self.resp_acc_old.0[0]);

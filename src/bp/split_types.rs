@@ -98,6 +98,7 @@ pub struct LegProverConfig {
     party_eph_pk: WrappedCanonical<PartyEphemeralPublicKey<PallasA>>,
     amount: Balance,
     has_balance_changed: bool,
+    has_counter_decreased: Option<bool>,
 }
 
 impl LegProverConfig {
@@ -107,6 +108,7 @@ impl LegProverConfig {
             party_eph_pk: WrappedCanonical::wrap(&config.party_eph_pk)?,
             amount: config.amount,
             has_balance_changed: config.has_balance_changed,
+            has_counter_decreased: config.has_counter_decreased,
         })
     }
 
@@ -116,6 +118,7 @@ impl LegProverConfig {
             party_eph_pk: self.party_eph_pk.decode()?,
             amount: self.amount,
             has_balance_changed: self.has_balance_changed,
+            has_counter_decreased: self.has_counter_decreased,
         })
     }
 }

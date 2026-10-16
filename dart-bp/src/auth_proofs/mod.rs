@@ -996,6 +996,7 @@ pub mod tests {
             party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk.clone()),
             amount,
             has_balance_changed: true,
+            has_counter_decreased: None,
         }];
 
         let proof = AuthProofAffirmation::new(
@@ -1380,6 +1381,7 @@ pub mod tests {
             party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk.clone()),
             amount,
             has_balance_changed: false,
+            has_counter_decreased: None,
         }];
 
         let mut proof = AuthProofAffirmation::new(
@@ -1510,6 +1512,7 @@ pub mod tests {
                     party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk.clone()),
                     amount,
                     has_balance_changed: balance,
+                    has_counter_decreased: None,
                 }],
                 &re_rand,
                 &updated_account_comm.0,

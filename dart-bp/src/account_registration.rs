@@ -2,14 +2,17 @@ use crate::account::state::AccountStateCommitment;
 use crate::account::{AccountCommitmentKeyTrait, AccountState};
 use crate::add_to_transcript;
 use crate::auth_proofs::{AuthProofOnlySks, AuthProofOnlySksProtocol, DeviceTxnType};
-use crate::discrete_log::solve_discrete_log_bsgs;
+use crate::discrete_log::solve_discrete_log_precomputed;
 use crate::dst;
 use crate::error::*;
 use crate::keys::{DecKey, EncKey, SigKey, VerKey, keygen_enc_given_sk, keygen_sig_given_sk};
 use crate::poseidon_impls::poseidon_2::Poseidon_hash_2_constraints_simple;
 use crate::poseidon_impls::poseidon_2::params::Poseidon2Params;
 use crate::util::{bp_gens_for_vec_commitment, handle_verification_tuple};
-use crate::{ACCOUNT_COMMITMENT_LABEL, ASSET_ID_LABEL, ID_LABEL, NONCE_LABEL, PK_LABEL};
+use crate::{
+    ACCOUNT_COMMITMENT_LABEL, ASSET_ID_LABEL, ID_LABEL, NONCE_LABEL,
+    NULLIFIER_SK_GEN_COUNTER_LABEL, PK_LABEL,
+};
 use crate::{AUTH_PROOF_LABEL, TXN_CHALLENGE_LABEL};
 use ark_ec::{AffineRepr, CurveGroup, VariableBaseMSM};
 use ark_ff::BigInteger;
@@ -62,7 +65,7 @@ pub const ENC_PK_LABEL: &'static [u8; 6] = b"pk_enc";
 // The problem is that response of all chunks is aggregated in one value so tying it with BP is not straightforward. So need to check if aggregating
 // those responses and comparing is safe
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
-pub struct EncryptedScalar<G: AffineRepr, const CHUNK_BITS: usize = 48, const NUM_CHUNKS: usize = 6>
+pub struct EncryptedScalar<G: AffineRepr, const CHUNK_BITS: usize = 43, const NUM_CHUNKS: usize = 6>
 {
     pub ciphertexts: [Ciphertext<G>; NUM_CHUNKS],
     /// For relation `g * r_i`
@@ -77,7 +80,7 @@ pub struct EncryptedScalar<G: AffineRepr, const CHUNK_BITS: usize = 48, const NU
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct EncryptionForRegistration<
     G: AffineRepr,
-    const CHUNK_BITS: usize = 48,
+    const CHUNK_BITS: usize = 43,
     const NUM_CHUNKS: usize = 6,
 > {
     /// Combined Bulletproof vector commitment to `[s_chunks..., rho_chunks...]`
@@ -93,7 +96,7 @@ pub struct EncryptionForRegistration<
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct RegTxnWithoutSkProof<
     G: AffineRepr,
-    const CHUNK_BITS: usize = 48,
+    const CHUNK_BITS: usize = 43,
     const NUM_CHUNKS: usize = 6,
 > {
     /// Carries the commitment to randomness `t` from step 1.
@@ -114,7 +117,7 @@ pub struct RegTxnWithoutSkProof<
 /// This is the proof for user registering its (signing) public key for an asset. Report section 5.1.3, called "Account Registration"
 /// We could register both signing and encryption keys by modifying this proof even though the encryption isn't used in account commitment.
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
-pub struct RegTxnProof<G: AffineRepr, const CHUNK_BITS: usize = 48, const NUM_CHUNKS: usize = 6> {
+pub struct RegTxnProof<G: AffineRepr, const CHUNK_BITS: usize = 43, const NUM_CHUNKS: usize = 6> {
     pub partial: RegTxnWithoutSkProof<G, { CHUNK_BITS }, { NUM_CHUNKS }>,
     pub auth_proof: AuthProofOnlySks<G>,
 }
@@ -123,7 +126,7 @@ pub struct RegTxnProof<G: AffineRepr, const CHUNK_BITS: usize = 48, const NUM_CH
 /// Holds Schnorr commitments, protocol objects, and witnesses needed for `gen_proof`.
 pub struct RegTxnWithoutSkProtocol<
     G: AffineRepr,
-    const CHUNK_BITS: usize = 48,
+    const CHUNK_BITS: usize = 43,
     const NUM_CHUNKS: usize = 6,
 > {
     comm_protocol: SchnorrCommitment<G>,
@@ -215,6 +218,8 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             nonce,
             ASSET_ID_LABEL,
             account.asset_id(),
+            NULLIFIER_SK_GEN_COUNTER_LABEL,
+            counter,
             ACCOUNT_COMMITMENT_LABEL,
             account_commitment,
             PK_LABEL,
@@ -745,7 +750,9 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         poseidon_config: &Poseidon2Params<G::ScalarField>,
         T: Option<(G, G, G)>,
         verifier: &mut Verifier<MerlinTranscript, G>,
-    ) -> Result<()> {
+        // `reduced_acc_comm` and, when `encryption_for_T` is present, the `(combined_s, combined_rho)`
+        // commitments, so the paired `verify_with_challenge` can skip recomputing them.
+    ) -> Result<(G, Option<(G, G)>)> {
         if pk_aff.is_zero() || pk_enc.is_zero() {
             return Err(Error::PointAtIdentity);
         }
@@ -774,6 +781,8 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             nonce,
             ASSET_ID_LABEL,
             asset_id,
+            NULLIFIER_SK_GEN_COUNTER_LABEL,
+            counter,
             ACCOUNT_COMMITMENT_LABEL,
             account_commitment,
             PK_LABEL,
@@ -876,7 +885,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             .challenge_contribution(dst::REG_BP_RHO, &mut transcript_ref)?;
 
         // Chunks combined protos
-        if let Some(ref enc_for_T) = self.encryption_for_T {
+        let combined_commitments = if let Some(ref enc_for_T) = self.encryption_for_T {
             let enc_rand = &enc_for_T.encrypted_randomness;
             enc_for_T
                 .resp_comm_s_rho_chunks_bp
@@ -919,9 +928,12 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
                 dst::REG_ENC_COMBINED,
                 &mut transcript_ref,
             )?;
-        }
+            Some((combined_s_commitment, combined_rho_commitment))
+        } else {
+            None
+        };
 
-        Ok(())
+        Ok((reduced_acc_comm, combined_commitments))
     }
 
     pub fn challenge_contribution(
@@ -970,6 +982,9 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         leaf_level_bp_gens: &BulletproofGens<G>,
         T: Option<(G, G, G)>,
         mut rmc: Option<&mut RandomizedMultChecker<G>>,
+        // `reduced_acc_comm` and `(combined_s, combined_rho)` from the paired challenge phase.
+        precomputed_reduced_acc_comm: Option<G>,
+        precomputed_combined: Option<(G, G)>,
     ) -> Result<()> {
         if self.resp_comm.len() != 4 {
             return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(
@@ -979,11 +994,16 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         }
 
         // D = pk_aff + pk_enc + g_k * asset_id + g_l * id
-        let D = pk_aff.into_group()
-            + pk_enc.into_group()
-            + (account_comm_key.asset_id_gen() * G::ScalarField::from(asset_id))
-            + (account_comm_key.id_gen() * id);
-        let reduced_acc_comm = (account_commitment.0.into_group() - D).into_affine();
+        let reduced_acc_comm = match precomputed_reduced_acc_comm {
+            Some(reduced_acc_comm) => reduced_acc_comm,
+            None => {
+                let D = pk_aff.into_group()
+                    + pk_enc.into_group()
+                    + (account_comm_key.asset_id_gen() * G::ScalarField::from(asset_id))
+                    + (account_comm_key.id_gen() * id);
+                (account_commitment.0.into_group() - D).into_affine()
+            }
+        };
 
         // Verify account commitment Schnorr
         let bases = vec![
@@ -1060,16 +1080,26 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
                 );
             }
 
+            // Base powers, needed only when the combined commitments aren't precomputed. Computed
+            // once and shared by the combined_s and combined_rho recompute arms.
+            let recompute_powers = precomputed_combined
+                .is_none()
+                .then(powers_of_base::<G::ScalarField, CHUNK_BITS, NUM_CHUNKS>);
+
             // Compute combined_s_commitment for verification
-            let powers = powers_of_base::<G::ScalarField, CHUNK_BITS, NUM_CHUNKS>();
-            let encs = enc_rand
-                .ciphertexts
-                .iter()
-                .map(|c| c.encrypted)
-                .collect::<Vec<_>>();
-            let combined_s_commitment = G::Group::msm(&encs, &powers)
-                .map_err(Error::size_mismatch)?
-                .into_affine();
+            let combined_s_commitment = match precomputed_combined {
+                Some((combined_s, _)) => combined_s,
+                None => {
+                    let encs = enc_rand
+                        .ciphertexts
+                        .iter()
+                        .map(|c| c.encrypted)
+                        .collect::<Vec<_>>();
+                    G::Group::msm(&encs, recompute_powers.as_ref().unwrap())
+                        .map_err(Error::size_mismatch)?
+                        .into_affine()
+                }
+            };
             verify_or_rmc_3!(
                 rmc,
                 enc_rand.resp_combined_s,
@@ -1124,14 +1154,19 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             );
 
             // Compute combined_rho_commitment for verification
-            let rho_encs = enc_rho
-                .ciphertexts
-                .iter()
-                .map(|c| c.encrypted)
-                .collect::<Vec<_>>();
-            let combined_rho_commitment = G::Group::msm(&rho_encs, &powers)
-                .map_err(Error::size_mismatch)?
-                .into_affine();
+            let combined_rho_commitment = match precomputed_combined {
+                Some((_, combined_rho)) => combined_rho,
+                None => {
+                    let rho_encs = enc_rho
+                        .ciphertexts
+                        .iter()
+                        .map(|c| c.encrypted)
+                        .collect::<Vec<_>>();
+                    G::Group::msm(&rho_encs, recompute_powers.as_ref().unwrap())
+                        .map_err(Error::size_mismatch)?
+                        .into_affine()
+                }
+            };
             verify_or_rmc_3!(
                 rmc,
                 enc_rho.resp_combined_s,
@@ -1421,6 +1456,8 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             leaf_level_bp_gens,
             T,
             rmc,
+            None,
+            None,
         )?;
 
         let bp_proof =
@@ -1492,19 +1529,20 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
         verifier: &mut Verifier<MerlinTranscript, G>,
         mut rmc: Option<&mut RandomizedMultChecker<G>>,
     ) -> Result<()> {
-        self.partial.challenge_contribution_with_verifier(
-            id,
-            pk_aff,
-            pk_enc,
-            asset_id,
-            account_commitment,
-            counter,
-            nonce,
-            &account_comm_key,
-            poseidon_config,
-            T,
-            verifier,
-        )?;
+        let (reduced_acc_comm, combined_commitments) =
+            self.partial.challenge_contribution_with_verifier(
+                id,
+                pk_aff,
+                pk_enc,
+                asset_id,
+                account_commitment,
+                counter,
+                nonce,
+                &account_comm_key,
+                poseidon_config,
+                T,
+                verifier,
+            )?;
 
         // Auth challenge contribution (after all partial contributions)
         let enc_key_gen = account_comm_key.sk_enc_gen();
@@ -1533,6 +1571,8 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             leaf_level_bp_gens,
             T,
             rmc.as_deref_mut(),
+            Some(reduced_acc_comm),
+            combined_commitments,
         )?;
 
         // Verify auth
@@ -1621,7 +1661,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
             .map(|(i, c)| {
                 let e = c.decrypt(sk_T).into_group();
                 // TODO: This can be optimized as discrete log with same base is being computed
-                solve_discrete_log_bsgs(max, enc_gen, e)
+                solve_discrete_log_precomputed(max, enc_gen, e)
                     .map(|d| G::ScalarField::from(d))
                     .ok_or_else(|| Error::SolvingDiscreteLogFailed(i))
             })
@@ -2625,7 +2665,7 @@ pub mod tests {
         // Setup begins
         const NUM_GENS: usize = 1 << 12; // minimum sufficient power of 2 (for height 4 curve tree)
 
-        const CHUNK_BITS: usize = 48;
+        const CHUNK_BITS: usize = 43;
         const NUM_CHUNKS: usize = 6;
 
         // Create public params (generators, etc)
@@ -2860,7 +2900,7 @@ pub mod tests {
         let mut rng = rand::thread_rng();
 
         const NUM_GENS: usize = 1 << 12;
-        const CHUNK_BITS: usize = 48;
+        const CHUNK_BITS: usize = 43;
         const NUM_CHUNKS: usize = 6;
 
         let account_tree_params =
@@ -3146,6 +3186,8 @@ pub mod tests {
                     &leaf_level_bp_gens,
                     T,
                     None,
+                    None,
+                    None,
                 )
                 .unwrap();
 
@@ -3337,6 +3379,8 @@ pub mod tests {
                     &leaf_level_bp_gens,
                     T,
                     None,
+                    None,
+                    None,
                 )
                 .unwrap();
 
@@ -3469,7 +3513,7 @@ pub mod tests {
         }
         assert_eq!(reconstructed, val);
 
-        const B: usize = 48;
+        const B: usize = 43;
         const N: usize = 6;
         let powers = powers_of_base::<Fr, B, N>();
         for _ in 0..100 {
@@ -3646,7 +3690,7 @@ pub mod tests {
         // Setup begins
         const NUM_GENS: usize = 1 << 12; // minimum sufficient power of 2 (for height 4 curve tree)
 
-        const CHUNK_BITS: usize = 48;
+        const CHUNK_BITS: usize = 43;
         const NUM_CHUNKS: usize = 6;
 
         // Create public params (generators, etc)
@@ -4815,7 +4859,7 @@ pub mod tests {
             use super::*;
             use mocktopus::mocking::{MockResult, Mockable};
 
-            const CHUNK_BITS: usize = 48;
+            const CHUNK_BITS: usize = 43;
             const NUM_CHUNKS: usize = 6;
 
             fn clear_mocks<CK: AccountCommitmentKeyTrait<PallasA>>(_: &CK) {
@@ -4837,7 +4881,7 @@ pub mod tests {
                 let mut rng = rand::thread_rng();
 
                 const NUM_GENS: usize = 1 << 12;
-                const CHUNK_BITS: usize = 48;
+                const CHUNK_BITS: usize = 43;
                 const NUM_CHUNKS: usize = 6;
 
                 let account_tree_params = SelRerandProofParameters::<
@@ -4955,7 +4999,7 @@ pub mod tests {
                 let mut rng = rand::thread_rng();
 
                 const NUM_GENS: usize = 1 << 12;
-                const CHUNK_BITS: usize = 48;
+                const CHUNK_BITS: usize = 43;
                 const NUM_CHUNKS: usize = 6;
 
                 let account_tree_params = SelRerandProofParameters::<
@@ -5104,7 +5148,7 @@ pub mod tests {
                 let mut rng = rand::thread_rng();
 
                 const NUM_GENS: usize = 1 << 12;
-                const CHUNK_BITS: usize = 48;
+                const CHUNK_BITS: usize = 43;
                 const NUM_CHUNKS: usize = 6;
 
                 let account_tree_params = SelRerandProofParameters::<

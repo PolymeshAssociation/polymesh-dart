@@ -16,8 +16,9 @@ use crate::util::{
     generate_account_commitment_responses, generate_null_bp_responses,
 };
 use crate::{
-    Error, LEG_ENC_LABEL, NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL, ROOT_LABEL, TXN_EVEN_LABEL,
-    TXN_ODD_LABEL, UPDATED_ACCOUNT_COMMITMENT_LABEL, add_to_transcript, error::Result,
+    Error, LEG_ACTION_LABEL, LEG_ENC_LABEL, NONCE_LABEL, PARTY_EPH_PK_LABEL,
+    RE_RANDOMIZED_PATH_LABEL, ROOT_LABEL, TXN_EVEN_LABEL, TXN_ODD_LABEL,
+    UPDATED_ACCOUNT_COMMITMENT_LABEL, add_to_transcript, error::Result,
 };
 use ark_dlog_gadget::dlog::DiscreteLogParameters;
 use ark_ec::short_weierstrass::{Affine, Projective, SWCurveConfig};
@@ -134,6 +135,9 @@ pub struct CommonStateChangeProver<
     pub t_bp_randomness_relations: SchnorrCommitment<Affine<G0>>,
     pub comm_bp_blinding: F0,
     pub sk_enc_inv_blinding: F0,
+    /// `sk_enc^-1` in solo mode, `None` in host mode. Computed in the T-value phase and reused by
+    /// the response phase.
+    pub sk_enc_inv: Option<F0>,
     pub old_balance_blinding: F0,
     pub new_balance_blinding: F0,
     /// Amount blindings of the balance-changed legs, shared with `BalanceChangeProver` so the
@@ -331,16 +335,18 @@ impl<
         let asset_id = account.asset_id();
 
         // For legs that have asset-id ciphertext, prove that asset-id ciphertext is correctly formed when is_asset_id_revealed = true
-        let (is_asset_id_revealed, legs, amounts, legs_balance_changed) =
+        let (is_asset_id_revealed, legs, amounts, legs_balance_changed, leg_actions) =
             legs_for_proof(legs_with_conf, asset_id)?;
 
-        for (leg_core, eph_pk) in &legs {
+        for ((leg_core, eph_pk), action) in legs.iter().zip(&leg_actions) {
             add_to_transcript!(
                 even_prover.transcript(),
                 LEG_ENC_LABEL,
                 leg_core,
-                LEG_ENC_LABEL,
-                eph_pk
+                PARTY_EPH_PK_LABEL,
+                eph_pk,
+                LEG_ACTION_LABEL,
+                action
             );
         }
 
@@ -391,6 +397,7 @@ impl<
             t_null,
             t_leg_link,
             t_bp_randomness_relations,
+            sk_enc_inv,
         ) = generate_sigma_t_values_for_common_state_change(
             rng,
             legs,
@@ -448,6 +455,7 @@ impl<
             t_bp_randomness_relations,
             comm_bp_blinding,
             sk_enc_inv_blinding,
+            sk_enc_inv: Some(sk_enc_inv),
             old_balance_blinding,
             new_balance_blinding,
             balance_amount_blindings,
@@ -504,10 +512,14 @@ impl<
         updated_account: &AccountState<Affine<G0>>,
         challenge: &F0,
     ) -> Result<CommonStateChangeProof<L, F0, F1, G0, G1>> {
+        let mut sk_enc_inv = self.sk_enc_inv.take().ok_or_else(|| {
+            Error::ProofGenerationError("sk_enc_inv is missing (solo mode expected)".to_string())
+        })?;
         let (resp_acc_old, resp_acc_new, resp_null, resp_leg_link, resp_bp_randomness_relations) =
             generate_sigma_responses_for_common_state_change(
                 sk_aff,
                 sk_enc,
+                sk_enc_inv,
                 account,
                 updated_account,
                 self.leaf_rerandomization,
@@ -523,6 +535,7 @@ impl<
 
         Zeroize::zeroize(&mut self.leaf_rerandomization);
         Zeroize::zeroize(&mut self.comm_bp_blinding);
+        Zeroize::zeroize(&mut sk_enc_inv);
 
         Ok(CommonStateChangeProof {
             partial: CommonStateChangeProofPartial {
@@ -813,7 +826,7 @@ impl<
         even_prover: &mut Prover<MerlinTranscript, Affine<G0>>,
     ) -> Result<(Self, Affine<G0>)> {
         let asset_id = account.asset_id();
-        let (_, legs, _, _) = legs_for_proof(legs_with_conf, asset_id)?;
+        let (_, legs, _, _, leg_actions) = legs_for_proof(legs_with_conf, asset_id)?;
 
         add_to_transcript!(
             even_prover.transcript(),
@@ -823,13 +836,15 @@ impl<
             updated_account_commitment
         );
 
-        for (leg_core, eph_pk) in &legs {
+        for ((leg_core, eph_pk), action) in legs.iter().zip(&leg_actions) {
             add_to_transcript!(
                 even_prover.transcript(),
                 LEG_ENC_LABEL,
                 leg_core,
-                LEG_ENC_LABEL,
-                eph_pk
+                PARTY_EPH_PK_LABEL,
+                eph_pk,
+                LEG_ACTION_LABEL,
+                action
             );
         }
 
@@ -1702,12 +1717,14 @@ pub(crate) fn legs_for_proof<G: AffineRepr>(
         Vec<(LegEncryptionCore<G>, PartyEphemeralPublicKey<G>)>,
         Vec<Balance>,
         Vec<bool>,
+        Vec<[u8; 2]>,
     ),
     Error,
 > {
     let mut legs = Vec::with_capacity(legs_with_conf.len());
     let mut amounts = Vec::with_capacity(legs_with_conf.len());
     let mut has_balance_changed = Vec::with_capacity(legs_with_conf.len());
+    let mut leg_actions = Vec::with_capacity(legs_with_conf.len());
     let mut is_asset_id_revealed = false;
     // If asset-id is revealed in any of the leg encryptions, then its assumed that its revealed and the proof
     // is done accordingly
@@ -1723,7 +1740,14 @@ pub(crate) fn legs_for_proof<G: AffineRepr>(
         }
         amounts.push(leg_conf.amount);
         has_balance_changed.push(leg_conf.has_balance_changed);
+        leg_actions.push(leg_conf.action_tag());
         legs.push((leg_conf.encryption, leg_conf.party_eph_pk));
     }
-    Ok((is_asset_id_revealed, legs, amounts, has_balance_changed))
+    Ok((
+        is_asset_id_revealed,
+        legs,
+        amounts,
+        has_balance_changed,
+        leg_actions,
+    ))
 }

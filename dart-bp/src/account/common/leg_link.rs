@@ -125,6 +125,17 @@ impl<G0: SWCurveConfig> LegAccountLink<G0> {
     }
 }
 
+/// Per-leg action tag to be added to proof transcript. The tag binds whether the balance and the
+/// counter changes.
+pub fn leg_action_tag(has_balance_changed: bool, has_counter_decreased: Option<bool>) -> [u8; 2] {
+    let counter = match has_counter_decreased {
+        None => 0,
+        Some(false) => 1,
+        Some(true) => 2,
+    };
+    [has_balance_changed as u8, counter]
+}
+
 /// Configuration for a leg in common state change operations (prover side)
 #[derive(Clone)]
 pub struct LegProverConfig<G: AffineRepr> {
@@ -132,6 +143,8 @@ pub struct LegProverConfig<G: AffineRepr> {
     pub party_eph_pk: PartyEphemeralPublicKey<G>,
     pub amount: Balance,
     pub has_balance_changed: bool,
+    /// `None` when the counter doesn't change on this leg.
+    pub has_counter_decreased: Option<bool>,
 }
 
 /// Configuration for a leg in common state change operations (verifier side)
@@ -196,6 +209,10 @@ impl<G: AffineRepr> LegProverConfig<G> {
     pub fn num_ct_amounts(configs: &[Self]) -> usize {
         configs.iter().filter(|l| l.needs_ct_amount()).count()
     }
+
+    pub fn action_tag(&self) -> [u8; 2] {
+        leg_action_tag(self.has_balance_changed, self.has_counter_decreased)
+    }
 }
 
 impl<G: AffineRepr> LegVerifierConfig<G> {
@@ -233,6 +250,13 @@ impl<G: AffineRepr> LegVerifierConfig<G> {
 
     pub fn num_ct_amounts(configs: &[Self]) -> usize {
         configs.iter().filter(|l| l.needs_ct_amount()).count()
+    }
+
+    pub fn action_tag(&self) -> [u8; 2] {
+        leg_action_tag(
+            self.has_balance_decreased.is_some(),
+            self.has_counter_decreased,
+        )
     }
 }
 

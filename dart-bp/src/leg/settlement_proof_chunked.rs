@@ -5,13 +5,20 @@
 //! Instead of one [`SettlementCreationProof`] (one `BPProof`) over all `N` legs, build several
 //! independent proofs over fewer legs and batch-verify them. Because every chunk reuses the same
 //! per-chunk-sized generators, batch verification collapses their generator MSMs into one small MSM.
-//! Legs are bound together due to same nonce
+//! Each chunk's transcripts start with the chunk's index, the number of chunks and a digest of all leg
+//! encryptions, so chunks cannot be dropped, reordered, repeated or verified outside their settlement.
 
-use crate::Error;
 use crate::error::Result;
 use crate::leg::settlement_proof::SettlementCreationProof;
-use crate::leg::{AssetCommitmentParams, AssetData, Leg, LegEncryption, LegEncryptionRandomness};
-use crate::util::batch_verify_bp;
+use crate::leg::{
+    AssetCommitmentParams, AssetData, LEG_TXN_EVEN_LABEL, LEG_TXN_ODD_LABEL, Leg, LegEncryption,
+    LegEncryptionRandomness,
+};
+use crate::util::{
+    BPProof, batch_digest, batch_verify_bp, chunk_transcript, get_verification_tuples_with_rng,
+    prove_with_rng,
+};
+use crate::{Error, LEG_ENC_LABEL, add_to_transcript};
 use ark_dlog_gadget::dlog::DiscreteLogParameters;
 use ark_ec::short_weierstrass::Affine;
 use ark_ec_divisors::DivisorCurve;
@@ -20,12 +27,15 @@ use ark_serialize::CanonicalSerialize;
 use ark_std::string::ToString;
 use ark_std::vec;
 use ark_std::vec::Vec;
-use bulletproofs::r1cs::VerificationTuple;
+use bulletproofs::r1cs::{Prover, VerificationTuple, Verifier};
 use curve_tree_relations::batched_curve_tree_prover::CurveTreeWitnessMultiPath;
 use curve_tree_relations::curve_tree::Root;
 use curve_tree_relations::parameters::SelRerandProofParametersNew;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
+use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use rand_core::CryptoRngCore;
+
+pub const SETTLEMENT_BATCH_LABEL: &[u8; 16] = b"settlement-batch";
 
 /// A settlement expressed as an ordered set of independent chunks, each its own `BPProof`,
 /// with one chunk per curve-tree multipath.
@@ -128,6 +138,9 @@ impl<
             }
         }
 
+        let legs_digest = Self::legs_digest(&leg_encs)?;
+        let num_chunks = chunk_specs.len();
+
         // Build each chunk by consuming the flat inputs in order.
         let mut legs_it = legs.into_iter();
         let mut encs_it = leg_encs.into_iter();
@@ -135,8 +148,8 @@ impl<
         let mut asset_it = asset_data.into_iter();
         let mut paths_it = leaf_paths.into_iter();
 
-        let mut chunks = Vec::with_capacity(chunk_specs.len());
-        for (n_legs, n_hidden) in chunk_specs {
+        let mut chunks = Vec::with_capacity(num_chunks);
+        for (chunk_idx, (n_legs, n_hidden)) in chunk_specs.into_iter().enumerate() {
             let chunk_legs: Vec<_> = (&mut legs_it).take(n_legs).collect();
             let chunk_encs: Vec<_> = (&mut encs_it).take(n_legs).collect();
             let chunk_rands: Vec<_> = (&mut rands_it).take(n_legs).collect();
@@ -148,20 +161,42 @@ impl<
                 Vec::new()
             };
 
-            let proof = SettlementCreationProof::new::<R, Parameters0, Parameters1>(
+            let mut even_prover = Prover::new(
+                &tree_parameters.even_parameters.pc_gens(),
+                chunk_transcript(LEG_TXN_EVEN_LABEL, num_chunks, chunk_idx, &legs_digest)?,
+            );
+            let mut odd_prover = Prover::new(
+                &tree_parameters.odd_parameters.pc_gens(),
+                chunk_transcript(LEG_TXN_ODD_LABEL, num_chunks, chunk_idx, &legs_digest)?,
+            );
+            let mut proof =
+                SettlementCreationProof::new_with_given_prover::<R, Parameters0, Parameters1>(
+                    rng,
+                    chunk_legs,
+                    chunk_encs,
+                    chunk_rands,
+                    chunk_paths,
+                    chunk_asset,
+                    asset_tree_root,
+                    nonce,
+                    tree_parameters,
+                    asset_comm_params,
+                    enc_key_gen,
+                    enc_gen,
+                    &mut even_prover,
+                    &mut odd_prover,
+                )?;
+            let (even_proof, odd_proof) = prove_with_rng(
+                even_prover,
+                odd_prover,
+                &tree_parameters.even_parameters.bp_gens(),
+                &tree_parameters.odd_parameters.bp_gens(),
                 rng,
-                chunk_legs,
-                chunk_encs,
-                chunk_rands,
-                chunk_paths,
-                chunk_asset,
-                asset_tree_root,
-                nonce,
-                tree_parameters,
-                asset_comm_params,
-                enc_key_gen,
-                enc_gen,
             )?;
+            proof.r1cs_proof = Some(BPProof {
+                even_proof,
+                odd_proof,
+            });
             chunks.push(proof);
         }
 
@@ -173,6 +208,15 @@ impl<
 
     pub fn num_chunks(&self) -> usize {
         self.chunks.len()
+    }
+
+    /// Digest of the leg encryptions of all chunks, in leg order.
+    fn legs_digest(leg_encs: &[LegEncryption<Affine<G0>>]) -> Result<[u8; 32]> {
+        let mut transcript = MerlinTranscript::new(SETTLEMENT_BATCH_LABEL);
+        for leg_enc in leg_encs {
+            add_to_transcript!(transcript, LEG_ENC_LABEL, leg_enc);
+        }
+        Ok(batch_digest(transcript))
     }
 
     pub fn total_proof_size(&self) -> usize {
@@ -227,12 +271,15 @@ impl<
             ));
         }
 
+        let legs_digest = Self::legs_digest(&leg_encs)?;
+        let num_chunks = self.chunks.len();
+
         let mut encs_it = leg_encs.into_iter();
         let mut enc_keys_it = enc_keys.into_iter();
         let mut public_it = public_enc_keys.into_iter();
-        let mut even_tuples = Vec::with_capacity(self.chunks.len());
-        let mut odd_tuples = Vec::with_capacity(self.chunks.len());
-        for chunk in &self.chunks {
+        let mut even_tuples = Vec::with_capacity(num_chunks);
+        let mut odd_tuples = Vec::with_capacity(num_chunks);
+        for (chunk_idx, chunk) in self.chunks.iter().enumerate() {
             let n = chunk.leg_proofs.len();
             let chunk_encs: Vec<_> = (&mut encs_it).take(n).collect();
             // enc_keys are per revealed leg, so take as many as this chunk reveals.
@@ -246,7 +293,19 @@ impl<
             } else {
                 Vec::new()
             };
-            let (even, odd) = chunk.verify_and_return_tuples::<R, Parameters0, Parameters1>(
+            let mut even_verifier = Verifier::new(chunk_transcript(
+                LEG_TXN_EVEN_LABEL,
+                num_chunks,
+                chunk_idx,
+                &legs_digest,
+            )?);
+            let mut odd_verifier = Verifier::new(chunk_transcript(
+                LEG_TXN_ODD_LABEL,
+                num_chunks,
+                chunk_idx,
+                &legs_digest,
+            )?);
+            chunk.verify_sigma_protocols_and_enforce_constraints::<Parameters0, Parameters1>(
                 chunk_encs,
                 asset_tree_root,
                 chunk_enc_keys,
@@ -256,8 +315,19 @@ impl<
                 asset_comm_params,
                 enc_key_gen,
                 enc_gen,
-                rng,
+                &mut even_verifier,
+                &mut odd_verifier,
                 rmc.as_deref_mut(),
+            )?;
+            let r1cs_proof = chunk.r1cs_proof.as_ref().ok_or_else(|| {
+                Error::ProofVerificationError("R1CS proof is missing".to_string())
+            })?;
+            let (even, odd) = get_verification_tuples_with_rng(
+                even_verifier,
+                odd_verifier,
+                &r1cs_proof.even_proof,
+                &r1cs_proof.odd_proof,
+                rng,
             )?;
             even_tuples.push(even);
             odd_tuples.push(odd);
@@ -822,6 +892,70 @@ mod tests {
                 enc_gen,
             )
             .unwrap();
+
+        // Chunks are bound to their position in this settlement.
+        let sizes: Vec<usize> = batch.chunks.iter().map(|c| c.leg_proofs.len()).collect();
+        let offsets: Vec<usize> = sizes
+            .iter()
+            .scan(0, |acc, n| {
+                let offset = *acc;
+                *acc += n;
+                Some(offset)
+            })
+            .collect();
+        let encs_of = |order: &[usize]| -> Vec<_> {
+            order
+                .iter()
+                .flat_map(|&c| leg_encs[offsets[c]..offsets[c] + sizes[c]].to_vec())
+                .collect()
+        };
+        let verify_chunks = |order: &[usize], rng: &mut rand::rngs::ThreadRng| {
+            let encs = encs_of(order);
+            let num_revealed = encs.iter().filter(|e| e.is_asset_id_revealed()).count();
+            SettlementCreationProofBatch {
+                chunks: order.iter().map(|&c| batch.chunks[c].clone()).collect(),
+                num_legs: encs.len() as u32,
+            }
+            .verify_batched_bp::<_, PallasParams, VestaParams>(
+                rng,
+                encs,
+                &root,
+                vec![vec![pk_a_e.0]; num_revealed],
+                vec![],
+                nonce,
+                &asset_tree_params,
+                &asset_comm_params,
+                enc_key_gen,
+                enc_gen,
+            )
+        };
+        assert!(verify_chunks(&[0, 1, 2], &mut rng).is_ok());
+        assert!(verify_chunks(&[1, 2], &mut rng).is_err());
+        assert!(verify_chunks(&[0, 1], &mut rng).is_err());
+        assert!(verify_chunks(&[2, 0, 1], &mut rng).is_err());
+        assert!(verify_chunks(&[0, 0, 1, 2], &mut rng).is_err());
+        let chunk_encs = encs_of(&[1]);
+        let num_revealed = chunk_encs
+            .iter()
+            .filter(|e| e.is_asset_id_revealed())
+            .count();
+        assert!(
+            batch.chunks[1]
+                .verify::<_, PallasParams, VestaParams>(
+                    &mut rng,
+                    chunk_encs,
+                    &root,
+                    vec![vec![pk_a_e.0]; num_revealed],
+                    vec![],
+                    nonce,
+                    &asset_tree_params,
+                    &asset_comm_params,
+                    enc_key_gen,
+                    enc_gen,
+                    None,
+                )
+                .is_err()
+        );
 
         let mut rmc_even = RandomizedMultChecker::new(VestaScalar::rand(&mut rng));
         let mut rmc_odd = RandomizedMultChecker::new(PallasScalar::rand(&mut rng));

@@ -958,7 +958,7 @@ impl<
         let mut even_verifier = Verifier::<_, Affine<G0>>::new(even_transcript);
         let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
         let mut odd_verifier = Verifier::<_, Affine<G1>>::new(odd_transcript);
-        self.challenge_contribution_with_verifier::<Parameters0, Parameters1>(
+        let (_old, _new) = self.challenge_contribution_with_verifier::<Parameters0, Parameters1>(
             pk,
             asset_id,
             increase_bal_by,
@@ -990,7 +990,12 @@ impl<
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         even_verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
         odd_verifier: &mut Verifier<MerlinTranscript, Affine<G1>>,
-    ) -> Result<()> {
+        // Returns `(acc_old, acc_new)` so the paired verify phase can skip recomputing them.
+    ) -> Result<(Affine<G0>, Affine<G0>)> {
+        // Identity nullifier means `rho = 0`
+        if nullifier.is_zero() {
+            return Err(Error::PointAtIdentity);
+        }
         self.re_randomized_path
             .select_and_rerandomize_verifier_gadget::<Parameters0, Parameters1>(
                 root,
@@ -1028,17 +1033,12 @@ impl<
             .resp_acc_new
             .challenge_contribution(dst::FEE_ACCOUNT_COMM_NEW_WITHOUT_SK, &mut transcript)?;
 
-        let asset_id_comm = (account_comm_key.asset_id_gen() * F0::from(asset_id)).into_affine();
-        let reduce = (pk.into_group() + asset_id_comm).into_affine();
-        let acc_old = (self
-            .re_randomized_path
-            .path
-            .get_rerandomized_leaf()?
-            .into_group()
-            - reduce
+        let asset_id_comm = account_comm_key.asset_id_gen() * F0::from(asset_id);
+        let reduce = (pk + asset_id_comm).into_affine();
+        let acc_old = (self.re_randomized_path.path.get_rerandomized_leaf()? - reduce
             + (account_comm_key.balance_gen() * F0::from(increase_bal_by)))
         .into_affine();
-        let acc_new = (updated_account_commitment.0.into_group() - reduce).into_affine();
+        let acc_new = (updated_account_commitment.0 - reduce).into_affine();
         transcript.append(b"acc_comm_old", &acc_old);
         transcript.append(b"acc_comm_new", &acc_new);
 
@@ -1075,7 +1075,7 @@ impl<
             &mut transcript,
         )?;
 
-        Ok(())
+        Ok((acc_old, acc_new))
     }
 
     pub fn verify_with_challenge<
@@ -1092,6 +1092,8 @@ impl<
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         challenge: &F0,
         mut rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
+        // `(acc_old, acc_new)` from the paired challenge phase; `None` recomputes them (same values).
+        precomputed_acc_old_new: Option<(Affine<G0>, Affine<G0>)>,
     ) -> Result<()> {
         if self.account_comm_proof.resp_acc_old.len() != 4 {
             return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(
@@ -1106,22 +1108,19 @@ impl<
             ));
         }
 
-        let asset_id_comm = (account_comm_key.asset_id_gen() * F0::from(asset_id)).into_affine();
-
-        let increase_bal_by = F0::from(increase_bal_by);
-
-        let issuer_pk_proj = pk.into_group();
-        let reduce = asset_id_comm + issuer_pk_proj;
-        let acc_old = self
-            .re_randomized_path
-            .path
-            .get_rerandomized_leaf()?
-            .into_group()
-            - reduce
-            + (account_comm_key.balance_gen() * increase_bal_by);
-        let acc_old = acc_old.into_affine();
-
-        let acc_new = (updated_account_commitment.0.into_group() - reduce).into_affine();
+        let (acc_old, acc_new) = match precomputed_acc_old_new {
+            Some(acc_old_new) => acc_old_new,
+            None => {
+                let asset_id_comm = account_comm_key.asset_id_gen() * F0::from(asset_id);
+                let increase_bal_by = F0::from(increase_bal_by);
+                let reduce = pk + asset_id_comm;
+                let acc_old = (self.re_randomized_path.path.get_rerandomized_leaf()? - reduce
+                    + (account_comm_key.balance_gen() * increase_bal_by))
+                    .into_affine();
+                let acc_new = (updated_account_commitment.0.into_group() - reduce).into_affine();
+                (acc_old, acc_new)
+            }
+        };
         let mut missing_resps = BTreeMap::new();
         missing_resps.insert(0, self.account_comm_proof.resp_acc_old.0[0]);
 
@@ -1196,8 +1195,13 @@ impl<
         Verifier<MerlinTranscript, Affine<G0>>,
         Verifier<MerlinTranscript, Affine<G1>>,
     )> {
-        let (mut even_verifier, odd_verifier) = self
-            .challenge_contribution::<Parameters0, Parameters1>(
+        let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
+        let mut even_verifier = Verifier::<_, Affine<G0>>::new(even_transcript);
+        let odd_transcript = MerlinTranscript::new(TXN_ODD_LABEL);
+        let mut odd_verifier = Verifier::<_, Affine<G1>>::new(odd_transcript);
+        // Call the challenge phase directly to reuse `(acc_old, acc_new)` in the verify phase.
+        let (acc_old, acc_new) = self
+            .challenge_contribution_with_verifier::<Parameters0, Parameters1>(
                 pk,
                 asset_id,
                 increase_bal_by,
@@ -1207,6 +1211,8 @@ impl<
                 nonce,
                 account_tree_params,
                 account_comm_key.clone(),
+                &mut even_verifier,
+                &mut odd_verifier,
             )?;
         let challenge_h = even_verifier
             .transcript()
@@ -1221,6 +1227,7 @@ impl<
             account_comm_key,
             &challenge_h,
             None,
+            Some((acc_old, acc_new)),
         )?;
         Ok((even_verifier, odd_verifier))
     }
@@ -1564,6 +1571,7 @@ impl<
                 account_comm_key,
                 &challenge_h_final_v,
                 rmc,
+                None,
             )?;
 
         let r1cs =
@@ -1696,7 +1704,8 @@ impl<
         let pk_gen = account_comm_key.sk_gen();
 
         // Partial challenge contribution: re-rand gadget, public inputs, partial T-values, BP
-        self.partial
+        let (acc_old, acc_new) = self
+            .partial
             .challenge_contribution_with_verifier::<Parameters0, Parameters1>(
                 pk,
                 asset_id,
@@ -1729,6 +1738,7 @@ impl<
                 account_comm_key,
                 &challenge,
                 rmc.as_mut().map(|r| &mut **r),
+                Some((acc_old, acc_new)),
             )?;
 
         // Verify auth sigma protocol
@@ -2333,6 +2343,9 @@ impl<
         even_verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
         odd_verifier: &mut Verifier<MerlinTranscript, Affine<G1>>,
     ) -> Result<()> {
+        if nullifier.is_zero() {
+            return Err(Error::PointAtIdentity);
+        }
         self.re_randomized_path
             .select_and_rerandomize_verifier_gadget::<Parameters0, Parameters1>(
                 root,
@@ -3081,6 +3094,9 @@ impl<
         Verifier<MerlinTranscript, Affine<G0>>,
         Verifier<MerlinTranscript, Affine<G1>>,
         F0,
+        // (comm_old, comm_new) so the paired verify phase can skip recomputing them.
+        Affine<G0>,
+        Affine<G0>,
     )> {
         let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
         let mut even_verifier = Verifier::<_, Affine<G0>>::new(even_transcript);
@@ -3129,7 +3145,7 @@ impl<
         transcript.append(b"acc_comm_new", &comm_new);
 
         let challenge_h = transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
-        Ok((even_verifier, odd_verifier, challenge_h))
+        Ok((even_verifier, odd_verifier, challenge_h, comm_old, comm_new))
     }
 
     pub fn verify_host_and_return_tuples_with_given_challenge<
@@ -3149,6 +3165,8 @@ impl<
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         rng: &mut R,
         mut rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
+        // `(comm_old, comm_new)` from the paired challenge phase; `None` recomputes them (same values).
+        precomputed_host_commitments: Option<(Affine<G0>, Affine<G0>)>,
     ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
         let expected_len = 4;
         if self.commitment_proof.host_proof.resp_acc_old.len() != expected_len {
@@ -3178,13 +3196,16 @@ impl<
             .B_blinding;
 
         // Verify host's account commitment Schnorr proofs
-        let (y_old_affine, y_new_affine) = self.old_and_new_host_commitments(
-            asset_id,
-            fee_amount,
-            updated_account_commitment,
-            account_comm_key.asset_id_gen(),
-            account_comm_key.balance_gen(),
-        )?;
+        let (y_old_affine, y_new_affine) = match precomputed_host_commitments {
+            Some(host_commitments) => host_commitments,
+            None => self.old_and_new_host_commitments(
+                asset_id,
+                fee_amount,
+                updated_account_commitment,
+                account_comm_key.asset_id_gen(),
+                account_comm_key.balance_gen(),
+            )?,
+        };
 
         self.commitment_proof.host_proof.verify_with_challenge(
             y_old_affine,
@@ -3232,7 +3253,7 @@ impl<
         VerificationTuple<Affine<G1>>,
         F0,
     )> {
-        let (even_verifier, odd_verifier, challenge_h) = self
+        let (even_verifier, odd_verifier, challenge_h, comm_old, comm_new) = self
             .challenge_contribution::<Parameters0, Parameters1>(
                 asset_id,
                 fee_amount,
@@ -3257,6 +3278,7 @@ impl<
                 account_comm_key,
                 rng,
                 rmc,
+                Some((comm_old, comm_new)),
             )?;
 
         Ok((even_tuple, odd_tuple, challenge_h))
@@ -3302,6 +3324,7 @@ impl<
                 account_comm_key,
                 rng,
                 rmc_0,
+                None,
             )?;
         handle_verification_tuples(even_tuple, odd_tuple, account_tree_params, rmc)
     }
@@ -4504,6 +4527,7 @@ pub mod tests {
                 account_comm_key.clone(),
                 &challenge_h_final_v,
                 None,
+                None,
             )
             .unwrap();
 
@@ -4672,6 +4696,98 @@ pub mod tests {
             ),
             Error::ProofVerificationError(_),
             "Nullifier verification failed"
+        );
+    }
+
+    #[test]
+    fn fee_spend_with_identity_nullifier_rejected() {
+        // A fee account with `rho = 0` has the identity as nullifier; topup and payment verification reject it.
+        let mut rng = rand::thread_rng();
+
+        const NUM_GENS: usize = 1 << 13;
+        const L: usize = 64;
+        let (account_tree_params, account_comm_key, _) = setup_gens_new::<NUM_GENS>(b"testing");
+
+        let asset_id = 1;
+        let (sk, pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+        let mut account = new_fee_account::<_, PallasA>(&mut rng, asset_id, pk, 1000);
+        account.rho = F0::from(0u64);
+        account.initial_rho = F0::from(0u64);
+        let account_comm = account.commit(&account_comm_key).unwrap();
+
+        let account_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
+            &[account_comm.0],
+            &account_tree_params,
+            Some(6),
+        );
+        let root = account_tree.root_node();
+        let nonce = b"test-nonce";
+
+        let updated_account = account.get_state_for_topup(10).unwrap();
+        let updated_account_comm = updated_account.commit(&account_comm_key).unwrap();
+        let (proof, nullifier) = FeeAccountTopupTxnProof::new::<_, PallasParams, VestaParams>(
+            &mut rng,
+            sk.0,
+            10,
+            &account,
+            &updated_account,
+            updated_account_comm,
+            account_tree.get_path_to_leaf_for_proof(0, 0).unwrap(),
+            &root,
+            nonce,
+            &account_tree_params,
+            account_comm_key.clone(),
+        )
+        .unwrap();
+        assert!(nullifier.is_zero());
+        assert_err!(
+            proof.verify(
+                pk.0,
+                asset_id,
+                10,
+                updated_account_comm,
+                nullifier,
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                &mut rng,
+                None,
+            ),
+            Error::PointAtIdentity
+        );
+
+        let updated_account = account.get_state_for_payment(10).unwrap();
+        let updated_account_comm = updated_account.commit(&account_comm_key).unwrap();
+        let (proof, nullifier) = FeePaymentProof::new::<_, PallasParams, VestaParams>(
+            &mut rng,
+            10,
+            sk.0,
+            &account,
+            &updated_account,
+            updated_account_comm,
+            account_tree.get_path_to_leaf_for_proof(0, 0).unwrap(),
+            &root,
+            nonce,
+            &account_tree_params,
+            account_comm_key.clone(),
+        )
+        .unwrap();
+        assert!(nullifier.is_zero());
+        assert_err!(
+            proof.verify(
+                asset_id,
+                10,
+                updated_account_comm,
+                nullifier,
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                &mut rng,
+                None,
+            ),
+            Error::PointAtIdentity
         );
     }
 
@@ -5115,7 +5231,7 @@ pub mod tests {
         };
 
         //  Verifier derives challenge_h from host's transcript
-        let (mut even_verifier, odd_verifier, challenge_h_v) = proof
+        let (mut even_verifier, odd_verifier, challenge_h_v, comm_old_v, comm_new_v) = proof
             .challenge_contribution::<PallasParams, VestaParams>(
                 asset_id,
                 fee_amount,
@@ -5187,6 +5303,7 @@ pub mod tests {
                 account_comm_key.clone(),
                 &mut rng,
                 None,
+                Some((comm_old_v, comm_new_v)),
             )
             .unwrap();
         handle_verification_tuples(even_tuple, odd_tuple, &account_tree_params, None).unwrap();

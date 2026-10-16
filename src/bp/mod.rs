@@ -404,6 +404,7 @@ pub struct DartBPGenerators {
     enc_key_gen: PallasA,
     account_comm_key: AccountCommitmentKey,
     leg_asset_value_gen: PallasA,
+    force_transfer_enc_gen: PallasA,
 }
 
 impl DartBPGenerators {
@@ -416,12 +417,15 @@ impl DartBPGenerators {
             AccountCommitmentKey::new::<Blake2b512>(DART_GEN_ACCOUNT_KEY, sig_key_gen, enc_key_gen);
 
         let leg_asset_value_gen = hash_to_pallas(label, b" : leg_asset_value_gen").into_affine();
+        let force_transfer_enc_gen =
+            hash_to_pallas(label, b" : force_transfer_enc_gen").into_affine();
 
         Self {
             sig_key_gen,
             enc_key_gen,
             account_comm_key,
             leg_asset_value_gen,
+            force_transfer_enc_gen,
         }
     }
 
@@ -441,6 +445,26 @@ impl DartBPGenerators {
     pub fn leg_asset_value_gen(&self) -> PallasA {
         self.leg_asset_value_gen
     }
+
+    /// Generator used to encrypt the rho/randomness chunks for the issuer's force-transfer key `pk_T`.
+    pub fn force_transfer_enc_gen(&self) -> PallasA {
+        self.force_transfer_enc_gen
+    }
+}
+
+/// Builds the `(pk_T, sk_enc_gen, force_transfer_enc_gen)` tuple expected by the inner BP registration API.
+pub(crate) fn force_transfer_encryption_params(
+    pk_t: Option<EncryptionPublicKey>,
+) -> Result<Option<(PallasA, PallasA, PallasA)>, Error> {
+    pk_t.map(|pk| -> Result<_, Error> {
+        let gens = dart_gens();
+        Ok((
+            pk.get_affine()?,
+            gens.account_comm_key().sk_enc_gen(),
+            gens.force_transfer_enc_gen(),
+        ))
+    })
+    .transpose()
 }
 
 pub(crate) fn try_block_number<T: TryInto<BlockNumber>>(
@@ -474,6 +498,374 @@ mod tests {
     use bounded_collections::BoundedVec;
     use polymesh_dart_common::NullifierSkGenCounter;
     use rand_core::SeedableRng;
+
+    /// Measure the overhead of this wrapper for the settlement proof and the sender/receiver
+    /// affirmation proofs. For each it measures the wrapper's public-API verify time and SCALE size,
+    /// and — by reaching the `inner` core proof — the core dart-bp `verify`, compressed
+    /// size, and the arkworks serialize/deserialize (`encode`/`decode`) that are the wrapper's prove-
+    /// and verify-side overhead.
+    /// Ignored by default because proving is slow; run with
+    /// `cargo test --release --lib wrapper_overhead -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn wrapper_overhead() {
+        use crate::curve_tree::*;
+        use std::time::{Duration, Instant};
+
+        fn bench<T>(iters: usize, mut f: impl FnMut() -> T) -> (Duration, T) {
+            let mut ds = Vec::with_capacity(iters);
+            let mut last = None;
+            for _ in 0..iters {
+                let t0 = Instant::now();
+                let v = std::hint::black_box(f());
+                ds.push(t0.elapsed());
+                last = Some(v);
+            }
+            ds.sort();
+            (ds[ds.len() / 2], last.unwrap())
+        }
+        fn ms(d: Duration) -> f64 {
+            d.as_secs_f64() * 1000.0
+        }
+
+        let mut rng = rand_chacha::ChaCha20Rng::from_seed([9u8; 32]);
+        let mut asset_tree = AssetCurveTree::new().unwrap();
+        let mut account_tree =
+            ProverCurveTree::<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>::new(
+                ACCOUNT_TREE_HEIGHT,
+            )
+            .unwrap();
+        let account_params = account_tree.params().clone();
+
+        let issuer_keys = AccountKeys::rand(&mut rng).unwrap();
+        let issuer_acct = issuer_keys.public_keys();
+        let investor_keys = AccountKeys::rand(&mut rng).unwrap();
+        let investor_acct = investor_keys.public_keys();
+        let auditor = AccountKeys::rand(&mut rng).unwrap().public_keys();
+        let ctx = b"wrapper_overhead";
+
+        let asset_id: AssetId = 0;
+        let asset_state =
+            AssetState::new::<()>(asset_id, &[(auditor.acct, auditor.enc)], &[]).unwrap();
+        let asset_lookup = AssetKeysLookup::from(&asset_state);
+        asset_tree.set_asset_state(asset_state.clone()).unwrap();
+
+        let (_p, mut issuer_state) = AccountAssetRegistrationProof::<()>::new(
+            &mut rng,
+            &issuer_keys,
+            asset_id,
+            0,
+            ctx,
+            &account_params,
+            None,
+        )
+        .unwrap();
+        issuer_state.commit_pending_state().unwrap();
+        account_tree
+            .insert(
+                issuer_state
+                    .current_commitment()
+                    .unwrap()
+                    .as_leaf_value()
+                    .unwrap(),
+            )
+            .unwrap();
+
+        let (_, mut investor_state) = AccountAssetRegistrationProof::<()>::new(
+            &mut rng,
+            &investor_keys,
+            asset_id,
+            0,
+            ctx,
+            &account_params,
+            None,
+        )
+        .unwrap();
+        investor_state.commit_pending_state().unwrap();
+        account_tree
+            .insert(
+                investor_state
+                    .current_commitment()
+                    .unwrap()
+                    .as_leaf_value()
+                    .unwrap(),
+            )
+            .unwrap();
+
+        let mint = AssetMintingProof::<(), _>::new(
+            &mut rng,
+            &issuer_keys,
+            ctx,
+            &mut issuer_state,
+            &account_tree,
+            1000,
+        )
+        .unwrap();
+        issuer_state.commit_pending_state().unwrap();
+        account_tree
+            .insert(
+                mint.updated_account_state_commitment
+                    .as_leaf_value()
+                    .unwrap(),
+            )
+            .unwrap();
+
+        let asset_root = asset_tree.root().unwrap();
+        let asset_root_node = asset_root.root_node().unwrap();
+        let account_root = account_tree.root().unwrap();
+        let account_root_node = account_root.root_node().unwrap();
+
+        const K: usize = 11;
+
+        let leg_builder = || LegBuilder {
+            sender: issuer_acct,
+            receiver: investor_acct,
+            asset: asset_state.clone(),
+            amount: 500,
+            config: LegConfig::default(),
+            public_enc_keys: vec![],
+        };
+
+        // Settlement.
+        let settlement: SettlementProof = SettlementBuilder::new(b"wrapper_overhead")
+            .leg(leg_builder())
+            .encrypt_and_prove(&mut rng, &asset_tree.tree)
+            .unwrap();
+        let settle_size = settlement.encode().len();
+        let leg = match &settlement.legs[0] {
+            AnySettlementLegProof::HiddenAssetId(p) => p,
+            AnySettlementLegProof::RevealedAssetId(_) => {
+                unreachable!("default LegConfig hides the asset id")
+            }
+        };
+        let settle_core = leg.inner.decode().unwrap();
+        let settle_core_size = settle_core.compressed_size();
+        let settle_ctx = settlement.leg_ctx(0);
+
+        let (settle_prove, _) = bench(K, || {
+            SettlementBuilder::<()>::new(b"wrapper_overhead")
+                .leg(leg_builder())
+                .encrypt_and_prove(&mut rng, &asset_tree.tree)
+                .unwrap()
+        });
+        let (settle_verify, _) = bench(K, || {
+            settlement
+                .verify(&asset_root, &asset_lookup, &mut rng)
+                .unwrap()
+        });
+        let (settle_core_verify, _) = bench(K, || {
+            leg.verify_core(&settle_core, &settle_ctx, &asset_root_node, &mut rng)
+                .unwrap()
+        });
+        let (settle_decode, _) = bench(K, || leg.inner.decode().unwrap());
+        let (settle_encode, _) = bench(K, || {
+            let mut buf = Vec::new();
+            settle_core.serialize_compressed(&mut buf).unwrap();
+            buf
+        });
+
+        // Affirmations share this leg's encryption and reference.
+        let leg_enc = settlement.legs[0].leg_enc().clone();
+        let leg_ref = LegRef::new(settlement.settlement_ref(), 0 as _);
+
+        // Sender affirmation.
+        let send_proof: SenderAffirmationProof = {
+            let mut acct = issuer_state.clone();
+            SenderAffirmationProof::new(
+                &mut rng,
+                &issuer_keys,
+                &leg_ref,
+                500,
+                &leg_enc,
+                &mut acct,
+                &account_tree,
+            )
+            .unwrap()
+        };
+        let send_size = send_proof.encode().len();
+        let send_core = send_proof.inner.decode().unwrap();
+        let send_core_size = send_core.compressed_size();
+
+        let (send_prove, _) = bench(K, || {
+            let mut acct = issuer_state.clone();
+            SenderAffirmationProof::<()>::new(
+                &mut rng,
+                &issuer_keys,
+                &leg_ref,
+                500,
+                &leg_enc,
+                &mut acct,
+                &account_tree,
+            )
+            .unwrap()
+        });
+        let (send_verify, _) = bench(K, || {
+            send_proof
+                .verify(&leg_enc, &account_root, &mut rng)
+                .unwrap()
+        });
+        let (send_core_verify, _) = bench(K, || {
+            send_proof
+                .verify_core(&send_core, &leg_enc, &account_root_node, &mut rng)
+                .unwrap()
+        });
+        let (send_decode, _) = bench(K, || send_proof.inner.decode().unwrap());
+        let (send_encode, _) = bench(K, || {
+            let mut buf = Vec::new();
+            send_core.serialize_compressed(&mut buf).unwrap();
+            buf
+        });
+
+        // Receiver affirmation (note: &leg_enc before amount).
+        let recv_proof: ReceiverAffirmationProof = {
+            let mut acct = investor_state.clone();
+            ReceiverAffirmationProof::new(
+                &mut rng,
+                &investor_keys,
+                &leg_ref,
+                &leg_enc,
+                500,
+                &mut acct,
+                &account_tree,
+            )
+            .unwrap()
+        };
+        let recv_size = recv_proof.encode().len();
+        let recv_core = recv_proof.inner.decode().unwrap();
+        let recv_core_size = recv_core.compressed_size();
+
+        let (recv_prove, _) = bench(K, || {
+            let mut acct = investor_state.clone();
+            ReceiverAffirmationProof::<()>::new(
+                &mut rng,
+                &investor_keys,
+                &leg_ref,
+                &leg_enc,
+                500,
+                &mut acct,
+                &account_tree,
+            )
+            .unwrap()
+        });
+        let (recv_verify, _) = bench(K, || {
+            recv_proof
+                .verify(&leg_enc, &account_root, &mut rng)
+                .unwrap()
+        });
+        let (recv_core_verify, _) = bench(K, || {
+            recv_proof
+                .verify_core(&recv_core, &leg_enc, &account_root_node, &mut rng)
+                .unwrap()
+        });
+        let (recv_decode, _) = bench(K, || recv_proof.inner.decode().unwrap());
+        let (recv_encode, _) = bench(K, || {
+            let mut buf = Vec::new();
+            recv_core.serialize_compressed(&mut buf).unwrap();
+            buf
+        });
+
+        println!(
+            "\nwrapper overhead (median K={K}, --release); times ms, sizes B (wrapper SCALE / core compressed)"
+        );
+        println!(
+            "{:<26}{:>11}{:>11}{:>11}{:>10}{:>10}{:>9}{:>9}",
+            "op", "prove", "verify", "core_vfy", "decode", "encode", "size", "core_sz"
+        );
+        let row = |name: &str,
+                   prove: Duration,
+                   verify: Duration,
+                   core_verify: Duration,
+                   decode: Duration,
+                   encode: Duration,
+                   size: usize,
+                   core_size: usize| {
+            println!(
+                "{:<26}{:>11.3}{:>11.3}{:>11.3}{:>10.3}{:>10.3}{:>9}{:>9}",
+                name,
+                ms(prove),
+                ms(verify),
+                ms(core_verify),
+                ms(decode),
+                ms(encode),
+                size,
+                core_size
+            );
+        };
+        row(
+            "SettlementProof",
+            settle_prove,
+            settle_verify,
+            settle_core_verify,
+            settle_decode,
+            settle_encode,
+            settle_size,
+            settle_core_size,
+        );
+        row(
+            "SenderAffirmationProof",
+            send_prove,
+            send_verify,
+            send_core_verify,
+            send_decode,
+            send_encode,
+            send_size,
+            send_core_size,
+        );
+        row(
+            "ReceiverAffirmationProof",
+            recv_prove,
+            recv_verify,
+            recv_core_verify,
+            recv_decode,
+            recv_encode,
+            recv_size,
+            recv_core_size,
+        );
+        println!(
+            "\nverify overhead = wrapper verify - core verify (~ core decode); size overhead = SCALE - core compressed"
+        );
+
+        for (size, core_size) in [
+            (settle_size, settle_core_size),
+            (send_size, send_core_size),
+            (recv_size, recv_core_size),
+        ] {
+            assert!(core_size > 0 && size >= core_size);
+        }
+        assert!(settle_verify >= settle_core_verify);
+        assert!(send_verify >= send_core_verify);
+        assert!(recv_verify >= recv_core_verify);
+    }
+
+    #[test]
+    fn asset_frozen_state_commitment() {
+        let mut state = AssetState::new::<()>(0, &[], &[]).unwrap();
+        assert!(!state.frozen);
+        let unfrozen_leaf = state.commitment().unwrap();
+        assert_eq!(
+            unfrozen_leaf,
+            state.keys.commitment(state.asset_id).unwrap()
+        );
+        state.frozen = true;
+        let asset_data = state.asset_data().unwrap();
+        assert!(asset_data.frozen);
+        let frozen_leaf = state.commitment().unwrap();
+        assert_ne!(frozen_leaf, unfrozen_leaf);
+        assert_eq!(
+            frozen_leaf,
+            CompressedLeafValue::<AssetTreeConfig>::from_affine(asset_data.commitment).unwrap()
+        );
+        let decoded = AssetState::decode(&mut &state.encode()[..]).unwrap();
+        assert!(decoded.frozen);
+        assert_eq!(decoded.commitment().unwrap(), frozen_leaf);
+        let mut encoded_data = Vec::new();
+        asset_data.serialize_compressed(&mut encoded_data).unwrap();
+        let decoded_data = AssetCommitmentData::deserialize_compressed(&encoded_data[..]).unwrap();
+        assert!(decoded_data.frozen);
+        assert_eq!(decoded_data.commitment, asset_data.commitment);
+        state.frozen = false;
+        assert_eq!(state.commitment().unwrap(), unfrozen_leaf);
+    }
 
     #[test]
     fn test_dart_bp_generators_encode_decode() {
@@ -509,16 +901,36 @@ mod tests {
     }
 
     #[test]
+    fn test_compressed_affine_rejects_non_canonical_identity() {
+        let canonical = CompressedAffine::zero::<ark_pallas::PallasConfig>();
+        assert!(PallasA::try_from(&canonical).unwrap().is_zero());
+
+        // Identity with the sign bit set is rejected by arkworks and by the wrapper.
+        let mut signed = *canonical.as_bytes();
+        signed[31] |= 0x80;
+        assert!(PallasA::deserialize_compressed(&signed[..]).is_err());
+        let signed = CompressedAffine::from_str(&hex::encode(signed)).unwrap();
+        assert!(PallasA::try_from(&signed).is_err());
+
+        // Non-identity points decode as before.
+        let point = dart_gens().sig_key_gen();
+        assert_eq!(
+            PallasA::try_from(&CompressedAffine::from(&point)).unwrap(),
+            point
+        );
+    }
+
+    #[test]
     fn key_distribution() {
         let mut rng = rand::thread_rng();
-        let distributor = AccountKeys::rand(&mut rng).unwrap();
+        let distributor = EncryptionKeyPair::rand(&mut rng).unwrap();
         let recipient = AccountKeys::rand(&mut rng).unwrap();
         let params = curve_tree::get_account_curve_tree_parameters();
         let nonce = b"test-nonce";
 
         let proof = KeyDistributionProof::<()>::new(
             &mut rng,
-            &distributor.enc,
+            &distributor,
             vec![recipient.enc.public.clone()],
             nonce,
             params,
@@ -527,7 +939,7 @@ mod tests {
         proof.verify(nonce, params, &mut rng).unwrap();
 
         let recovered = proof.decrypt(0, &recipient.enc.secret).unwrap();
-        assert_eq!(recovered, distributor.enc.secret.inner().0);
+        assert_eq!(recovered, distributor.secret.inner().0);
     }
 
     #[test]
@@ -751,9 +1163,15 @@ mod tests {
         let (account_state, rho_randomness) =
             keys.init_asset_state(asset_id, counter, ctx).unwrap();
 
-        let (protocol, device_request) =
-            AccountRegHostProtocol::init(&mut rng, &account_state, rho_randomness, counter, ctx)
-                .unwrap();
+        let (protocol, device_request) = AccountRegHostProtocol::init(
+            &mut rng,
+            &account_state,
+            rho_randomness,
+            counter,
+            ctx,
+            None,
+        )
+        .unwrap();
 
         let gens = dart_gens();
         let device_response = create_registration_auth_proof(
@@ -769,7 +1187,9 @@ mod tests {
             .finish(&mut rng, &device_response, counter, tree_params)
             .unwrap();
 
-        proof.verify(ctx, tree_params, &mut rng).unwrap();
+        proof
+            .verify(ctx, tree_params, &mut rng, &AssetPkTLookup::default())
+            .unwrap();
     }
 
     #[test]
@@ -789,12 +1209,24 @@ mod tests {
         let (account_state2, rho_randomness2) =
             keys2.init_asset_state(asset_id, counter, ctx).unwrap();
 
-        let (protocol1, device_request1) =
-            AccountRegHostProtocol::init(&mut rng, &account_state1, rho_randomness1, counter, ctx)
-                .unwrap();
-        let (protocol2, device_request2) =
-            AccountRegHostProtocol::init(&mut rng, &account_state2, rho_randomness2, counter, ctx)
-                .unwrap();
+        let (protocol1, device_request1) = AccountRegHostProtocol::init(
+            &mut rng,
+            &account_state1,
+            rho_randomness1,
+            counter,
+            ctx,
+            None,
+        )
+        .unwrap();
+        let (protocol2, device_request2) = AccountRegHostProtocol::init(
+            &mut rng,
+            &account_state2,
+            rho_randomness2,
+            counter,
+            ctx,
+            None,
+        )
+        .unwrap();
 
         let gens = dart_gens();
         let device_response1 = create_registration_auth_proof(
@@ -830,7 +1262,101 @@ mod tests {
             },
         };
 
-        batched.verify(ctx, tree_params, &mut rng).unwrap();
+        batched
+            .verify(ctx, tree_params, &mut rng, &AssetPkTLookup::default())
+            .unwrap();
+    }
+
+    #[test]
+    fn test_account_reg_with_pk_t() {
+        let mut rng = rand::thread_rng();
+        let ctx = b"test-account-reg-with-pk-t";
+        let asset_id: AssetId = 1;
+        let counter: NullifierSkGenCounter = 0;
+
+        let tree_params = AccountTreeConfig::parameters();
+        let keys = AccountKeys::rand(&mut rng).unwrap();
+
+        let force_transfer_keys = EncryptionKeyPair::rand(&mut rng).unwrap();
+        let wrong_keys = EncryptionKeyPair::rand(&mut rng).unwrap();
+
+        let (proof, account_state) = AccountAssetRegistrationProof::<()>::new(
+            &mut rng,
+            &keys,
+            asset_id,
+            counter,
+            ctx,
+            tree_params,
+            Some(force_transfer_keys.public),
+        )
+        .unwrap();
+
+        // Verifying with the same pk_T succeeds.
+        let mut asset_lookup = AssetPkTLookup::default();
+        asset_lookup.add(asset_id, force_transfer_keys.public);
+
+        proof
+            .verify(ctx, tree_params, &mut rng, &asset_lookup)
+            .unwrap();
+
+        // Verifying with no pk_T, or a different pk_T, must fail.
+        assert!(
+            proof
+                .verify(ctx, tree_params, &mut rng, &AssetPkTLookup::default())
+                .is_err()
+        );
+        let mut wrong_asset_lookup = AssetPkTLookup::default();
+        wrong_asset_lookup.add(asset_id, wrong_keys.public);
+        assert!(
+            proof
+                .verify(ctx, tree_params, &mut rng, &wrong_asset_lookup)
+                .is_err()
+        );
+
+        // The escrowed rho/randomness must decrypt back to the account's actual values.
+        assert!(proof.has_encrypted_state().unwrap());
+        let encrypted_state = proof
+            .get_encrypted_state()
+            .unwrap()
+            .expect("proof registered with pk_T must have encrypted state")
+            .decode()
+            .unwrap();
+        let (rho, randomness) = encrypted_state
+            .decrypt(&force_transfer_keys.secret)
+            .unwrap();
+        assert_eq!(rho, account_state.current_state.rho.decode().unwrap());
+        assert_eq!(
+            randomness,
+            account_state.current_state.randomness.decode().unwrap()
+        );
+    }
+
+    #[test]
+    fn test_account_reg_without_pk_t_has_no_encrypted_state() {
+        let mut rng = rand::thread_rng();
+        let ctx = b"test-account-reg-without-pk-t";
+        let asset_id: AssetId = 1;
+        let counter: NullifierSkGenCounter = 0;
+
+        let tree_params = AccountTreeConfig::parameters();
+        let keys = AccountKeys::rand(&mut rng).unwrap();
+
+        let (proof, _account_state) = AccountAssetRegistrationProof::<()>::new(
+            &mut rng,
+            &keys,
+            asset_id,
+            counter,
+            ctx,
+            tree_params,
+            None,
+        )
+        .unwrap();
+
+        proof
+            .verify(ctx, tree_params, &mut rng, &AssetPkTLookup::default())
+            .unwrap();
+        assert!(!proof.has_encrypted_state().unwrap());
+        assert!(proof.get_encrypted_state().unwrap().is_none());
     }
 
     #[test]
@@ -1064,6 +1590,93 @@ mod tests {
         test_with_config(false, true);
         // Both legs hidden
         test_with_config(false, false);
+    }
+
+    #[test]
+    fn test_settlement_leg_proofs_bind_all_legs() {
+        let mut rng = rand::rngs::StdRng::from_entropy();
+        let sender_keys = AccountKeys::rand(&mut rng).unwrap();
+        let receiver_keys = AccountKeys::rand(&mut rng).unwrap();
+
+        let asset_state_0 = AssetState::new::<()>(0, &[], &[]).unwrap();
+        let asset_state_1 = AssetState::new::<()>(1, &[], &[]).unwrap();
+
+        let mut asset_tree =
+            ProverCurveTree::<ASSET_TREE_L, ASSET_TREE_M, AssetTreeConfig>::new(ASSET_TREE_HEIGHT)
+                .unwrap();
+        asset_tree
+            .insert(asset_state_0.commitment().unwrap())
+            .unwrap();
+        asset_tree
+            .insert(asset_state_1.commitment().unwrap())
+            .unwrap();
+        asset_tree.store_root().unwrap();
+
+        let mut asset_lookup = AssetKeysLookup::new();
+        asset_lookup.add(asset_state_0.clone());
+        asset_lookup.add(asset_state_1.clone());
+
+        for reveal_asset_id in [true, false] {
+            let config = LegConfig {
+                reveal_asset_id,
+                visibility: PartyVisibility::FullVisibility,
+            };
+            let build = |rng: &mut rand::rngs::StdRng| {
+                SettlementBuilder::<()>::new(b"test")
+                    .leg(LegBuilder {
+                        sender: sender_keys.public_keys(),
+                        receiver: receiver_keys.public_keys(),
+                        asset: asset_state_0.clone(),
+                        amount: 300,
+                        config,
+                        public_enc_keys: vec![],
+                    })
+                    .leg(LegBuilder {
+                        sender: receiver_keys.public_keys(),
+                        receiver: sender_keys.public_keys(),
+                        asset: asset_state_1.clone(),
+                        amount: 175,
+                        config,
+                        public_enc_keys: vec![],
+                    })
+                    .encrypt_and_prove(rng, &asset_tree)
+                    .unwrap()
+            };
+            let settlement = build(&mut rng);
+            let other = build(&mut rng);
+
+            settlement
+                .verify(asset_tree.root().unwrap(), &asset_lookup, &mut rng)
+                .unwrap();
+            settlement
+                .batched_verify(asset_tree.root().unwrap(), &asset_lookup, &mut rng)
+                .unwrap();
+
+            let with_legs = |legs: Vec<AnySettlementLegProof<()>>| SettlementProof::<()> {
+                memo: settlement.memo.clone(),
+                root_block: settlement.root_block,
+                legs: BoundedVec::try_from(legs).unwrap(),
+            };
+            let rewritten = [
+                // Prefix of the settlement.
+                with_legs(vec![settlement.legs[0].clone()]),
+                // Leg of another settlement with the same memo and root block.
+                with_legs(vec![settlement.legs[0].clone(), other.legs[1].clone()]),
+                with_legs(vec![settlement.legs[1].clone(), settlement.legs[0].clone()]),
+            ];
+            for rewritten in rewritten {
+                assert!(
+                    rewritten
+                        .verify(asset_tree.root().unwrap(), &asset_lookup, &mut rng)
+                        .is_err()
+                );
+                assert!(
+                    rewritten
+                        .batched_verify(asset_tree.root().unwrap(), &asset_lookup, &mut rng)
+                        .is_err()
+                );
+            }
+        }
     }
 
     #[test]

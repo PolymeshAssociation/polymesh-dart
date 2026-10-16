@@ -18,12 +18,17 @@ fn generate_v1_serialized_objects() {
     account::gen_fee_account_registration_proof();
     account::gen_batched_fee_account_registration_proof();
     account::gen_account_asset_registration_proof();
+    account::gen_account_asset_registration_proof_with_pk_t();
     account::gen_batched_account_asset_registration_proof();
+    account::gen_batched_account_asset_registration_proof_with_pk_t();
     account::gen_key_distribution_proof_2_recipients();
     account::gen_key_distribution_proof_3_recipients();
     account::gen_asset_minting_proof();
     fee::gen_fee_account_topup_proof();
+    fee::gen_batched_fee_account_topup_proof();
     fee::gen_fee_account_payment_proof();
+    fee::gen_fee_payment_with_batched_proofs();
+    fee::gen_fee_payment_with_batched_proofs_broadcast();
     leg::gen_settlement_proof();
     leg::gen_settlement_proof_2_legs();
     leg::gen_settlement_proof_3_legs();

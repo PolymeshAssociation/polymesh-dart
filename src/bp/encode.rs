@@ -337,7 +337,16 @@ impl<P: SWCurveConfig> TryFrom<&CompressedAffine> for Affine<P> {
 
     /// Converts an `Affine<P>` to a `CompressedAffine<P>`.
     fn try_from(affine: &CompressedAffine) -> Result<Self, Self::Error> {
-        Ok(Self::deserialize_compressed(&affine.0[..])?)
+        let point = Self::deserialize_compressed(&affine.0[..])?;
+        // The identity has more than one encoding, accept only the canonical one
+        if point.is_zero() {
+            let mut canonical = [0u8; ARK_EC_POINT_SIZE];
+            point.serialize_compressed(&mut canonical[..])?;
+            if canonical != affine.0 {
+                return Err(ark_serialize::SerializationError::InvalidData.into());
+            }
+        }
+        Ok(point)
     }
 }
 
@@ -356,7 +365,8 @@ impl TypeInfo for DartBPGenerators {
                     .field(|f| f.name("sig_key_gen").ty::<CompressedAffine>())
                     .field(|f| f.name("enc_key_gen").ty::<CompressedAffine>())
                     .field(|f| f.name("account_comm_key").ty::<AccountCommitmentKey>())
-                    .field(|f| f.name("leg_asset_value_gen").ty::<CompressedAffine>()),
+                    .field(|f| f.name("leg_asset_value_gen").ty::<CompressedAffine>())
+                    .field(|f| f.name("force_transfer_enc_gen").ty::<CompressedAffine>()),
             )
     }
 }
@@ -451,6 +461,15 @@ impl<T: Clone + CanonicalSerialize + CanonicalDeserialize> WrappedCanonical<T> {
     /// Decodes the wrapped value back into its original type `T`.
     pub fn decode(&self) -> Result<T, Error> {
         Ok(deserialize_compressed_exact(self.wrapped.as_slice())?)
+    }
+
+    /// Converts the wrapped value from another type `U` that implements `CanonicalDeserialize` and can be converted into `T`.
+    ///
+    /// This is useful to migrate from an old version of a type to a new version, where `U` is the old type and `T` is the new type.
+    pub fn convert_from<U: CanonicalDeserialize + Clone + Into<T>>(&self) -> Result<(U, T), Error> {
+        let u = deserialize_compressed_exact::<U>(self.wrapped.as_slice())?;
+        let t = u.clone().into();
+        Ok((u, t))
     }
 }
 
@@ -553,6 +572,15 @@ impl<T: Clone + CanonicalSerialize + CanonicalDeserialize, S: Get<u32>> BoundedC
     pub fn decode(&self) -> Result<T, Error> {
         Ok(deserialize_compressed_exact(self.wrapped.as_slice())?)
     }
+
+    /// Converts the wrapped value from another type `U` that implements `CanonicalDeserialize` and can be converted into `T`.
+    ///
+    /// This is useful to migrate from an old version of a type to a new version, where `U` is the old type and `T` is the new type.
+    pub fn convert_from<U: CanonicalDeserialize + Clone + Into<T>>(&self) -> Result<(U, T), Error> {
+        let u = deserialize_compressed_exact::<U>(self.wrapped.as_slice())?;
+        let t = u.clone().into();
+        Ok((u, t))
+    }
 }
 
 impl<T: 'static, S: Get<u32> + 'static> TypeInfo for BoundedCanonical<T, S> {
@@ -602,5 +630,11 @@ impl<T: CanonicalDeserialize, S: Get<u32>> Decode for BoundedCanonical<T, S> {
             wrapped: BoundedVec::<u8, S>::decode(input)?,
             _marker: core::marker::PhantomData,
         })
+    }
+}
+
+impl<T: CanonicalSerialize, S: Get<u32>> MaxEncodedLen for BoundedCanonical<T, S> {
+    fn max_encoded_len() -> usize {
+        BoundedVec::<u8, S>::max_encoded_len()
     }
 }

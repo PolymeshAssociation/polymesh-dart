@@ -287,6 +287,8 @@ impl AccountKeyPair {
     TypeInfo,
     PartialEq,
     Eq,
+    PartialOrd,
+    Ord,
     Hash,
 )]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
