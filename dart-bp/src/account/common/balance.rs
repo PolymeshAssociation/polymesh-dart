@@ -96,6 +96,7 @@ impl<F0: PrimeField, G0: SWCurveConfig<ScalarField = F0> + Clone + Copy>
             (-delta as Balance, false)
         };
         ensure_correct_balance_change(account, updated_account, amount, has_balance_decreased)?;
+        ensure_peak_within_limit(account.balance(), &balance_change_config)?;
 
         let mut amounts = Vec::with_capacity(balance_change_config.len());
         let mut has_balance_decreased = Vec::with_capacity(balance_change_config.len());
@@ -152,6 +153,35 @@ impl<F0: PrimeField, G0: SWCurveConfig<ScalarField = F0> + Clone + Copy>
                 resp_comm_bp_bal,
             },
         })
+    }
+}
+
+/// Ordering balance changes with increasing balance first can temporarily (intra settlement) push
+/// the balance beyond `MAX_BALANCE` and cause an error in off-chain processors. This is possible
+/// during irreversible legs settlement but still prevented with this.
+/// Note that this only matters for off-chain services relying on (Substrate) events
+pub fn ensure_peak_within_limit(
+    old_balance: Balance,
+    configs: &[BalanceChangeConfig],
+) -> Result<()> {
+    #[cfg(feature = "ignore_prover_input_sanitation")]
+    {
+        return Ok(());
+    }
+
+    #[cfg(not(feature = "ignore_prover_input_sanitation"))]
+    {
+        let peak = old_balance as u128
+            + configs
+                .iter()
+                .filter(|c| !c.has_balance_decreased)
+                .map(|c| c.amount as u128)
+                .sum::<u128>();
+        if peak > MAX_BALANCE as u128 {
+            // `peak` is u128
+            return Err(Error::AmountTooLarge(Balance::MAX));
+        }
+        Ok(())
     }
 }
 
@@ -223,6 +253,7 @@ impl<F0: PrimeField, G0: SWCurveConfig<ScalarField = F0> + Clone + Copy>
                 balance_changes.len()
             )));
         }
+        ensure_peak_within_limit(old_balance, balance_changes)?;
 
         let amounts: Vec<Balance> = balance_changes.iter().map(|c| c.amount).collect();
         let has_decreased: Vec<bool> = balance_changes
