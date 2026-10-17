@@ -2309,21 +2309,21 @@ mod tests {
                 alice_nullifiers[0],
                 nonce_alice,
             );
-            alice_verifier_1.add_send_affirmation((
-                leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
-                leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
-            ));
             alice_verifier_1.add_claim_received((
                 leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
             ));
-            alice_verifier_1.add_send_affirmation((
-                leg_enc_3.leg_enc_core_and_eph_keys.core.clone(),
-                leg_enc_3.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
-            ));
             alice_verifier_1.add_claim_received((
                 leg_enc_4.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_4.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+            ));
+            alice_verifier_1.add_send_affirmation((
+                leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+            ));
+            alice_verifier_1.add_send_affirmation((
+                leg_enc_3.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_3.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
             ));
 
             let mut alice_verifier_2 = AccountStateTransitionProofVerifier::init(
@@ -2331,13 +2331,13 @@ mod tests {
                 alice_nullifiers[1],
                 nonce_alice,
             );
-            alice_verifier_2.add_irreversible_send((
-                leg_enc_5.leg_enc_core_and_eph_keys.core.clone(),
-                leg_enc_5.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
-            ));
             alice_verifier_2.add_irreversible_receive((
                 leg_enc_6.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_6.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+            ));
+            alice_verifier_2.add_irreversible_send((
+                leg_enc_5.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_5.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
             ));
 
             let start = Instant::now();
@@ -2359,21 +2359,21 @@ mod tests {
                 alice_nullifiers[0],
                 nonce_alice,
             );
-            alice_verifier_1.add_send_affirmation((
-                leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
-                leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
-            ));
             alice_verifier_1.add_claim_received((
                 leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
             ));
-            alice_verifier_1.add_send_affirmation((
-                leg_enc_3.leg_enc_core_and_eph_keys.core.clone(),
-                leg_enc_3.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
-            ));
             alice_verifier_1.add_claim_received((
                 leg_enc_4.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_4.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+            ));
+            alice_verifier_1.add_send_affirmation((
+                leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
+            ));
+            alice_verifier_1.add_send_affirmation((
+                leg_enc_3.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_3.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
             ));
 
             let mut alice_verifier_2 = AccountStateTransitionProofVerifier::init(
@@ -2381,13 +2381,13 @@ mod tests {
                 alice_nullifiers[1],
                 nonce_alice,
             );
-            alice_verifier_2.add_irreversible_send((
-                leg_enc_5.leg_enc_core_and_eph_keys.core.clone(),
-                leg_enc_5.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
-            ));
             alice_verifier_2.add_irreversible_receive((
                 leg_enc_6.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_6.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+            ));
+            alice_verifier_2.add_irreversible_send((
+                leg_enc_5.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_5.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
             ));
 
             let start = Instant::now();
@@ -2416,13 +2416,13 @@ mod tests {
                 leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
             ));
-            bob_verifier_1.add_send_affirmation((
-                leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
-                leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
-            ));
             bob_verifier_1.add_claim_received((
                 leg_enc_3.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_3.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+            ));
+            bob_verifier_1.add_send_affirmation((
+                leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
             ));
             bob_verifier_1.add_send_affirmation((
                 leg_enc_4.leg_enc_core_and_eph_keys.core.clone(),
@@ -2466,13 +2466,13 @@ mod tests {
                 leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
             ));
-            bob_verifier_1.add_send_affirmation((
-                leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
-                leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
-            ));
             bob_verifier_1.add_claim_received((
                 leg_enc_3.leg_enc_core_and_eph_keys.core.clone(),
                 leg_enc_3.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
+            ));
+            bob_verifier_1.add_send_affirmation((
+                leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
+                leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
             ));
             bob_verifier_1.add_send_affirmation((
                 leg_enc_4.leg_enc_core_and_eph_keys.core.clone(),

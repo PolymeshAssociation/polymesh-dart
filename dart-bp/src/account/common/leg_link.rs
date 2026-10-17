@@ -5,6 +5,7 @@ use crate::leg::LegEncryptionCore;
 use ark_ec::AffineRepr;
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_std::string::ToString;
+use ark_std::vec::Vec;
 use polymesh_dart_common::{AssetId, Balance};
 use schnorr_pok::discrete_log::{PokDiscreteLogProtocol, PokPedersenCommitmentProtocol};
 use schnorr_pok::partial::{
@@ -258,6 +259,51 @@ impl<G: AffineRepr> LegVerifierConfig<G> {
             self.has_counter_decreased,
         )
     }
+
+    /// Increases-first check on verifier leg configs.
+    pub fn check_balance_order(configs: &[Self]) -> Result<()> {
+        let directions: Vec<Option<bool>> =
+            configs.iter().map(|c| c.has_balance_decreased).collect();
+        check_balance_directions(&directions)
+    }
+}
+
+/// Checks if follows canonical per-account leg order where balance increases before decreases so it
+/// never goes negative. This is just to make it easy for off-chain processors.
+pub fn check_balance_directions(directions: &[Option<bool>]) -> Result<()> {
+    let mut seen_decrease = false;
+    for dir in directions {
+        match dir {
+            None => {}
+            Some(true) => seen_decrease = true,
+            Some(false) => {
+                if seen_decrease {
+                    return Err(Error::ProofVerificationError(
+                        "Balance increases must come before decreases".to_string(),
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Permutation sorting leg indices increases-first, stable within each group.
+/// `directions[i]` is the balance direction of leg `i`: `Some(false)` increase,
+/// `Some(true)` decrease, `None` no change. Callers apply the result to every
+/// per-leg array (leg refs, `k_amounts`, configs) before proving.
+pub fn balance_order_permutation(directions: &[Option<bool>]) -> Vec<usize> {
+    let mut increases = Vec::with_capacity(directions.len());
+    let mut rest = Vec::with_capacity(directions.len());
+    for (i, d) in directions.iter().enumerate() {
+        if *d == Some(false) {
+            increases.push(i);
+        } else {
+            rest.push(i);
+        }
+    }
+    increases.extend(rest);
+    increases
 }
 
 /// Per-account witness for a solo state-transition prover, secret keys + old and new account states.
@@ -447,5 +493,33 @@ mod serialization {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn balance_order_accepts_increases_first() {
+        assert!(check_balance_directions(&[]).is_ok());
+        assert!(check_balance_directions(&[Some(false), Some(false)]).is_ok());
+        assert!(check_balance_directions(&[Some(true), Some(true)]).is_ok());
+        assert!(check_balance_directions(&[Some(false), Some(true)]).is_ok());
+        assert!(check_balance_directions(&[None, Some(false), None, Some(true), None]).is_ok());
+    }
+
+    #[test]
+    fn balance_order_rejects_increase_after_decrease() {
+        assert!(check_balance_directions(&[Some(true), Some(false)]).is_err());
+        assert!(check_balance_directions(&[Some(false), Some(true), Some(false)]).is_err());
+    }
+
+    #[test]
+    fn balance_order_permutation_is_stable_increases_first() {
+        let dirs = [Some(true), None, Some(false), Some(true), Some(false)];
+        assert_eq!(balance_order_permutation(&dirs), vec![2, 4, 0, 1, 3]);
+        let dirs = [None, Some(true)];
+        assert_eq!(balance_order_permutation(&dirs), vec![0, 1]);
     }
 }
