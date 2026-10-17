@@ -526,6 +526,11 @@ impl<
                 "{num_balance_decreases} legs with balance change but no balance change proof provided"
             )));
         }
+
+        // This is done just to ensure off-chain services don't need to have more logic (intra
+        // settlement accounting).
+        LegVerifierConfig::check_balance_order(&self.legs)?;
+
         let expected_host_comm_resp_len = if is_asset_id_revealed {
             NUM_GENERATORS - 2
         } else {
@@ -1885,6 +1890,238 @@ mod tests {
             .unwrap();
 
         verify_given_verification_tuples(even_tuple, odd_tuple, &account_tree_params).unwrap();
+    }
+
+    #[test]
+    fn test_split_builder_reorders_legs_increases_first() {
+        // Alice sends to Bob and claims from Carol. Legs are added send first, the builder places
+        // the claim first, and the device and verifier follow the builder's order.
+
+        let mut rng = thread_rng();
+
+        const NUM_GENS: usize = 1 << 13;
+        const L: usize = 64;
+        let (account_tree_params, account_comm_key, enc_gen) = setup_gens_new::<NUM_GENS>(b"test");
+
+        let enc_key_gen = account_comm_key.sk_enc_gen();
+        let b_blinding = account_tree_params.even_parameters.pc_gens().B_blinding;
+
+        let (
+            ((sk_alice, pk_alice), (sk_alice_e, pk_alice_e)),
+            ((_, _), (_, pk_bob_e)),
+            ((_, _), (_, pk_carol_e)),
+        ) = setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
+        let (_, _, (_, (_, pk_auditor_e))) =
+            setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
+
+        let asset_id = 1;
+        let alice_to_bob_amount = 100;
+        let carol_to_alice_amount = 150;
+
+        let leg_1 = Leg::new(
+            pk_alice_e.0,
+            pk_bob_e.0,
+            alice_to_bob_amount,
+            asset_id,
+            vec![pk_auditor_e.0],
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        let (leg_enc_1, _) = leg_1
+            .encrypt(&mut rng, LegEncConfig::default(), enc_key_gen, enc_gen)
+            .unwrap();
+
+        let leg_2 = Leg::new(
+            pk_carol_e.0,
+            pk_alice_e.0,
+            carol_to_alice_amount,
+            asset_id,
+            vec![pk_auditor_e.0],
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        let (leg_enc_2, _) = leg_2
+            .encrypt(&mut rng, LegEncConfig::default(), enc_key_gen, enc_gen)
+            .unwrap();
+
+        let alice_id = PallasFr::rand(&mut rng);
+        let (mut alice_account, _, _, _) =
+            new_account(&mut rng, asset_id, pk_alice, pk_alice_e, alice_id);
+        alice_account.balance = 1000;
+        // The claimed leg was receive-affirmed earlier
+        alice_account.counter = 1;
+
+        // Claim and send leave the counter unchanged
+        let mut alice_updated = alice_account.clone();
+        alice_updated.balance = alice_updated.balance + carol_to_alice_amount - alice_to_bob_amount;
+        alice_updated.refresh_randomness_for_state_change();
+        let alice_account_comm = alice_account.commit(account_comm_key.clone()).unwrap();
+        let alice_updated_comm = alice_updated.commit(account_comm_key.clone()).unwrap();
+
+        let account_tree =
+            get_tree_with_commitment::<L, _>(alice_account_comm.clone(), &account_tree_params, 6);
+        let account_tree_root = account_tree.root_node();
+        let alice_leaf_path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+        let nonce = b"alice_nonce_split_reorder";
+
+        // Both legs change the balance and hide the asset id
+        let k_amounts = [PallasFr::rand(&mut rng), PallasFr::rand(&mut rng)];
+        let k_asset_ids = [PallasFr::rand(&mut rng), PallasFr::rand(&mut rng)];
+
+        let (leg_enc_core_1, eph_pk_s_1) = leg_enc_1.core_and_eph_keys_for_sender();
+        let (leg_enc_core_2, eph_pk_r_2) = leg_enc_2.core_and_eph_keys_for_receiver();
+
+        let mut split_builder = AccountStateTransitionSplitProofBuilder::<
+            L,
+            _,
+            _,
+            PallasParameters,
+            VestaParameters,
+        >::new(
+            alice_account.clone(),
+            alice_updated.clone(),
+            alice_updated_comm,
+            nonce,
+        );
+        split_builder.add_send_affirmation((
+            leg_enc_core_1.clone(),
+            eph_pk_s_1.clone(),
+            alice_to_bob_amount,
+        ));
+        split_builder.add_claim_received((
+            leg_enc_core_2.clone(),
+            eph_pk_r_2.clone(),
+            carol_to_alice_amount,
+        ));
+        assert_eq!(split_builder.leg_order(), &[1, 0]);
+        let device_legs = split_builder.legs().to_vec();
+        assert_eq!(device_legs[0].encryption, leg_enc_core_2);
+        assert_eq!(device_legs[1].encryption, leg_enc_core_1);
+
+        let (
+            host_data,
+            balance_proof,
+            re_randomized_leaf,
+            auth_rerandomization,
+            auth_rand_new_comm,
+            nullifier,
+        ) = split_builder
+            .prove::<_, PallasParams, VestaParams>(
+                &mut rng,
+                alice_leaf_path.clone(),
+                &account_tree_root,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_gen,
+                &k_amounts,
+                &k_asset_ids,
+            )
+            .unwrap();
+
+        let device_txn_type = DeviceTxnType::DeviceAffirmation {
+            typ: DeviceAffirmationType::SenderAffirmation,
+        };
+        let auth_proof = AuthProofAffirmation::new(
+            &mut rng,
+            sk_alice.0,
+            sk_alice_e.0,
+            auth_rerandomization,
+            auth_rand_new_comm,
+            k_amounts.to_vec(),
+            k_asset_ids.to_vec(),
+            device_legs,
+            &re_randomized_leaf,
+            &alice_updated_comm.0,
+            nullifier,
+            nonce,
+            &device_txn_type,
+            account_comm_key.sk_gen(),
+            account_comm_key.sk_enc_gen(),
+            b_blinding,
+            enc_gen,
+        )
+        .unwrap();
+
+        let split_proof =
+            AccountStateTransitionSplitProof::assemble(host_data, balance_proof, auth_proof);
+
+        let re_randomized_leaf_v = split_proof
+            .common_proof
+            .partial
+            .re_randomized_path
+            .as_ref()
+            .unwrap()
+            .path
+            .get_rerandomized_leaf()
+            .unwrap();
+        split_proof
+            .common_proof
+            .auth_proof
+            .verify(
+                vec![
+                    LegVerifierConfig {
+                        encryption: leg_enc_core_2.clone(),
+                        party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk_r_2.clone()),
+                        has_balance_decreased: Some(false),
+                        has_counter_decreased: Some(true),
+                    },
+                    LegVerifierConfig {
+                        encryption: leg_enc_core_1.clone(),
+                        party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk_s_1.clone()),
+                        has_balance_decreased: Some(true),
+                        has_counter_decreased: Some(false),
+                    },
+                ],
+                &re_randomized_leaf_v,
+                &alice_updated_comm.0,
+                nullifier,
+                nonce,
+                &device_txn_type,
+                account_comm_key.sk_gen(),
+                account_comm_key.sk_enc_gen(),
+                b_blinding,
+                enc_gen,
+                None,
+            )
+            .unwrap();
+
+        let mut alice_verifier =
+            AccountStateTransitionProofVerifier::init(alice_updated_comm, nullifier, nonce);
+        alice_verifier.add_claim_received((leg_enc_core_2.clone(), eph_pk_r_2.clone()));
+        alice_verifier.add_send_affirmation((leg_enc_core_1.clone(), eph_pk_s_1.clone()));
+        let (even_tuple, odd_tuple) = alice_verifier
+            .verify_split_with_tuples::<_, PallasParams, VestaParams>(
+                &split_proof,
+                &account_tree_root,
+                &account_tree_params,
+                &account_comm_key,
+                enc_gen,
+                &mut rng,
+                None,
+            )
+            .unwrap();
+        verify_given_verification_tuples(even_tuple, odd_tuple, &account_tree_params).unwrap();
+
+        // Insertion order puts the decrease first
+        let mut alice_verifier =
+            AccountStateTransitionProofVerifier::init(alice_updated_comm, nullifier, nonce);
+        alice_verifier.add_send_affirmation((leg_enc_core_1, eph_pk_s_1));
+        alice_verifier.add_claim_received((leg_enc_core_2, eph_pk_r_2));
+        assert_err!(
+            alice_verifier.verify_split_with_tuples::<_, PallasParams, VestaParams>(
+                &split_proof,
+                &account_tree_root,
+                &account_tree_params,
+                &account_comm_key,
+                enc_gen,
+                &mut rng,
+                None,
+            ),
+            Error::ProofVerificationError(_),
+            "increases must come before decreases"
+        );
     }
 
     #[test]
