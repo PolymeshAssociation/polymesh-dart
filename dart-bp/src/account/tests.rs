@@ -10009,10 +10009,12 @@ macro_rules! gen_split_proof {
             } else {
                 vec![]
             },
+            $new.openings(),
             vec![LegProverConfig {
                 encryption: $lec.clone(),
                 party_eph_pk: PartyEphemeralPublicKey::$party($eph_pk.clone()),
                 amount: $amount,
+                asset_id: $old.asset_id,
                 has_balance_changed: $hbc,
                 has_counter_decreased: None,
             }],
@@ -10023,10 +10025,10 @@ macro_rules! gen_split_proof {
             &DeviceTxnType::DeviceAffirmation {
                 typ: DeviceAffirmationType::SenderAffirmation,
             },
-            $ack.sk_gen(),
-            $ack.sk_enc_gen(),
             $bb,
+            $atp.even_parameters.pc_gens().B,
             $eg,
+            &$ack,
         )
         .unwrap();
         let (host, balance) = protocol
@@ -10102,10 +10104,12 @@ macro_rules! gen_split_proof {
             } else {
                 vec![]
             },
+            $new.openings(),
             vec![LegProverConfig {
                 encryption: $lec.clone(),
                 party_eph_pk: PartyEphemeralPublicKey::$party($eph_pk.clone()),
                 amount: $amount,
+                asset_id: $old.asset_id,
                 has_balance_changed: $hbc,
                 has_counter_decreased: None,
             }],
@@ -10116,10 +10120,10 @@ macro_rules! gen_split_proof {
             &DeviceTxnType::DeviceAffirmation {
                 typ: DeviceAffirmationType::SenderAffirmation,
             },
-            $ack.sk_gen(),
-            $ack.sk_enc_gen(),
             $bb,
+            $atp.even_parameters.pc_gens().B,
             $eg,
+            &$ack,
         )
         .unwrap();
         let host_data = protocol
@@ -10208,10 +10212,12 @@ macro_rules! gen_split_proof {
             } else {
                 vec![]
             },
+            $new.openings(),
             vec![LegProverConfig {
                 encryption: $lec.clone(),
                 party_eph_pk: PartyEphemeralPublicKey::$party($eph_pk.clone()),
                 amount: $amount,
+                asset_id: $old.asset_id,
                 has_balance_changed: $hbc,
                 has_counter_decreased: None,
             }],
@@ -10222,10 +10228,10 @@ macro_rules! gen_split_proof {
             &DeviceTxnType::DeviceAffirmation {
                 typ: DeviceAffirmationType::SenderAffirmation,
             },
-            $ack.sk_gen(),
-            $ack.sk_enc_gen(),
             $bb,
+            $atp.even_parameters.pc_gens().B,
             $eg,
+            &$ack,
         )
         .unwrap();
         // Hash auth_proof into transcript to derive updated challenge
@@ -10323,10 +10329,12 @@ macro_rules! gen_split_proof {
             } else {
                 vec![]
             },
+            $new.openings(),
             vec![LegProverConfig {
                 encryption: $lec.clone(),
                 party_eph_pk: PartyEphemeralPublicKey::$party($eph_pk.clone()),
                 amount: $amount,
+                asset_id: $old.asset_id,
                 has_balance_changed: $hbc,
                 has_counter_decreased: None,
             }],
@@ -10337,10 +10345,10 @@ macro_rules! gen_split_proof {
             &DeviceTxnType::DeviceAffirmation {
                 typ: DeviceAffirmationType::SenderAffirmation,
             },
-            $ack.sk_gen(),
-            $ack.sk_enc_gen(),
             $bb,
+            $atp.even_parameters.pc_gens().B,
             $eg,
+            &$ack,
         )
         .unwrap();
         // Hash auth_proof into transcript to derive updated challenge
@@ -10426,6 +10434,7 @@ macro_rules! verify_split_proof {
                 $ack.sk_gen(),
                 $ack.sk_enc_gen(),
                 $bb,
+                $atp.even_parameters.pc_gens().B,
                 $eg,
                 None,
             )
@@ -10511,6 +10520,7 @@ macro_rules! verify_split_proof {
                 $ack.sk_gen(),
                 $ack.sk_enc_gen(),
                 $bb,
+                $atp.even_parameters.pc_gens().B,
                 $eg,
                 None,
             )
@@ -11901,10 +11911,12 @@ fn single_shot_settlement_split_proof() {
             } else {
                 vec![]
             },
+            updated_sender_account.openings(),
             vec![LegProverConfig {
                 encryption: leg_enc_core_s.clone(),
                 party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk_s.clone()),
                 amount,
+                asset_id,
                 has_balance_changed: true,
                 has_counter_decreased: None,
             }],
@@ -11915,10 +11927,10 @@ fn single_shot_settlement_split_proof() {
             &DeviceTxnType::DeviceAffirmation {
                 typ: DeviceAffirmationType::SenderAffirmation,
             },
-            account_comm_key.sk_gen(),
-            account_comm_key.sk_enc_gen(),
             b_blinding,
+            account_tree_params.even_parameters.pc_gens().B,
             enc_gen,
+            &account_comm_key,
         )
         .unwrap();
 
@@ -11984,10 +11996,12 @@ fn single_shot_settlement_split_proof() {
             } else {
                 vec![]
             },
+            updated_receiver_account.openings(),
             vec![LegProverConfig {
                 encryption: leg_enc_core_r.clone(),
                 party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk_r.clone()),
                 amount,
+                asset_id,
                 has_balance_changed: true,
                 has_counter_decreased: None,
             }],
@@ -11998,10 +12012,10 @@ fn single_shot_settlement_split_proof() {
             &DeviceTxnType::DeviceAffirmation {
                 typ: DeviceAffirmationType::SenderAffirmation,
             },
-            account_comm_key.sk_gen(),
-            account_comm_key.sk_enc_gen(),
             b_blinding,
+            account_tree_params.even_parameters.pc_gens().B,
             enc_gen,
+            &account_comm_key,
         )
         .unwrap();
 
@@ -12240,10 +12254,12 @@ fn single_shot_settlement_asset_id_revealed_split_proof() {
         auth_rand_new_comm_s,
         vec![k_1_s],
         vec![],
+        updated_sender_account.openings(),
         vec![LegProverConfig {
             encryption: leg_enc_core_s.clone(),
             party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk_s.clone()),
             amount,
+            asset_id,
             has_balance_changed: true,
             has_counter_decreased: None,
         }],
@@ -12254,10 +12270,10 @@ fn single_shot_settlement_asset_id_revealed_split_proof() {
         &DeviceTxnType::DeviceAffirmation {
             typ: DeviceAffirmationType::SenderAffirmation,
         },
-        account_comm_key.sk_gen(),
-        account_comm_key.sk_enc_gen(),
         b_blinding,
+        account_tree_params.even_parameters.pc_gens().B,
         enc_gen,
+        &account_comm_key,
     )
     .unwrap();
 
@@ -12313,10 +12329,12 @@ fn single_shot_settlement_asset_id_revealed_split_proof() {
         auth_rand_new_comm_r,
         vec![k_1_r],
         vec![],
+        updated_receiver_account.openings(),
         vec![LegProverConfig {
             encryption: leg_enc_core_r.clone(),
             party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk_r.clone()),
             amount,
+            asset_id,
             has_balance_changed: true,
             has_counter_decreased: None,
         }],
@@ -12327,10 +12345,10 @@ fn single_shot_settlement_asset_id_revealed_split_proof() {
         &DeviceTxnType::DeviceAffirmation {
             typ: DeviceAffirmationType::SenderAffirmation,
         },
-        account_comm_key.sk_gen(),
-        account_comm_key.sk_enc_gen(),
         b_blinding,
+        account_tree_params.even_parameters.pc_gens().B,
         enc_gen,
+        &account_comm_key,
     )
     .unwrap();
 
@@ -12489,10 +12507,12 @@ fn make_sender_split_proof(
         auth_rand_new_comm,
         vec![k_1],
         vec![],
+        updated_account.openings(),
         vec![LegProverConfig {
             encryption: leg_enc_core.clone(),
             party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk.clone()),
             amount,
+            asset_id: account.asset_id,
             has_balance_changed: true,
             has_counter_decreased: None,
         }],
@@ -12503,10 +12523,10 @@ fn make_sender_split_proof(
         &DeviceTxnType::DeviceAffirmation {
             typ: DeviceAffirmationType::SenderAffirmation,
         },
-        account_comm_key.sk_gen(),
-        account_comm_key.sk_enc_gen(),
         b_blinding,
+        account_tree_params.even_parameters.pc_gens().B,
         enc_gen,
+        &account_comm_key,
     )
     .unwrap();
     let (host, balance) = protocol
@@ -12581,12 +12601,15 @@ fn make_receiver_split_proof(
         sk_e,
         auth_rerandomization,
         auth_rand_new_comm,
-        vec![], // no balance change -> no ct_amount relation
         vec![],
+        // no balance change -> no ct_amount relation
+        vec![],
+        updated_account.openings(),
         vec![LegProverConfig {
             encryption: leg_enc_core.clone(),
             party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk.clone()),
             amount,
+            asset_id: account.asset_id,
             has_balance_changed: false,
             has_counter_decreased: None,
         }],
@@ -12597,10 +12620,10 @@ fn make_receiver_split_proof(
         &DeviceTxnType::DeviceAffirmation {
             typ: DeviceAffirmationType::SenderAffirmation,
         },
-        account_comm_key.sk_gen(),
-        account_comm_key.sk_enc_gen(),
         b_blinding,
+        account_tree_params.even_parameters.pc_gens().B,
         enc_gen,
+        &account_comm_key,
     )
     .unwrap();
     let host_data = protocol
@@ -12684,6 +12707,7 @@ fn verify_sender_split(
         account_comm_key.sk_gen(),
         account_comm_key.sk_enc_gen(),
         b_blinding,
+        account_tree_params.even_parameters.pc_gens().B,
         enc_gen,
         None,
     )?;
@@ -12767,6 +12791,7 @@ fn verify_receiver_split(
         account_comm_key.sk_gen(),
         account_comm_key.sk_enc_gen(),
         b_blinding,
+        account_tree_params.even_parameters.pc_gens().B,
         enc_gen,
         None,
     )?;
@@ -13116,7 +13141,7 @@ fn sender_affirmation_w3_consistency() {
     //
     // Check:
     // - wrong leg given to device, verification must fail.
-    // - wrong updated-account-comm given to device, fail.
+    // - wrong updated-account-comm given to device, device refuses to sign.
     // - host gives a different (wrong) challenge to the device, i.e. device builds
     // auth_proof with `wrong_challenge || nonce` but host finalises with the real
     // `challenge_h || auth_proof_bytes`, challenge mismatch, fail.
@@ -13176,7 +13201,8 @@ fn sender_affirmation_w3_consistency() {
     let run_w3 = |device_challenge_h: PallasFr,
                   host_feeds_auth: bool,
                   device_leg_enc_core: &LegEncryptionCore<PallasA>,
-                  device_eph_pk: &SenderEphemeralPublicKey<PallasA>|
+                  device_eph_pk: &SenderEphemeralPublicKey<PallasA>,
+                  device_amount: Balance|
      -> (
         AffirmAsSenderSplitProof<64, PallasFr, VestaFr, PallasParameters, VestaParameters>,
         PallasA,
@@ -13225,10 +13251,12 @@ fn sender_affirmation_w3_consistency() {
             auth_rand_new_comm,
             vec![k_1],
             vec![],
+            updated_account.openings(),
             vec![LegProverConfig {
                 encryption: device_leg_enc_core.clone(),
                 party_eph_pk: PartyEphemeralPublicKey::Sender(device_eph_pk.clone()),
-                amount,
+                amount: device_amount,
+                asset_id,
                 has_balance_changed: true,
                 has_counter_decreased: None,
             }],
@@ -13239,10 +13267,10 @@ fn sender_affirmation_w3_consistency() {
             &DeviceTxnType::DeviceAffirmation {
                 typ: DeviceAffirmationType::SenderAffirmation,
             },
-            account_comm_key.sk_gen(),
-            account_comm_key.sk_enc_gen(),
             b_blinding,
+            account_tree_params.even_parameters.pc_gens().B,
             enc_gen,
+            &account_comm_key,
         )
         .unwrap();
 
@@ -13370,7 +13398,7 @@ fn sender_affirmation_w3_consistency() {
             enc_gen,
         );
         let (diff_core, diff_eph) = different_leg_enc.core_and_eph_keys_for_sender();
-        let (proof, nullifier) = run_w3(real_challenge_h, true, &diff_core, &diff_eph);
+        let (proof, nullifier) = run_w3(real_challenge_h, true, &diff_core, &diff_eph, amount + 1);
         // Use auth_proof verify directly (the device used diff_core but verifier uses leg_enc_core).
         let ch_v = {
             let k_1 = PallasFr::rand(&mut rng);
@@ -13432,6 +13460,7 @@ fn sender_affirmation_w3_consistency() {
                     account_comm_key.sk_gen(),
                     account_comm_key.sk_enc_gen(),
                     b_blinding,
+                    account_tree_params.even_parameters.pc_gens().B,
                     enc_gen,
                     None,
                 )
@@ -13440,154 +13469,51 @@ fn sender_affirmation_w3_consistency() {
         );
     }
 
-    //  3. Wrong updated-account-comm given to device
+    //  3. Wrong updated-account-comm given to device: the device refuses to sign because the
+    //     commitment is not valid for the supplied openings.
     {
-        // Device uses wrong uac in auth_proof; but host_protocol was started with correct uac.
-        // We simulate this by building auth_proof with a random updated_account_comm.0,
-        // checking that auth_proof.verify rejects it on the verifier side.
         let wrong_uac = AccountStateCommitment(PallasA::rand(&mut rng));
-        let k_1 = PallasFr::rand(&mut rng);
-        let (protocol, mut even_prover, odd_prover, nullifier) = AffirmAsSenderSplitProtocol::<
-            64,
-            PallasFr,
-            VestaFr,
-            PallasParameters,
-            VestaParameters,
-        >::init::<_, PallasParams, VestaParams>(
-            &mut rng,
-            (leg_enc_core.clone(), eph_pk.clone(), amount),
-            &account,
-            &updated_account,
-            updated_account_comm, // host uses correct uac
-            path_factory(),
-            &root,
-            nonce,
-            &account_tree_params,
-            account_comm_key.clone(),
-            enc_gen,
-            k_1,
-            None,
-        )
-        .unwrap();
-        let challenge_h = even_prover
-            .transcript()
-            .challenge_scalar::<PallasFr>(TXN_CHALLENGE_LABEL);
-        let mut ch_bytes = Vec::new();
-        challenge_h.serialize_compressed(&mut ch_bytes).unwrap();
-        let ledger_nonce: Vec<u8> = ch_bytes.iter().chain(nonce.iter()).copied().collect();
-        let re_leaf = protocol.rerandomized_leaf();
-        let auth_rerandomization = protocol.auth_rerandomization();
-        let auth_rand_new_comm = protocol.auth_rand_new_comm();
-        // Device uses wrong_uac.0 in its auth_proof
-        let auth_proof_wrong_uac = AuthProofAffirmation::new(
+        let auth_rerandomization = PallasFr::rand(&mut rng);
+        let auth_rand_new_comm = PallasFr::rand(&mut rng);
+        let k_amount = PallasFr::rand(&mut rng);
+        let nullifier = PallasA::rand(&mut rng);
+        let result = AuthProofAffirmation::new(
             &mut rng,
             sk_s.0,
             sk_s_e.0,
             auth_rerandomization,
             auth_rand_new_comm,
-            vec![k_1],
+            vec![k_amount],
             vec![],
+            updated_account.openings(),
             vec![LegProverConfig {
                 encryption: leg_enc_core.clone(),
                 party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk.clone()),
                 amount,
+                asset_id,
                 has_balance_changed: true,
                 has_counter_decreased: None,
             }],
-            &re_leaf,
-            &wrong_uac.0, // device uses wrong uac
+            &updated_account_comm.0,
+            &wrong_uac.0, // device uses wrong commitment
             nullifier,
-            &ledger_nonce,
+            nonce,
             &DeviceTxnType::DeviceAffirmation {
                 typ: DeviceAffirmationType::SenderAffirmation,
             },
-            account_comm_key.sk_gen(),
-            account_comm_key.sk_enc_gen(),
             b_blinding,
+            account_tree_params.even_parameters.pc_gens().B,
             enc_gen,
-        )
-        .unwrap();
-        let mut auth_bytes = Vec::new();
-        auth_proof_wrong_uac
-            .serialize_compressed(&mut auth_bytes)
-            .unwrap();
-        even_prover
-            .transcript()
-            .append_message(b"auth-proof", &auth_bytes);
-        let challenge_h_final = even_prover
-            .transcript()
-            .challenge_scalar::<PallasFr>(TXN_CHALLENGE_LABEL);
-        let (host, balance) = protocol
-            .gen_proof::<_, PallasParams, VestaParams>(
-                &challenge_h_final,
-                even_prover,
-                odd_prover,
-                &account_tree_params,
-                &mut rng,
-            )
-            .unwrap();
-        let proof = AffirmAsSenderSplitProof::assemble(host, balance, auth_proof_wrong_uac);
-
-        // Verifier uses correct updated_account_comm, device's auth_proof was built with wrong uac
-        //, transcript diverges, auth_proof.verify must fail.
-        let mut verifier_state = proof
-            .challenge_contribution::<PallasParams, VestaParams>(
-                updated_account_comm,
-                nullifier,
-                &root,
-                nonce,
-                &account_tree_params,
-                &account_comm_key,
-                enc_gen,
-                &leg_enc_core,
-                &eph_pk,
-            )
-            .unwrap();
-        let challenge_h_v = verifier_state
-            .even_verifier
-            .as_mut()
-            .unwrap()
-            .transcript()
-            .challenge_scalar::<PallasFr>(TXN_CHALLENGE_LABEL);
-        let mut ch_v_bytes = Vec::new();
-        challenge_h_v.serialize_compressed(&mut ch_v_bytes).unwrap();
-        let ledger_nonce_v: Vec<u8> = ch_v_bytes.iter().chain(nonce.iter()).copied().collect();
-        let re_leaf_v = proof
-            .common
-            .partial
-            .re_randomized_path
-            .as_ref()
-            .unwrap()
-            .path
-            .get_rerandomized_leaf()
-            .unwrap();
-        assert!(
-            proof
-                .common
-                .auth_proof
-                .verify(
-                    vec![LegVerifierConfig {
-                        encryption: leg_enc_core.clone(),
-                        party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk.clone()),
-                        has_balance_decreased: Some(true),
-                        has_counter_decreased: None,
-                    }],
-                    &re_leaf_v,
-                    &updated_account_comm.0, // correct uac
-                    nullifier,
-                    &ledger_nonce_v,
-                    &DeviceTxnType::DeviceAffirmation {
-                        typ: DeviceAffirmationType::SenderAffirmation,
-                    },
-                    account_comm_key.sk_gen(),
-                    account_comm_key.sk_enc_gen(),
-                    b_blinding,
-                    enc_gen,
-                    None,
-                )
-                .is_err(),
-            "wrong updated_account_comm in device auth_proof must fail auth verification"
+            &account_comm_key,
         );
+        match result {
+            Err(crate::Error::ProofGenerationError(e)) => assert!(
+                e.contains("canonical account commitment"),
+                "unexpected error: {e}"
+            ),
+            Err(e) => panic!("unexpected error: {e:?}"),
+            Ok(_) => panic!("device signed a non-canonical updated account commitment"),
+        }
     }
 
     //  4. Host gives wrong challenge to device
@@ -13596,7 +13522,7 @@ fn sender_affirmation_w3_consistency() {
     // The verifier derives the correct challenge_h_v; the ledger_nonce_v won't match.
     {
         let wrong_challenge = PallasFr::rand(&mut rng);
-        let (proof, nullifier) = run_w3(wrong_challenge, true, &leg_enc_core, &eph_pk);
+        let (proof, nullifier) = run_w3(wrong_challenge, true, &leg_enc_core, &eph_pk, amount);
 
         // Reconstruct verifier challenge independently.
         let mut verifier_state = proof
@@ -13651,6 +13577,7 @@ fn sender_affirmation_w3_consistency() {
                     account_comm_key.sk_gen(),
                     account_comm_key.sk_enc_gen(),
                     b_blinding,
+                    account_tree_params.even_parameters.pc_gens().B,
                     enc_gen,
                     None,
                 )
@@ -13669,6 +13596,7 @@ fn sender_affirmation_w3_consistency() {
             false, /* no auth hash */
             &leg_enc_core,
             &eph_pk,
+            amount,
         );
         // The sequential verifier does hash auth_proof; its challenge_h_final_v ≠ challenge_h.
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -13830,7 +13758,8 @@ fn receiver_affirmation_w3_consistency() {
     let run_w3_recv = |device_challenge_h: PallasFr,
                        host_feeds_auth: bool,
                        dev_leg_enc_core: &LegEncryptionCore<PallasA>,
-                       dev_eph_pk: &ReceiverEphemeralPublicKey<PallasA>|
+                       dev_eph_pk: &ReceiverEphemeralPublicKey<PallasA>,
+                       dev_amount: Balance|
      -> (
         AffirmAsReceiverSplitProof<64, PallasFr, VestaFr, PallasParameters, VestaParameters>,
         PallasA,
@@ -13844,7 +13773,7 @@ fn receiver_affirmation_w3_consistency() {
             VestaParameters,
         >::init::<_, PallasParams, VestaParams>(
             &mut local_rng,
-            (dev_leg_enc_core.clone(), dev_eph_pk.clone(), amount),
+            (dev_leg_enc_core.clone(), dev_eph_pk.clone(), dev_amount),
             &account,
             &updated_account,
             updated_account_comm,
@@ -13871,12 +13800,15 @@ fn receiver_affirmation_w3_consistency() {
             sk_r_e.0,
             auth_rerandomization,
             auth_rand_new_comm,
-            vec![], // no balance change -> no ct_amount relation
             vec![],
+            // no balance change -> no ct_amount relation
+            vec![],
+            updated_account.openings(),
             vec![LegProverConfig {
                 encryption: dev_leg_enc_core.clone(),
                 party_eph_pk: PartyEphemeralPublicKey::Receiver(dev_eph_pk.clone()),
-                amount,
+                amount: dev_amount,
+                asset_id,
                 has_balance_changed: false,
                 has_counter_decreased: None,
             }],
@@ -13887,10 +13819,10 @@ fn receiver_affirmation_w3_consistency() {
             &DeviceTxnType::DeviceAffirmation {
                 typ: DeviceAffirmationType::SenderAffirmation,
             },
-            account_comm_key.sk_gen(),
-            account_comm_key.sk_enc_gen(),
             b_blinding,
+            account_tree_params.even_parameters.pc_gens().B,
             enc_gen,
+            &account_comm_key,
         )
         .unwrap();
         if host_feeds_auth {
@@ -13934,7 +13866,13 @@ fn receiver_affirmation_w3_consistency() {
             enc_gen,
         );
         let (diff_core, diff_eph) = diff_leg_enc.core_and_eph_keys_for_receiver();
-        let (proof, nullifier) = run_w3_recv(reference_challenge_h, true, &diff_core, &diff_eph);
+        let (proof, nullifier) = run_w3_recv(
+            reference_challenge_h,
+            true,
+            &diff_core,
+            &diff_eph,
+            amount + 1,
+        );
 
         let mut vs = proof
             .challenge_contribution::<PallasParams, VestaParams>(
@@ -13988,6 +13926,7 @@ fn receiver_affirmation_w3_consistency() {
                     account_comm_key.sk_gen(),
                     account_comm_key.sk_enc_gen(),
                     b_blinding,
+                    account_tree_params.even_parameters.pc_gens().B,
                     enc_gen,
                     None,
                 )
@@ -13999,7 +13938,7 @@ fn receiver_affirmation_w3_consistency() {
     // 3. Host gives wrong challenge to device
     {
         let wrong_challenge = PallasFr::rand(&mut rng);
-        let (proof, nullifier) = run_w3_recv(wrong_challenge, true, &leg_enc_core, &eph_pk);
+        let (proof, nullifier) = run_w3_recv(wrong_challenge, true, &leg_enc_core, &eph_pk, amount);
 
         let mut vs = proof
             .challenge_contribution::<PallasParams, VestaParams>(
@@ -14053,6 +13992,7 @@ fn receiver_affirmation_w3_consistency() {
                     account_comm_key.sk_gen(),
                     account_comm_key.sk_enc_gen(),
                     b_blinding,
+                    account_tree_params.even_parameters.pc_gens().B,
                     enc_gen,
                     None,
                 )
@@ -14063,7 +14003,8 @@ fn receiver_affirmation_w3_consistency() {
 
     // 4. Host does NOT hash auth_proof into transcript
     {
-        let (proof, nullifier) = run_w3_recv(reference_challenge_h, false, &leg_enc_core, &eph_pk);
+        let (proof, nullifier) =
+            run_w3_recv(reference_challenge_h, false, &leg_enc_core, &eph_pk, amount);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let (even, odd) = verify_split_proof!(
                 sequential;
@@ -14151,6 +14092,194 @@ mod input_sanitation_disabled {
             let rmc_result = verify_rmc(rmc_0, rmc_1);
             assert!(verify_result.is_err() || rmc_result.is_err());
         }};
+    }
+
+    #[test]
+    fn split_affirmation_rejects_blinding_offset_in_new_commitment() {
+        // The host gives the device `rand_new_comm + delta` and submits `C_new + B_blinding * delta`.
+        // The verifier rejects the proof.
+
+        let mut rng = rand::thread_rng();
+
+        const NUM_GENS: usize = 1 << 12;
+        const L: usize = 64;
+        let (account_tree_params, account_comm_key, enc_gen) =
+            setup_gens_new::<NUM_GENS>(b"testing");
+        let b_blinding = account_tree_params.even_parameters.pc_gens().B_blinding;
+
+        let (
+            ((sk_s, pk_s), (sk_s_e, pk_s_e)),
+            ((_sk_r, _pk_r), (_sk_r_e, pk_r_e)),
+            ((_sk_a, _pk_a), (_sk_a_e, pk_a_e)),
+        ) = setup_keys(
+            &mut rng,
+            account_comm_key.sk_gen(),
+            account_comm_key.sk_enc_gen(),
+        );
+
+        let asset_id = 1;
+        let amount = 100;
+        let (_, leg_enc, _) = setup_leg(
+            &mut rng,
+            pk_a_e.0,
+            None,
+            amount,
+            asset_id,
+            pk_s_e.0,
+            pk_r_e.0,
+            account_comm_key.sk_enc_gen(),
+            enc_gen,
+        );
+        let (leg_enc_core, eph_pk) = leg_enc.core_and_eph_keys_for_sender();
+
+        let id = PallasFr::rand(&mut rng);
+        let (mut account, _, _, _) = new_account(&mut rng, asset_id, pk_s, pk_s_e, id);
+        account.balance = 200;
+        let account_tree = get_tree_with_account_comm::<L, _>(
+            &account,
+            account_comm_key.clone(),
+            &account_tree_params,
+            6,
+        )
+        .unwrap();
+        let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+        let root = account_tree.root_node();
+        let nonce = b"test-nonce";
+
+        let updated_account = account.get_state_for_send(amount).unwrap();
+        let correct_comm = updated_account.commit(account_comm_key.clone()).unwrap();
+        let delta = PallasFr::rand(&mut rng);
+        let updated_account_comm =
+            AccountStateCommitment((correct_comm.0 + b_blinding * delta).into_affine());
+
+        let k_1 = PallasFr::rand(&mut rng);
+        let k_2 = PallasFr::rand(&mut rng);
+        let (protocol, mut even_prover, odd_prover, nullifier) = AffirmAsSenderSplitProtocol::<
+            L,
+            PallasFr,
+            VestaFr,
+            PallasParameters,
+            VestaParameters,
+        >::init::<_, PallasParams, VestaParams>(
+            &mut rng,
+            (leg_enc_core.clone(), eph_pk.clone(), amount),
+            &account,
+            &updated_account,
+            updated_account_comm,
+            path,
+            &root,
+            nonce,
+            &account_tree_params,
+            account_comm_key.clone(),
+            enc_gen,
+            k_1,
+            Some(k_2),
+        )
+        .unwrap();
+        let (challenge_h, re_randomized_leaf, auth_rerandomization, auth_rand_new_comm) =
+            extract_prover_challenge_and_data!(even_prover, protocol);
+        let auth_proof = AuthProofAffirmation::new(
+            &mut rng,
+            sk_s.0,
+            sk_s_e.0,
+            auth_rerandomization,
+            auth_rand_new_comm + delta,
+            vec![k_1],
+            vec![k_2],
+            updated_account.openings(),
+            vec![LegProverConfig {
+                encryption: leg_enc_core.clone(),
+                party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk.clone()),
+                amount,
+                asset_id,
+                has_balance_changed: true,
+                has_counter_decreased: None,
+            }],
+            &re_randomized_leaf,
+            &updated_account_comm.0,
+            nullifier,
+            nonce,
+            &DeviceTxnType::DeviceAffirmation {
+                typ: DeviceAffirmationType::SenderAffirmation,
+            },
+            b_blinding,
+            account_tree_params.even_parameters.pc_gens().B,
+            enc_gen,
+            &account_comm_key,
+        )
+        .unwrap();
+        let (host, balance) = protocol
+            .gen_proof::<_, PallasParams, VestaParams>(
+                &challenge_h,
+                even_prover,
+                odd_prover,
+                &account_tree_params,
+                &mut rng,
+            )
+            .unwrap();
+        let proof = AffirmAsSenderSplitProof::assemble(host, balance, auth_proof);
+
+        proof
+            .common
+            .auth_proof
+            .verify(
+                vec![LegVerifierConfig {
+                    encryption: leg_enc_core.clone(),
+                    party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk.clone()),
+                    has_balance_decreased: Some(true),
+                    has_counter_decreased: None,
+                }],
+                &re_randomized_leaf,
+                &updated_account_comm.0,
+                nullifier,
+                nonce,
+                &DeviceTxnType::DeviceAffirmation {
+                    typ: DeviceAffirmationType::SenderAffirmation,
+                },
+                account_comm_key.sk_gen(),
+                account_comm_key.sk_enc_gen(),
+                b_blinding,
+                account_tree_params.even_parameters.pc_gens().B,
+                enc_gen,
+                None,
+            )
+            .unwrap();
+
+        let mut verify_host = || -> Result<()> {
+            let mut verifier = proof.challenge_contribution::<PallasParams, VestaParams>(
+                updated_account_comm,
+                nullifier,
+                &root,
+                nonce,
+                &account_tree_params,
+                &account_comm_key,
+                enc_gen,
+                &leg_enc_core,
+                &eph_pk,
+            )?;
+            let challenge_h_v = verifier
+                .even_verifier
+                .as_mut()
+                .unwrap()
+                .transcript()
+                .challenge_scalar::<PallasFr>(TXN_CHALLENGE_LABEL);
+            let (even_tuple, odd_tuple) = proof
+                .verify_and_return_tuples::<_, PallasParams, VestaParams>(
+                    verifier,
+                    &challenge_h_v,
+                    nullifier,
+                    &account_tree_params,
+                    &account_comm_key,
+                    enc_gen,
+                    &mut rng,
+                    None,
+                )?;
+            verify_given_verification_tuples(even_tuple, odd_tuple, &account_tree_params)
+        };
+        assert!(
+            verify_host().is_err(),
+            "verifier accepted a new commitment with a B_blinding offset"
+        );
     }
 
     #[test]
@@ -16440,6 +16569,200 @@ mod input_sanitation_disabled {
                     .is_err()
             );
         }
+    }
+
+    #[test]
+    fn sender_w3_device_signs_wrong_updated_account_comm() {
+        // The device signs a W3 sender auth proof over a different updated account commitment than
+        // the host proves. The verifier, given the real commitment, rejects the auth proof.
+
+        let mut rng = rand::thread_rng();
+
+        const NUM_GENS: usize = 1 << 12;
+        const L: usize = 64;
+        let (account_tree_params, account_comm_key, enc_gen) =
+            setup_gens_new::<NUM_GENS>(b"testing");
+        let b_blinding = account_tree_params.even_parameters.pc_gens().B_blinding;
+
+        let (((sk_s, pk_s), (sk_s_e, pk_s_e)), (_, (_, pk_r_e)), ((_, _), (_, pk_a_e))) =
+            setup_keys(
+                &mut rng,
+                account_comm_key.sk_gen(),
+                account_comm_key.sk_enc_gen(),
+            );
+
+        let asset_id: AssetId = 1;
+        let amount: Balance = 100;
+
+        let id = PallasFr::rand(&mut rng);
+        let (mut account, _, _, _) = new_account(&mut rng, asset_id, pk_s, pk_s_e, id);
+        account.balance = 200;
+        let account_comm = account.commit(account_comm_key.clone()).unwrap();
+        let account_tree = get_tree_with_commitment::<L, _>(account_comm, &account_tree_params, 6);
+
+        let nonce = b"test-nonce";
+
+        let updated_account = account.get_state_for_send(amount).unwrap();
+        let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
+
+        let (_, leg_enc, _) = setup_leg_with_conf(
+            &mut rng,
+            LegEncConfig {
+                visibility: PartyVisibility::FullVisibility,
+                reveal_asset_id: true,
+            },
+            pk_a_e.0,
+            None,
+            amount,
+            asset_id,
+            pk_s_e.0,
+            pk_r_e.0,
+            account_comm_key.sk_enc_gen(),
+            enc_gen,
+        );
+        let (leg_enc_core, eph_pk) = leg_enc.core_and_eph_keys_for_sender();
+        let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+        let root = account_tree.root_node();
+
+        let wrong_comm = AccountStateCommitment(PallasA::rand(&mut rng));
+        let k_1 = PallasFr::rand(&mut rng);
+        let (protocol, mut even_prover, odd_prover, nullifier) = AffirmAsSenderSplitProtocol::<
+            L,
+            PallasFr,
+            VestaFr,
+            PallasParameters,
+            VestaParameters,
+        >::init::<_, PallasParams, VestaParams>(
+            &mut rng,
+            (leg_enc_core.clone(), eph_pk.clone(), amount),
+            &account,
+            &updated_account,
+            updated_account_comm,
+            path,
+            &root,
+            nonce,
+            &account_tree_params,
+            account_comm_key.clone(),
+            enc_gen,
+            k_1,
+            None,
+        )
+        .unwrap();
+        let challenge_h = even_prover
+            .transcript()
+            .challenge_scalar::<PallasFr>(TXN_CHALLENGE_LABEL);
+        let mut ch_bytes = Vec::new();
+        challenge_h.serialize_compressed(&mut ch_bytes).unwrap();
+        let ledger_nonce: Vec<u8> = ch_bytes.iter().chain(nonce.iter()).copied().collect();
+        let re_leaf = protocol.rerandomized_leaf();
+
+        let auth_proof_wrong_comm = AuthProofAffirmation::new(
+            &mut rng,
+            sk_s.0,
+            sk_s_e.0,
+            protocol.auth_rerandomization(),
+            protocol.auth_rand_new_comm(),
+            vec![k_1],
+            vec![],
+            updated_account.openings(),
+            vec![LegProverConfig {
+                encryption: leg_enc_core.clone(),
+                party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk.clone()),
+                amount,
+                asset_id,
+                has_balance_changed: true,
+                has_counter_decreased: None,
+            }],
+            &re_leaf,
+            &wrong_comm.0,
+            nullifier,
+            &ledger_nonce,
+            &DeviceTxnType::DeviceAffirmation {
+                typ: DeviceAffirmationType::SenderAffirmation,
+            },
+            b_blinding,
+            account_tree_params.even_parameters.pc_gens().B,
+            enc_gen,
+            &account_comm_key,
+        )
+        .unwrap();
+        let mut auth_bytes = Vec::new();
+        auth_proof_wrong_comm
+            .serialize_compressed(&mut auth_bytes)
+            .unwrap();
+        even_prover
+            .transcript()
+            .append_message(b"auth-proof", &auth_bytes);
+        let challenge_h_final = even_prover
+            .transcript()
+            .challenge_scalar::<PallasFr>(TXN_CHALLENGE_LABEL);
+        let (host, balance) = protocol
+            .gen_proof::<_, PallasParams, VestaParams>(
+                &challenge_h_final,
+                even_prover,
+                odd_prover,
+                &account_tree_params,
+                &mut rng,
+            )
+            .unwrap();
+        let proof = AffirmAsSenderSplitProof::assemble(host, balance, auth_proof_wrong_comm);
+
+        let mut verifier_state = proof
+            .challenge_contribution::<PallasParams, VestaParams>(
+                updated_account_comm,
+                nullifier,
+                &root,
+                nonce,
+                &account_tree_params,
+                &account_comm_key,
+                enc_gen,
+                &leg_enc_core,
+                &eph_pk,
+            )
+            .unwrap();
+        let challenge_h_v = verifier_state
+            .even_verifier
+            .as_mut()
+            .unwrap()
+            .transcript()
+            .challenge_scalar::<PallasFr>(TXN_CHALLENGE_LABEL);
+        let mut ch_v_bytes = Vec::new();
+        challenge_h_v.serialize_compressed(&mut ch_v_bytes).unwrap();
+        let ledger_nonce_v: Vec<u8> = ch_v_bytes.iter().chain(nonce.iter()).copied().collect();
+        let re_leaf_v = proof
+            .common
+            .partial
+            .re_randomized_path
+            .as_ref()
+            .unwrap()
+            .path
+            .get_rerandomized_leaf()
+            .unwrap();
+        let verify_auth = |comm: &PallasA| {
+            proof.common.auth_proof.verify(
+                vec![LegVerifierConfig {
+                    encryption: leg_enc_core.clone(),
+                    party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk.clone()),
+                    has_balance_decreased: Some(true),
+                    has_counter_decreased: None,
+                }],
+                &re_leaf_v,
+                comm,
+                nullifier,
+                &ledger_nonce_v,
+                &DeviceTxnType::DeviceAffirmation {
+                    typ: DeviceAffirmationType::SenderAffirmation,
+                },
+                account_comm_key.sk_gen(),
+                account_comm_key.sk_enc_gen(),
+                b_blinding,
+                account_tree_params.even_parameters.pc_gens().B,
+                enc_gen,
+                None,
+            )
+        };
+        verify_auth(&wrong_comm.0).unwrap();
+        assert!(verify_auth(&updated_account_comm.0).is_err());
     }
 
     // More tests can be added like secret key mismatch, incorrect rho or randomness creation, etc.

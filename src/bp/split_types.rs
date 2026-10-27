@@ -97,6 +97,7 @@ pub struct LegProverConfig {
     encryption: WrappedCanonical<LegEncryptionCore<PallasA>>,
     party_eph_pk: WrappedCanonical<PartyEphemeralPublicKey<PallasA>>,
     amount: Balance,
+    asset_id: AssetId,
     has_balance_changed: bool,
     has_counter_decreased: Option<bool>,
 }
@@ -107,6 +108,7 @@ impl LegProverConfig {
             encryption: WrappedCanonical::wrap(&config.encryption)?,
             party_eph_pk: WrappedCanonical::wrap(&config.party_eph_pk)?,
             amount: config.amount,
+            asset_id: config.asset_id,
             has_balance_changed: config.has_balance_changed,
             has_counter_decreased: config.has_counter_decreased,
         })
@@ -117,6 +119,7 @@ impl LegProverConfig {
             encryption: self.encryption.decode()?,
             party_eph_pk: self.party_eph_pk.decode()?,
             amount: self.amount,
+            asset_id: self.asset_id,
             has_balance_changed: self.has_balance_changed,
             has_counter_decreased: self.has_counter_decreased,
         })
@@ -133,6 +136,10 @@ pub struct AffirmationDeviceRequest {
     pub auth_rand_new_comm: WrappedCanonical<PallasScalar>,
     pub rerandomized_leaf: CompressedAffine,
     pub updated_account_commitment: CompressedAffine,
+    /// Opening of the new account commitment, in the order
+    /// `[balance, counter, asset_id, rho, current_rho, randomness, current_randomness, id]`.
+    /// The device uses it to check that the new commitment has no `comm_re_rand_gen` term.
+    pub new_acc_openings: Vec<WrappedCanonical<PallasScalar>>,
     pub nullifier: CompressedAffine,
     pub k_amounts: Vec<WrappedCanonical<PallasScalar>>,
     pub k_asset_ids: Vec<WrappedCanonical<PallasScalar>>,
@@ -166,6 +173,19 @@ pub struct FeeAccountDeviceRequest {
     pub challenge_h_bytes: Vec<u8>,
     pub nonce: Vec<u8>,
     pub pk: CompressedAffine,
+    pub txn_type: DeviceTxnType,
+}
+
+/// Fee account registration request. The device checks `account_commitment` against the opening
+/// `(initial_rho, initial_randomness)` and the balance and asset id in `txn_type`.
+#[derive(Clone, Encode, Decode)]
+pub struct FeeAccountRegistrationDeviceRequest {
+    pub challenge_h_bytes: Vec<u8>,
+    pub nonce: Vec<u8>,
+    pub pk: CompressedAffine,
+    pub account_commitment: CompressedAffine,
+    pub initial_rho: WrappedCanonical<PallasScalar>,
+    pub initial_randomness: WrappedCanonical<PallasScalar>,
     pub txn_type: DeviceTxnType,
 }
 

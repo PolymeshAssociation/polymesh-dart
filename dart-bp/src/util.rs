@@ -2636,6 +2636,60 @@ pub fn batch_digest(mut transcript: MerlinTranscript) -> [u8; 32] {
     digest
 }
 
+/// Starts the host's proof of `-rand_new_comm_anchor = anchor_gen * (-rand_new_comm)` and returns
+/// it with `rand_new_comm_anchor = anchor_gen * rand_new_comm`. `blinding` is the blinding of
+/// `-rand_new_comm` in the host's new account commitment, so the proof shares that response.
+pub fn init_host_rand_new_comm_anchor_protocol<G: AffineRepr>(
+    rand_new_comm: G::ScalarField,
+    blinding: G::ScalarField,
+    anchor_gen: G,
+) -> (PokDiscreteLogProtocol<G>, G) {
+    let proto = PokDiscreteLogProtocol::init(-rand_new_comm, blinding, &anchor_gen);
+    let rand_new_comm_anchor = (anchor_gen * rand_new_comm).into_affine();
+    (proto, rand_new_comm_anchor)
+}
+
+/// Adds the host's anchor proof with commitment `t` to `transcript`. `rand_new_comm_anchor` is the
+/// auth proof's `anchor_gen * rand_new_comm`.
+pub fn host_rand_new_comm_anchor_challenge_contribution<G: AffineRepr>(
+    t: &G,
+    rand_new_comm_anchor: G,
+    anchor_gen: &G,
+    dst: &[u8],
+    transcript: &mut MerlinTranscript,
+) -> Result<()> {
+    PokDiscreteLogProtocol::compute_challenge_contribution(
+        anchor_gen,
+        &(-rand_new_comm_anchor.into_group()).into_affine(),
+        t,
+        dst,
+        transcript,
+    )?;
+    Ok(())
+}
+
+/// Verifies `-rand_new_comm_anchor = anchor_gen * (-rand_new_comm)` using `resp_neg_rand_new_comm`,
+/// the response for `-rand_new_comm` in the host's new account commitment.
+pub fn verify_host_rand_new_comm_anchor<G: AffineRepr>(
+    resp_rand_new_comm_anchor: &PartialPokDiscreteLog<G>,
+    rand_new_comm_anchor: G,
+    anchor_gen: G,
+    challenge: &G::ScalarField,
+    resp_neg_rand_new_comm: &G::ScalarField,
+    mut rmc: Option<&mut RandomizedMultChecker<G>>,
+) -> Result<()> {
+    verify_or_rmc_2!(
+        rmc,
+        resp_rand_new_comm_anchor,
+        "Host rand_new_comm anchor proof verification failed",
+        (-rand_new_comm_anchor.into_group()).into_affine(),
+        anchor_gen,
+        challenge,
+        resp_neg_rand_new_comm,
+    );
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

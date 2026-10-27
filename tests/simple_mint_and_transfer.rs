@@ -1098,7 +1098,9 @@ fn test_sender_tries_to_affirms_for_receiver() -> Result<()> {
     // Get the issuer's account state for the asset.
     let mut asset_state = issuer_acct.get_account_asset_state(asset_id)?;
 
-    let proof = ReceiverAffirmationProof::new(
+    // This should fail because the issuer is not the receiver. The issuer's key doesn't open the
+    // receiver's amount ciphertext, so the auth proof prover refuses, else the chain rejects.
+    match ReceiverAffirmationProof::new(
         &mut rng,
         &issuer_acct.keys(),
         &leg_ref,
@@ -1106,13 +1108,19 @@ fn test_sender_tries_to_affirms_for_receiver() -> Result<()> {
         500,
         &mut asset_state,
         account_tree.prover_account_tree(),
-    )?;
-    // This should fail because the issuer is not the receiver.
-    let result = chain.receiver_affirmation(&issuer_acct.address(), proof);
-    assert!(
-        result.is_err(),
-        "Sender should not be able to affirm as receiver"
-    );
+    ) {
+        Err(e) => assert!(
+            e.to_string().contains("amount does not match ct_amount"),
+            "unexpected error: {e}"
+        ),
+        Ok(proof) => {
+            let result = chain.receiver_affirmation(&issuer_acct.address(), proof);
+            assert!(
+                result.is_err(),
+                "Sender should not be able to affirm as receiver"
+            );
+        }
+    }
 
     Ok(())
 }

@@ -1,6 +1,11 @@
 use crate::account::common::leg_link::ensure_expected_leg_link_responses;
-use crate::account::{LegProverConfig, LegVerifierConfig};
-use crate::auth_proofs::helpers::{init_acc_comm_protocol, resp_acc_comm, verify_acc_comm};
+use crate::account::state::NUM_GENERATORS;
+use crate::account::{AccountCommitmentKeyTrait, LegProverConfig, LegVerifierConfig};
+use crate::auth_proofs::helpers::{
+    ensure_correct_updated_account_commitment, init_acc_comm_protocol,
+    init_rand_new_comm_anchor_protocol, resp_acc_comm, verify_acc_comm,
+    verify_rand_new_comm_anchor,
+};
 use crate::auth_proofs::{AUTH_TXN_LABEL, DeviceTxnType, NULLIFIER_LABEL};
 use crate::{
     ACCOUNT_COMMITMENT_LABEL, Error, LEG_ACTION_LABEL, LEG_ENC_LABEL, NONCE_LABEL,
@@ -47,6 +52,11 @@ use schnorr_pok::partial::{
 // With the creation proofs' `ct_participant_prime = enc_key_gen * r_5` and `S[0]' = pk_s * r_5`, the
 // second relation pins the leg party point to the affirming account's registered encryption key
 // whenever `ct_participant_prime` is not identity.
+//
+// The auth proof also proves `rand_new_comm_anchor = anchor_gen * rand_new_comm` and the host proves
+// `-rand_new_comm_anchor = anchor_gen * w` for its `comm_re_rand_gen` witness `w` in the new commitment,
+// each sharing the response with its new commitment part. This forces `w = -rand_new_comm`, so the new
+// account commitment has no `comm_re_rand_gen` term.
 
 /// For non-fee account related transactions, affirmation, counter update, reverse
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
@@ -64,6 +74,11 @@ pub struct AuthProofAffirmation<G: AffineRepr> {
     pub partial_re_randomized_account_commitment: G,
     /// `sk_gen * sk + enc_key_gen * sk_enc + comm_re_rand_gen * rand_1_new_comm`
     pub partial_updated_account_commitment: G,
+    /// `anchor_gen * rand_new_comm`
+    pub rand_new_comm_anchor: G,
+    /// For `rand_new_comm_anchor = anchor_gen * rand_new_comm`. The response for `rand_new_comm` is in
+    /// `resp_updated_account_commitment`.
+    pub resp_rand_new_comm_anchor: PartialPokDiscreteLog<G>,
     /// `ct_amount_1_i = S[2]_i * sk_enc^{-1} + B_blinding * k_1_i`
     pub partial_ct_amounts: Vec<G>,
     /// `ct_asset_id_1_i = S[3] * sk_enc^{-1} + B_blinding * k_2_i`
@@ -79,7 +94,7 @@ pub struct AuthProofAffirmation<G: AffineRepr> {
     mocktopus::macros::mockable
 )]
 impl<G: AffineRepr> AuthProofAffirmation<G> {
-    pub fn new<R: CryptoRngCore>(
+    pub fn new<R: CryptoRngCore, CK: AccountCommitmentKeyTrait<G>>(
         rng: &mut R,
         sk: G::ScalarField,
         sk_enc: G::ScalarField,
@@ -88,16 +103,19 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
         // In the order legs appear in legs_with_conf, their length can be smaller than legs_with_conf since some state transitions don't have balance change and/or some reveal asset-id
         k_amounts: Vec<G::ScalarField>,
         k_asset_ids: Vec<G::ScalarField>,
+        // Opening of the new account commitment, in the order
+        // `[balance, counter, asset_id, rho, current_rho, randomness, current_randomness, id]`
+        new_acc_openings: [G::ScalarField; NUM_GENERATORS - 2],
         legs_with_conf: Vec<LegProverConfig<G>>,
         re_randomized_account_commitment: &G,
         updated_account_commitment: &G,
         nullifier: G,
         nonce: &[u8], // This could be the same nonce used by host device or a concatenation of host's nonce and other data like its challenge (if doing sequential)
         txn_type: &DeviceTxnType,
-        sk_gen: G,
-        enc_key_gen: G,
         comm_re_rand_gen: G, // generator used blind the old and new commitment parts
+        anchor_gen: G,       // generator for the public anchor of `rand_new_comm`
         enc_gen: G,
+        account_comm_key: &CK,
     ) -> error::Result<Self> {
         let mut transcript = MerlinTranscript::new(AUTH_TXN_LABEL);
         Self::new_with_given_transcript(
@@ -108,21 +126,22 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
             rand_new_comm,
             k_amounts,
             k_asset_ids,
+            new_acc_openings,
             legs_with_conf,
             re_randomized_account_commitment,
             updated_account_commitment,
             nullifier,
             nonce,
             txn_type,
-            sk_gen,
-            enc_key_gen,
             comm_re_rand_gen,
+            anchor_gen,
             enc_gen,
+            account_comm_key,
             &mut transcript,
         )
     }
 
-    pub fn new_with_given_transcript<R: CryptoRngCore>(
+    pub fn new_with_given_transcript<R: CryptoRngCore, CK: AccountCommitmentKeyTrait<G>>(
         rng: &mut R,
         sk: G::ScalarField,
         sk_enc: G::ScalarField,
@@ -131,22 +150,35 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
         // In the order legs appear in legs_with_conf, their length can be smaller than legs_with_conf since some state transitions don't have balance change and/or some reveal asset-id
         k_amounts: Vec<G::ScalarField>,
         k_asset_ids: Vec<G::ScalarField>,
+        // Opening of the new account commitment, in the order
+        // `[balance, counter, asset_id, rho, current_rho, randomness, current_randomness, id]`
+        new_acc_openings: [G::ScalarField; NUM_GENERATORS - 2],
         legs_with_conf: Vec<LegProverConfig<G>>,
         re_randomized_account_commitment: &G,
         updated_account_commitment: &G,
         nullifier: G,
         nonce: &[u8], // This could be the same nonce used by host device or a concatenation of host's nonce and other data like its challenge (if doing sequential)
         txn_type: &DeviceTxnType,
-        sk_gen: G,
-        enc_key_gen: G,
         comm_re_rand_gen: G, // generator used blind the old and new commitment parts
+        anchor_gen: G,       // generator for the public anchor of `rand_new_comm`
         enc_gen: G,
+        account_comm_key: &CK,
         mut transcript: &mut MerlinTranscript,
     ) -> error::Result<Self> {
+        let sk_gen = account_comm_key.sk_gen();
+        let enc_key_gen = account_comm_key.sk_enc_gen();
         let sk_blinding = G::ScalarField::rand(rng);
         let sk_enc_blinding = G::ScalarField::rand(rng);
         let sk_enc_inv_blinding = G::ScalarField::rand(rng);
         let sk_enc_inv = Self::sk_enc_inverse(&sk_enc)?;
+        Self::ensure_leg_plaintexts_match(&legs_with_conf, &sk_enc_inv, enc_gen)?;
+        ensure_correct_updated_account_commitment(
+            sk,
+            sk_enc,
+            updated_account_commitment,
+            &new_acc_openings,
+            account_comm_key,
+        )?;
         add_to_transcript!(
             transcript,
             NULLIFIER_LABEL,
@@ -189,6 +221,13 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
             comm_re_rand_gen,
             dst::AUTH_ACC_COMM_OLD,
             dst::AUTH_ACC_COMM_NEW,
+            &mut transcript,
+        )?;
+        let (proto_anchor, rand_new_comm_anchor) = init_rand_new_comm_anchor_protocol(
+            rand_new_comm,
+            &proto_new,
+            anchor_gen,
+            dst::AUTH_ACC_COMM_NEW_ANCHOR,
             &mut transcript,
         )?;
 
@@ -438,6 +477,7 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
                 &proto_new,
                 &challenge,
             )?;
+        let resp_rand_new_comm_anchor = proto_anchor.gen_partial_proof();
 
         let mut leg_links = Vec::with_capacity(t_leg_link.len());
         for (t_participant, t_participant_prime, t_amount, t_asset_id) in t_leg_link {
@@ -462,6 +502,8 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
             resp_updated_account_commitment,
             partial_re_randomized_account_commitment,
             partial_updated_account_commitment,
+            rand_new_comm_anchor,
+            resp_rand_new_comm_anchor,
             partial_ct_amounts,
             partial_ct_asset_ids,
             D,
@@ -482,6 +524,7 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
         sk_gen: G,
         enc_key_gen: G,
         comm_re_rand_gen: G, // generator used blind the old and new commitment parts
+        anchor_gen: G,       // generator for the public anchor of `rand_new_comm`
         enc_gen: G,
         rmc: Option<&mut RandomizedMultChecker<G>>,
     ) -> error::Result<()> {
@@ -496,6 +539,7 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
             sk_gen,
             enc_key_gen,
             comm_re_rand_gen,
+            anchor_gen,
             enc_gen,
             &mut transcript,
             rmc,
@@ -513,6 +557,7 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
         sk_gen: G,
         enc_key_gen: G,
         comm_re_rand_gen: G, // generator used blind the old and new commitment parts
+        anchor_gen: G,       // generator for the public anchor of `rand_new_comm`
         enc_gen: G,
         mut transcript: &mut MerlinTranscript,
         mut rmc: Option<&mut RandomizedMultChecker<G>>,
@@ -554,6 +599,12 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
             b"partial_acc_comm_new",
             &self.partial_updated_account_commitment,
         );
+        self.resp_rand_new_comm_anchor.challenge_contribution(
+            &anchor_gen,
+            &self.rand_new_comm_anchor,
+            dst::AUTH_ACC_COMM_NEW_ANCHOR,
+            &mut transcript,
+        )?;
 
         if legs_conf.len() != self.leg_links.len() {
             return Err(Error::ProofVerificationError(format!(
@@ -750,6 +801,14 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
             comm_re_rand_gen,
             rmc.as_deref_mut(),
         )?;
+        verify_rand_new_comm_anchor(
+            self.rand_new_comm_anchor,
+            &self.resp_rand_new_comm_anchor,
+            &self.resp_updated_account_commitment,
+            &challenge,
+            anchor_gen,
+            rmc.as_deref_mut(),
+        )?;
 
         let mut offset_amount = 0;
         let mut offset_asset_id = 0;
@@ -875,6 +934,46 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
     pub(crate) fn sk_enc_inverse(sk_enc: &G::ScalarField) -> error::Result<G::ScalarField> {
         sk_enc.inverse().ok_or(Error::InvertingZero)
     }
+
+    /// Errors unless, under `sk_enc`, each leg's `amount` opens `ct_amount` and each leg's
+    /// `asset_id` opens `ct_asset_id` or equals the revealed asset-id.
+    fn ensure_leg_plaintexts_match(
+        legs_with_conf: &[LegProverConfig<G>],
+        sk_enc_inv: &G::ScalarField,
+        enc_gen: G,
+    ) -> error::Result<()> {
+        #[cfg(not(feature = "ignore_prover_input_sanitation"))]
+        for (i, conf) in legs_with_conf.iter().enumerate() {
+            let amount = conf.encryption.ct_amount().into_group()
+                - conf.party_eph_pk.eph_pk_amount() * *sk_enc_inv;
+            if amount != enc_gen * G::ScalarField::from(conf.amount) {
+                return Err(Error::ProofGenerationError(format!(
+                    "Leg {i}: amount does not match ct_amount"
+                )));
+            }
+            match conf.encryption.asset_id_ciphertext() {
+                Some(ct_asset_id) => {
+                    let eph_pk_asset_id = conf.party_eph_pk.eph_pk_asset_id().ok_or_else(|| {
+                        Error::ProofGenerationError(format!("Leg {i}: missing eph_pk_asset_id"))
+                    })?;
+                    let asset_id = ct_asset_id.into_group() - eph_pk_asset_id * *sk_enc_inv;
+                    if asset_id != enc_gen * G::ScalarField::from(conf.asset_id) {
+                        return Err(Error::ProofGenerationError(format!(
+                            "Leg {i}: asset_id does not match ct_asset_id"
+                        )));
+                    }
+                }
+                None => {
+                    if conf.encryption.asset_id() != Some(conf.asset_id) {
+                        return Err(Error::ProofGenerationError(format!(
+                            "Leg {i}: asset_id does not match the revealed asset_id"
+                        )));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -972,7 +1071,7 @@ mod serialization {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::account::PartyEphemeralPublicKey;
+    use crate::account::{AccountState, AccountStateCommitment, PartyEphemeralPublicKey};
     use crate::auth_proofs::DeviceAffirmationType;
     use crate::keys::keygen_enc;
     use crate::leg::{Leg, LegEncConfig, LegEncCoreAndEphKeys, PartyVisibility};
@@ -990,9 +1089,12 @@ mod tests {
         // proof's partial commitment.
         let mut rng = thread_rng();
         // Use independent bases so the mismatch is not hidden by setup.
-        let sk_gen = Affine::<PallasConfig>::rand(&mut rng);
-        let enc_key_gen = Affine::<PallasConfig>::rand(&mut rng);
+        let account_comm_key: [Affine<PallasConfig>; NUM_GENERATORS] =
+            core::array::from_fn(|_| Affine::<PallasConfig>::rand(&mut rng));
+        let sk_gen = account_comm_key.sk_gen();
+        let enc_key_gen = account_comm_key.sk_enc_gen();
         let comm_re_rand_gen = Affine::<PallasConfig>::rand(&mut rng);
+        let anchor_gen = Affine::<PallasConfig>::rand(&mut rng);
         let enc_gen = Affine::<PallasConfig>::rand(&mut rng);
 
         let sk_e = Fr::rand(&mut rng);
@@ -1016,8 +1118,8 @@ mod tests {
         let rand_old = Fr::rand(&mut rng);
         let rand_new = Fr::rand(&mut rng);
         let pk_e = (sk_gen * sk_e + enc_key_gen * sk_enc_e).into_affine();
+        let updated_comm = (sk_gen * sk_e + enc_key_gen * sk_enc_a).into_affine();
         let re_rand_leaf = (pk_e + comm_re_rand_gen * rand_old).into_affine();
-        let updated_comm = (pk_e + comm_re_rand_gen * rand_new).into_affine();
         let nullifier = Affine::<PallasConfig>::rand(&mut rng);
         let nonce = b"acA1_split_gap";
         let k_amount = Fr::rand(&mut rng);
@@ -1027,6 +1129,7 @@ mod tests {
             encryption: leg_core.clone(),
             party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk_s.clone()),
             amount,
+            asset_id,
             has_balance_changed: true,
             has_counter_decreased: Some(false),
         }];
@@ -1038,6 +1141,7 @@ mod tests {
             rand_new,
             vec![k_amount],
             vec![k_asset_id],
+            [Fr::from(0u64); NUM_GENERATORS - 2],
             legs,
             &re_rand_leaf,
             &updated_comm,
@@ -1046,10 +1150,10 @@ mod tests {
             &DeviceTxnType::DeviceAffirmation {
                 typ: DeviceAffirmationType::SenderAffirmation,
             },
-            sk_gen,
-            enc_key_gen,
             comm_re_rand_gen,
+            anchor_gen,
             enc_gen,
+            &account_comm_key,
         )
         .unwrap();
 
@@ -1072,6 +1176,7 @@ mod tests {
                 sk_gen,
                 enc_key_gen,
                 comm_re_rand_gen,
+                anchor_gen,
                 enc_gen,
                 None,
             )
@@ -1081,9 +1186,12 @@ mod tests {
     #[test]
     fn auth_proof_binds_leg_action() {
         let mut rng = thread_rng();
-        let sk_gen = Affine::<PallasConfig>::rand(&mut rng);
-        let enc_key_gen = Affine::<PallasConfig>::rand(&mut rng);
+        let account_comm_key: [Affine<PallasConfig>; NUM_GENERATORS] =
+            core::array::from_fn(|_| Affine::<PallasConfig>::rand(&mut rng));
+        let sk_gen = account_comm_key.sk_gen();
+        let enc_key_gen = account_comm_key.sk_enc_gen();
         let comm_re_rand_gen = Affine::<PallasConfig>::rand(&mut rng);
+        let anchor_gen = Affine::<PallasConfig>::rand(&mut rng);
         let enc_gen = Affine::<PallasConfig>::rand(&mut rng);
 
         let sk_e = Fr::rand(&mut rng);
@@ -1103,7 +1211,8 @@ mod tests {
         let rand_old = Fr::rand(&mut rng);
         let rand_new = Fr::rand(&mut rng);
         let re_rand_leaf = (pk_e + comm_re_rand_gen * rand_old).into_affine();
-        let updated_comm = (pk_e + comm_re_rand_gen * rand_new).into_affine();
+        // Canonical new commitment with zero state openings.
+        let updated_comm = pk_e;
         let nullifier = Affine::<PallasConfig>::rand(&mut rng);
         let nonce = b"leg_action_binding";
         let k_amount = Fr::rand(&mut rng);
@@ -1120,10 +1229,12 @@ mod tests {
             rand_new,
             vec![k_amount],
             vec![k_asset_id],
+            [Fr::from(0u64); NUM_GENERATORS - 2],
             vec![LegProverConfig {
                 encryption: leg_core.clone(),
                 party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk_s.clone()),
                 amount,
+                asset_id,
                 has_balance_changed: true,
                 has_counter_decreased: Some(false),
             }],
@@ -1132,10 +1243,10 @@ mod tests {
             nullifier,
             nonce,
             &txn_type,
-            sk_gen,
-            enc_key_gen,
             comm_re_rand_gen,
+            anchor_gen,
             enc_gen,
+            &account_comm_key,
         )
         .unwrap();
 
@@ -1155,6 +1266,7 @@ mod tests {
                 sk_gen,
                 enc_key_gen,
                 comm_re_rand_gen,
+                anchor_gen,
                 enc_gen,
                 None,
             )
@@ -1164,8 +1276,233 @@ mod tests {
         assert!(verify(None).is_err());
     }
 
+    // The prover refuses a leg config whose plaintexts don't match the leg ciphertexts.
+
     const LEG_AMOUNT: Balance = 100;
     const LEG_ASSET_ID: AssetId = 7;
+
+    /// Encrypts a leg of `LEG_AMOUNT` of `LEG_ASSET_ID` for the chosen party, then runs the auth
+    /// proof prover with the given claimed plaintexts.
+    fn prove_with_claimed_plaintexts(
+        is_sender: bool,
+        has_balance_changed: bool,
+        reveal_asset_id: bool,
+        claimed_amount: Balance,
+        claimed_asset_id: AssetId,
+    ) -> error::Result<AuthProofAffirmation<Affine<PallasConfig>>> {
+        let mut rng = thread_rng();
+        let account_comm_key: [Affine<PallasConfig>; NUM_GENERATORS] =
+            core::array::from_fn(|_| Affine::<PallasConfig>::rand(&mut rng));
+        let sk_gen = account_comm_key.sk_gen();
+        let enc_key_gen = account_comm_key.sk_enc_gen();
+        let comm_re_rand_gen = Affine::<PallasConfig>::rand(&mut rng);
+        let anchor_gen = Affine::<PallasConfig>::rand(&mut rng);
+        let enc_gen = Affine::<PallasConfig>::rand(&mut rng);
+
+        let sk = Fr::rand(&mut rng);
+        let (sk_enc, ek) = keygen_enc(&mut rng, enc_key_gen);
+        let (_, other_ek) = keygen_enc(&mut rng, enc_key_gen);
+        let (sender_pk, receiver_pk) = if is_sender {
+            (ek.0, other_ek.0)
+        } else {
+            (other_ek.0, ek.0)
+        };
+        let leg = Leg::new(
+            sender_pk,
+            receiver_pk,
+            LEG_AMOUNT,
+            LEG_ASSET_ID,
+            vec![],
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        let cfg = LegEncConfig {
+            visibility: PartyVisibility::NoVisibility,
+            reveal_asset_id,
+        };
+        let (leg_enc, _) = leg.encrypt(&mut rng, cfg, enc_key_gen, enc_gen).unwrap();
+        let (leg_core, party_eph_pk) = if is_sender {
+            let (core, eph_pk) = leg_enc.core_and_eph_keys_for_sender();
+            (core, PartyEphemeralPublicKey::Sender(eph_pk))
+        } else {
+            let (core, eph_pk) = leg_enc.core_and_eph_keys_for_receiver();
+            (core, PartyEphemeralPublicKey::Receiver(eph_pk))
+        };
+
+        let pk = (sk_gen * sk + enc_key_gen * sk_enc.0).into_affine();
+        let rand_old = Fr::rand(&mut rng);
+        let rand_new = Fr::rand(&mut rng);
+        let re_rand_leaf = (pk + comm_re_rand_gen * rand_old).into_affine();
+        // Canonical new commitment with zero state openings.
+        let updated_comm = pk;
+        let k_amounts = if has_balance_changed {
+            vec![Fr::rand(&mut rng)]
+        } else {
+            vec![]
+        };
+        let k_asset_ids = if reveal_asset_id {
+            vec![]
+        } else {
+            vec![Fr::rand(&mut rng)]
+        };
+        let nullifier = Affine::<PallasConfig>::rand(&mut rng);
+
+        AuthProofAffirmation::new(
+            &mut rng,
+            sk,
+            sk_enc.0,
+            rand_old,
+            rand_new,
+            k_amounts,
+            k_asset_ids,
+            [Fr::from(0u64); NUM_GENERATORS - 2],
+            vec![LegProverConfig {
+                encryption: leg_core,
+                party_eph_pk,
+                amount: claimed_amount,
+                asset_id: claimed_asset_id,
+                has_balance_changed,
+                has_counter_decreased: Some(false),
+            }],
+            &re_rand_leaf,
+            &updated_comm,
+            nullifier,
+            b"leg_plaintext_check",
+            &DeviceTxnType::DeviceAffirmation {
+                typ: DeviceAffirmationType::SenderAffirmation,
+            },
+            comm_re_rand_gen,
+            anchor_gen,
+            enc_gen,
+            &account_comm_key,
+        )
+    }
+
+    fn assert_rejected(
+        result: error::Result<AuthProofAffirmation<Affine<PallasConfig>>>,
+        msg: &str,
+    ) {
+        match result {
+            Err(Error::ProofGenerationError(e)) => {
+                assert!(e.contains(msg), "unexpected error: {e}")
+            }
+            Err(e) => panic!("unexpected error: {e:?}"),
+            Ok(_) => panic!("prover accepted mismatched plaintexts"),
+        }
+    }
+
+    #[test]
+    fn accepts_matching_plaintexts() {
+        for reveal_asset_id in [false, true] {
+            prove_with_claimed_plaintexts(true, true, reveal_asset_id, LEG_AMOUNT, LEG_ASSET_ID)
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn rejects_amount_not_matching_ct_amount() {
+        for reveal_asset_id in [false, true] {
+            assert_rejected(
+                prove_with_claimed_plaintexts(
+                    true,
+                    true,
+                    reveal_asset_id,
+                    LEG_AMOUNT + 1,
+                    LEG_ASSET_ID,
+                ),
+                "amount does not match ct_amount",
+            );
+        }
+    }
+
+    #[test]
+    fn receiver_affirmation_checks_amount_without_balance_change() {
+        // Receiver affirmations do not change the balance, but the device must still check that the
+        // amount it displays matches `ct_amount`.
+
+        prove_with_claimed_plaintexts(false, false, false, LEG_AMOUNT, LEG_ASSET_ID).unwrap();
+        assert_rejected(
+            prove_with_claimed_plaintexts(false, false, false, LEG_AMOUNT + 1, LEG_ASSET_ID),
+            "amount does not match ct_amount",
+        );
+    }
+
+    #[test]
+    fn rejects_asset_id_not_matching_ct_asset_id() {
+        assert_rejected(
+            prove_with_claimed_plaintexts(false, true, false, LEG_AMOUNT, LEG_ASSET_ID + 1),
+            "asset_id does not match ct_asset_id",
+        );
+    }
+
+    #[test]
+    fn rejects_asset_id_not_matching_revealed_asset_id() {
+        assert_rejected(
+            prove_with_claimed_plaintexts(true, true, true, LEG_AMOUNT, LEG_ASSET_ID + 1),
+            "asset_id does not match the revealed asset_id",
+        );
+    }
+
+    #[test]
+    fn rejects_non_canonical_updated_account_commitment() {
+        // The device refuses to sign a new commitment that carries a `comm_re_rand_gen` term the
+        // host added, even when the supplied openings are the honest ones.
+
+        let mut rng = thread_rng();
+        let account_comm_key: [Affine<PallasConfig>; NUM_GENERATORS] =
+            core::array::from_fn(|_| Affine::<PallasConfig>::rand(&mut rng));
+        let comm_re_rand_gen = Affine::<PallasConfig>::rand(&mut rng);
+        let anchor_gen = Affine::<PallasConfig>::rand(&mut rng);
+        let sk = Fr::rand(&mut rng);
+        let (sk_enc, _) = keygen_enc(&mut rng, account_comm_key.sk_enc_gen());
+
+        let state = AccountState {
+            pk_aff: (account_comm_key.sk_gen() * sk).into_affine(),
+            pk_enc: (account_comm_key.sk_enc_gen() * sk_enc.0).into_affine(),
+            id: Fr::rand(&mut rng),
+            balance: LEG_AMOUNT,
+            counter: 0,
+            asset_id: LEG_ASSET_ID,
+            rho: Fr::rand(&mut rng),
+            current_rho: Fr::rand(&mut rng),
+            randomness: Fr::rand(&mut rng),
+            current_randomness: Fr::rand(&mut rng),
+        };
+        let canonical = state.commit(account_comm_key).unwrap();
+        // Host adds a `comm_re_rand_gen` term while keeping the honest openings.
+        let tampered = AccountStateCommitment(
+            (canonical.0 + comm_re_rand_gen * Fr::rand(&mut rng)).into_affine(),
+        );
+        let rand_old = Fr::rand(&mut rng);
+        let rand_new = Fr::rand(&mut rng);
+        let nullifier = Affine::<PallasConfig>::rand(&mut rng);
+        let enc_gen = Affine::<PallasConfig>::rand(&mut rng);
+
+        let result = AuthProofAffirmation::new(
+            &mut rng,
+            sk,
+            sk_enc.0,
+            rand_old,
+            rand_new,
+            vec![],
+            vec![],
+            state.openings(),
+            vec![],
+            &canonical.0,
+            &tampered.0,
+            nullifier,
+            b"non_canonical_uac",
+            &DeviceTxnType::DeviceAffirmation {
+                typ: DeviceAffirmationType::SenderAffirmation,
+            },
+            comm_re_rand_gen,
+            anchor_gen,
+            enc_gen,
+            &account_comm_key,
+        );
+        assert_rejected(result, "canonical account commitment");
+    }
 
     /// Leg amount and asset-id of a leg made by `crafted_party_point_leg`, which the affirming
     /// party's key opens to `LEG_AMOUNT` of `LEG_ASSET_ID`.
@@ -1182,9 +1519,12 @@ mod tests {
         tamper: impl Fn(&mut LegEncCoreAndEphKeys<Affine<PallasConfig>>),
     ) -> error::Result<()> {
         let mut rng = thread_rng();
-        let sk_gen = Affine::<PallasConfig>::rand(&mut rng);
-        let enc_key_gen = Affine::<PallasConfig>::rand(&mut rng);
+        let account_comm_key: [Affine<PallasConfig>; NUM_GENERATORS] =
+            core::array::from_fn(|_| Affine::<PallasConfig>::rand(&mut rng));
+        let sk_gen = account_comm_key.sk_gen();
+        let enc_key_gen = account_comm_key.sk_enc_gen();
         let comm_re_rand_gen = Affine::<PallasConfig>::rand(&mut rng);
+        let anchor_gen = Affine::<PallasConfig>::rand(&mut rng);
         let enc_gen = Affine::<PallasConfig>::rand(&mut rng);
 
         let sk = Fr::rand(&mut rng);
@@ -1246,7 +1586,8 @@ mod tests {
         let rand_old = Fr::rand(&mut rng);
         let rand_new = Fr::rand(&mut rng);
         let re_rand_leaf = (pk + comm_re_rand_gen * rand_old).into_affine();
-        let updated_comm = (pk + comm_re_rand_gen * rand_new).into_affine();
+        // Canonical new commitment with zero state openings.
+        let updated_comm = pk;
         let k_amounts = if is_sender {
             vec![Fr::rand(&mut rng)]
         } else {
@@ -1276,10 +1617,12 @@ mod tests {
             rand_new,
             k_amounts,
             k_asset_ids,
+            [Fr::from(0u64); NUM_GENERATORS - 2],
             vec![LegProverConfig {
                 encryption: leg_core.clone(),
                 party_eph_pk: party_eph_pk.clone(),
                 amount: LEG_AMOUNT,
+                asset_id: LEG_ASSET_ID,
                 has_balance_changed: is_sender,
                 has_counter_decreased: Some(false),
             }],
@@ -1288,10 +1631,10 @@ mod tests {
             nullifier,
             nonce,
             &txn_type,
-            sk_gen,
-            enc_key_gen,
             comm_re_rand_gen,
+            anchor_gen,
             enc_gen,
+            &account_comm_key,
         )
         .unwrap();
 
@@ -1310,6 +1653,7 @@ mod tests {
             sk_gen,
             enc_key_gen,
             comm_re_rand_gen,
+            anchor_gen,
             enc_gen,
             None,
         )

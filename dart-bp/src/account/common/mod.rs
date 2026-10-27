@@ -14,6 +14,7 @@ use crate::util::{
 use crate::util::{
     create_account_commitment_t_values, create_bp_and_null_t_values,
     generate_account_commitment_responses, generate_null_bp_responses,
+    host_rand_new_comm_anchor_challenge_contribution, init_host_rand_new_comm_anchor_protocol,
 };
 use crate::{
     Error, LEG_ACTION_LABEL, LEG_ENC_LABEL, NONCE_LABEL, PARTY_EPH_PK_LABEL,
@@ -551,15 +552,29 @@ pub struct AccountCommitmentsHostProof<G: SWCurveConfig + Clone + Copy> {
     pub resp_acc_old: SchnorrResponse<Affine<G>>,
     /// Partial response for new account (carries its commitment `t`)
     pub resp_acc_new: PartialSchnorrResponse<Affine<G>>,
+    /// For `-rand_new_comm_anchor = anchor_gen * (-rand_new_comm)`.
+    pub resp_rand_new_comm_anchor: PartialPokDiscreteLog<Affine<G>>,
 }
 
 impl<G: SWCurveConfig + Clone + Copy> AccountCommitmentsHostProof<G> {
-    pub fn challenge_contribution(&self, transcript: &mut MerlinTranscript) -> Result<()> {
+    /// `rand_new_comm_anchor` is the auth proof's `anchor_gen * rand_new_comm`.
+    pub fn challenge_contribution(
+        &self,
+        rand_new_comm_anchor: Affine<G>,
+        anchor_gen: Affine<G>,
+        transcript: &mut MerlinTranscript,
+    ) -> Result<()> {
         self.resp_acc_old
             .challenge_contribution(dst::ACCOUNT_COMM_OLD, transcript)?;
         self.resp_acc_new
             .challenge_contribution(dst::ACCOUNT_COMM_NEW, transcript)?;
-        Ok(())
+        host_rand_new_comm_anchor_challenge_contribution(
+            &self.resp_rand_new_comm_anchor.t,
+            rand_new_comm_anchor,
+            &anchor_gen,
+            dst::HOST_ACC_COMM_NEW_ANCHOR,
+            transcript,
+        )
     }
 }
 
@@ -585,6 +600,13 @@ pub struct AccountCommitmentsHostProtocol<G: SWCurveConfig + Clone + Copy> {
     /// Auth proves `B_blinding * rand_new_comm` in its new commitment part.
     /// Host proves `B_blinding * (-rand_new_comm)` in its new commitment part.
     pub rand_new_comm: G::ScalarField,
+    /// For `-rand_new_comm_anchor = anchor_gen * (-rand_new_comm)`.
+    pub t_rand_new_comm_anchor: PokDiscreteLogProtocol<Affine<G>>,
+    /// `anchor_gen * rand_new_comm`
+    #[zeroize(skip)]
+    pub rand_new_comm_anchor: Affine<G>,
+    #[zeroize(skip)]
+    pub anchor_gen: Affine<G>,
 }
 
 impl<G: SWCurveConfig + Clone + Copy> AccountCommitmentsHostProtocol<G> {
@@ -594,6 +616,7 @@ impl<G: SWCurveConfig + Clone + Copy> AccountCommitmentsHostProtocol<G> {
         rng: &mut R,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G>>,
         b_blinding: Affine<G>,
+        anchor_gen: Affine<G>,
         is_asset_id_revealed: bool,
         has_balance_changed: bool,
     ) -> (Self, Option<G::ScalarField>) {
@@ -635,6 +658,14 @@ impl<G: SWCurveConfig + Clone + Copy> AccountCommitmentsHostProtocol<G> {
             None, // sk_enc_blinding — not used in host mode
         );
 
+        // `-rand_new_comm` is the last witness of `t_acc_new`.
+        let (t_rand_new_comm_anchor, rand_new_comm_anchor) =
+            init_host_rand_new_comm_anchor_protocol(
+                rand_new_comm,
+                t_acc_new.blindings[t_acc_new.blindings.len() - 1],
+                anchor_gen,
+            );
+
         (
             Self {
                 t_acc_old,
@@ -651,6 +682,9 @@ impl<G: SWCurveConfig + Clone + Copy> AccountCommitmentsHostProtocol<G> {
                 new_randomness_blinding,
                 id_blinding,
                 rand_new_comm,
+                t_rand_new_comm_anchor,
+                rand_new_comm_anchor,
+                anchor_gen,
             },
             asset_id_blinding,
         )
@@ -661,7 +695,13 @@ impl<G: SWCurveConfig + Clone + Copy> AccountCommitmentsHostProtocol<G> {
             .challenge_contribution(dst::ACCOUNT_COMM_OLD, transcript)?;
         self.t_acc_new
             .challenge_contribution(dst::ACCOUNT_COMM_NEW, transcript)?;
-        Ok(())
+        host_rand_new_comm_anchor_challenge_contribution(
+            &self.t_rand_new_comm_anchor.t,
+            self.rand_new_comm_anchor,
+            &self.anchor_gen,
+            dst::HOST_ACC_COMM_NEW_ANCHOR,
+            transcript,
+        )
     }
 
     /// Generate the host's Schnorr proofs for account commitments.
@@ -691,6 +731,7 @@ impl<G: SWCurveConfig + Clone + Copy> AccountCommitmentsHostProtocol<G> {
         Ok(AccountCommitmentsHostProof {
             resp_acc_old,
             resp_acc_new,
+            resp_rand_new_comm_anchor: self.t_rand_new_comm_anchor.clone().gen_partial_proof(),
         })
     }
 }
@@ -1170,16 +1211,14 @@ impl<
         }
 
         let has_balance_changed = LegProverConfig::has_balance_changed(legs_with_conf);
-        let b_blinding = account_tree_params
-            .even_parameters
-            .sl_params
-            .pc_gens()
-            .B_blinding;
+        let pc_gens = account_tree_params.even_parameters.sl_params.pc_gens();
+        let b_blinding = pc_gens.B_blinding;
 
         let (acc_host_proto, asset_id_blinding) = AccountCommitmentsHostProtocol::init(
             rng,
             account_comm_key,
             b_blinding,
+            pc_gens.B,
             is_asset_id_revealed,
             has_balance_changed,
         );
@@ -1215,12 +1254,7 @@ impl<
 
         {
             let mut transcript = even_prover.transcript();
-            acc_host_proto
-                .t_acc_old
-                .challenge_contribution(dst::ACCOUNT_COMM_OLD, &mut transcript)?;
-            acc_host_proto
-                .t_acc_new
-                .challenge_contribution(dst::ACCOUNT_COMM_NEW, &mut transcript)?;
+            acc_host_proto.challenge_contribution(&mut transcript)?;
             t_bp.challenge_contribution(dst::BP_RANDOMNESS_RELATIONS, &mut transcript)?;
             let null_gen = account_comm_key.current_rho_gen();
             t_null.challenge_contribution(

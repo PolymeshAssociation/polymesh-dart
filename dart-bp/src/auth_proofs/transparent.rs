@@ -1,7 +1,12 @@
+use crate::account::AccountCommitmentKeyTrait;
+use crate::account::state::NUM_GENERATORS;
 use crate::account::transparent::{
     EncryptedPublicKey, chal_contrib_pk_enc, init_pk_enc_protocol, reps_pk_enc, verify_pk_enc,
 };
-use crate::auth_proofs::helpers::{init_acc_comm_protocol, verify_acc_comm};
+use crate::auth_proofs::helpers::{
+    ensure_correct_updated_account_commitment, init_acc_comm_protocol,
+    init_rand_new_comm_anchor_protocol, verify_acc_comm, verify_rand_new_comm_anchor,
+};
 use crate::auth_proofs::{AUTH_TXN_LABEL, DeviceTxnType, NULLIFIER_LABEL, helpers};
 use crate::{
     ACCOUNT_COMMITMENT_LABEL, NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL, TXN_CHALLENGE_LABEL,
@@ -24,6 +29,9 @@ use schnorr_pok::partial::{
 // comm_new_2 = ... + G_j * rho + G_k * rho^i + G_l * s + G_m * s^i + B * -r
 // And verifier will check if comm_new_1 + comm_new_2 == comm_new (the final account commitment being inserted into tree)
 // This is done as relations involving rho, rho^i, s, s_i need to be proven in BP
+// Auth proof also proves rand_new_comm_anchor = anchor_gen * r and host proves
+// -rand_new_comm_anchor = anchor_gen * -r, each sharing the response for r (resp. -r) with its part
+// of comm_new, so comm_new has no B term.
 
 /// For non-fee account related transparent transactions, like deposit and withdraw
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
@@ -41,6 +49,11 @@ pub struct AuthProofTransparent<G: AffineRepr> {
     pub partial_re_randomized_account_commitment: G,
     /// `sk_gen * sk + enc_key_gen * sk_enc + comm_re_rand_gen * rand_new_comm`
     pub partial_updated_account_commitment: G,
+    /// `anchor_gen * rand_new_comm`
+    pub rand_new_comm_anchor: G,
+    /// For `rand_new_comm_anchor = anchor_gen * rand_new_comm`. The response for `rand_new_comm` is in
+    /// `resp_updated_account_commitment`.
+    pub resp_rand_new_comm_anchor: PartialPokDiscreteLog<G>,
     resp_eph_pk: Vec<PartialPokDiscreteLog<G>>,
     resp_enc: Partial1PokPedersenCommitment<G>,
     pub encrypted_pubkeys: EncryptedPublicKey<G>,
@@ -53,16 +66,29 @@ impl<G: AffineRepr> AuthProofTransparent<G> {
         sk_enc: G::ScalarField,
         rand_part_old_comm: G::ScalarField, // part of commitment randomness used to re-randomize the old state commitment
         rand_new_comm: G::ScalarField, // new randomness used to blind this part of new account commitment
+        // Opening of the new account commitment, in the order
+        // `[balance, counter, asset_id, rho, current_rho, randomness, current_randomness, id]`
+        new_acc_openings: [G::ScalarField; NUM_GENERATORS - 2],
         re_randomized_account_commitment: &G,
         updated_account_commitment: &G,
         nullifier: G,
         auditor_keys: Vec<G>,
         nonce: &[u8], // This could be the same nonce used by host device or a concatenation of host's nonce and other data like its challenge (if doing sequential)
         txn_type: &DeviceTxnType,
-        sk_gen: G,
-        enc_key_gen: G,
         comm_re_rand_gen: G, // generator used blind the old and new commitment parts
+        anchor_gen: G,       // generator for the public anchor of `rand_new_comm`
+        account_comm_key: &impl AccountCommitmentKeyTrait<G>,
     ) -> Result<Self> {
+        let sk_gen = account_comm_key.sk_gen();
+        let enc_key_gen = account_comm_key.sk_enc_gen();
+        ensure_correct_updated_account_commitment(
+            sk,
+            sk_enc,
+            updated_account_commitment,
+            &new_acc_openings,
+            account_comm_key,
+        )?;
+
         let mut transcript = MerlinTranscript::new(AUTH_TXN_LABEL);
 
         add_to_transcript!(
@@ -101,6 +127,13 @@ impl<G: AffineRepr> AuthProofTransparent<G> {
             dst::TRANSPARENT_AUTH_ACC_COMM_NEW,
             &mut transcript,
         )?;
+        let (proto_anchor, rand_new_comm_anchor) = init_rand_new_comm_anchor_protocol(
+            rand_new_comm,
+            &proto_new,
+            anchor_gen,
+            dst::TRANSPARENT_AUTH_ACC_COMM_NEW_ANCHOR,
+            &mut transcript,
+        )?;
 
         let (t_eph_pk, t_enc, encrypted_pubkey) = init_pk_enc_protocol(
             rng,
@@ -131,6 +164,8 @@ impl<G: AffineRepr> AuthProofTransparent<G> {
             resp_updated_account_commitment,
             partial_re_randomized_account_commitment,
             partial_updated_account_commitment,
+            rand_new_comm_anchor,
+            resp_rand_new_comm_anchor: proto_anchor.gen_partial_proof(),
             resp_eph_pk,
             resp_enc: reps_enc,
             encrypted_pubkeys: encrypted_pubkey,
@@ -148,6 +183,7 @@ impl<G: AffineRepr> AuthProofTransparent<G> {
         sk_gen: G,
         enc_key_gen: G,
         comm_re_rand_gen: G, // generator used blind the old and new commitment parts
+        anchor_gen: G,       // generator for the public anchor of `rand_new_comm`
         rmc: Option<&mut RandomizedMultChecker<G>>,
     ) -> Result<()> {
         let mut transcript = MerlinTranscript::new(AUTH_TXN_LABEL);
@@ -165,7 +201,13 @@ impl<G: AffineRepr> AuthProofTransparent<G> {
         );
         txn_type.add_to_transcript(&mut transcript)?;
 
-        self.challenge_contribution(&auditor_keys, sk_gen, enc_key_gen, &mut transcript)?;
+        self.challenge_contribution(
+            &auditor_keys,
+            sk_gen,
+            enc_key_gen,
+            anchor_gen,
+            &mut transcript,
+        )?;
 
         let challenge = transcript.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
 
@@ -174,6 +216,7 @@ impl<G: AffineRepr> AuthProofTransparent<G> {
             sk_gen,
             enc_key_gen,
             comm_re_rand_gen,
+            anchor_gen,
             &challenge,
             rmc,
         )
@@ -184,6 +227,7 @@ impl<G: AffineRepr> AuthProofTransparent<G> {
         auditor_keys: &[G],
         sk_gen: G,
         enc_key_gen: G,
+        anchor_gen: G,
         transcript: &mut MerlinTranscript,
     ) -> Result<()> {
         self.resp_re_randomized_account_commitment
@@ -198,6 +242,12 @@ impl<G: AffineRepr> AuthProofTransparent<G> {
             b"partial_acc_comm_new",
             &self.partial_updated_account_commitment,
         );
+        self.resp_rand_new_comm_anchor.challenge_contribution(
+            &anchor_gen,
+            &self.rand_new_comm_anchor,
+            dst::TRANSPARENT_AUTH_ACC_COMM_NEW_ANCHOR,
+            transcript,
+        )?;
 
         chal_contrib_pk_enc(
             &self.resp_eph_pk,
@@ -218,6 +268,7 @@ impl<G: AffineRepr> AuthProofTransparent<G> {
         sk_gen: G,
         enc_key_gen: G,
         comm_re_rand_gen: G,
+        anchor_gen: G,
         challenge: &G::ScalarField,
         mut rmc: Option<&mut RandomizedMultChecker<G>>,
     ) -> Result<()> {
@@ -230,6 +281,14 @@ impl<G: AffineRepr> AuthProofTransparent<G> {
             sk_gen,
             enc_key_gen,
             comm_re_rand_gen,
+            rmc.as_deref_mut(),
+        )?;
+        verify_rand_new_comm_anchor(
+            self.rand_new_comm_anchor,
+            &self.resp_rand_new_comm_anchor,
+            &self.resp_updated_account_commitment,
+            challenge,
+            anchor_gen,
             rmc.as_deref_mut(),
         )?;
 

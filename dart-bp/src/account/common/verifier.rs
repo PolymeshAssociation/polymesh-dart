@@ -11,7 +11,8 @@ use crate::util::{
     enforce_constraints_and_take_challenge_contrib_of_sigma_t_values_for_common_state_change,
     enforce_constraints_for_randomness_relations, get_verification_tuples_with_rng,
     handle_verification_tuples, take_challenge_contrib_of_balance_bp,
-    verify_sigma_for_balance_change, verify_sigma_for_common_state_change,
+    verify_host_rand_new_comm_anchor, verify_sigma_for_balance_change,
+    verify_sigma_for_common_state_change,
 };
 use crate::{
     Error, LEG_ACTION_LABEL, LEG_ENC_LABEL, NONCE_LABEL, PARTY_EPH_PK_LABEL,
@@ -626,6 +627,7 @@ impl<
         );
 
         let B_blinding = account_tree_params.even_parameters.pc_gens().B_blinding;
+        let anchor_gen = account_tree_params.even_parameters.pc_gens().B;
 
         Self::init_with_given_verifier_with_rerandomized_leaf(
             proof,
@@ -637,6 +639,7 @@ impl<
             account_comm_key,
             enc_gen,
             B_blinding,
+            anchor_gen,
             even_verifier,
         )
     }
@@ -653,6 +656,7 @@ impl<
         account_comm_key: &impl AccountCommitmentKeyTrait<Affine<G0>>,
         enc_gen: Affine<G0>,
         B_blinding: Affine<G0>,
+        anchor_gen: Affine<G0>,
         even_verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
     ) -> Result<Self> {
         // NOTE: No curve-tree gadget or ROOT/RE_RANDOMIZED_PATH transcript entries.
@@ -739,9 +743,11 @@ impl<
         // Challenge contributions: host commitment, BP/null
         {
             let mut transcript = even_verifier.transcript();
-            proof
-                .host_commitment_proof
-                .challenge_contribution(&mut transcript)?;
+            proof.host_commitment_proof.challenge_contribution(
+                proof.auth_proof.rand_new_comm_anchor,
+                anchor_gen,
+                &mut transcript,
+            )?;
             proof
                 .partial
                 .resp_bp_randomness_relations
@@ -937,6 +943,7 @@ impl<
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: &impl AccountCommitmentKeyTrait<Affine<G0>>,
         enc_gen: Affine<G0>,
+        anchor_gen: Affine<G0>,
         rng: &mut R,
         mut rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
@@ -957,6 +964,7 @@ impl<
             account_tree_params,
             account_comm_key,
             enc_gen,
+            anchor_gen,
             rmc.as_deref_mut(),
         )?;
 
@@ -987,6 +995,7 @@ impl<
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: &impl AccountCommitmentKeyTrait<Affine<G0>>,
         enc_gen: Affine<G0>,
+        anchor_gen: Affine<G0>,
         mut rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<()> {
         let (asset_id, _) = LegVerifierConfig::asset_id_and_hidden_count(&self.legs_with_conf)?;
@@ -1065,6 +1074,8 @@ impl<
             common_proof.host_commitment_proof.resp_acc_old.0[ID_GEN_INDEX - offset - 1],
         );
 
+        // `-rand_new_comm` is the last witness of the new commitment.
+        let rand_new_comm_idx = gens_acc_new.len() - 1;
         verify_partial_schnorr_resp_or_rmc!(
             rmc,
             common_proof.host_commitment_proof.resp_acc_new,
@@ -1073,6 +1084,19 @@ impl<
             challenge,
             missing_resps_acc_new,
         );
+
+        let resp_rand_new_comm = common_proof
+            .host_commitment_proof
+            .resp_acc_new
+            .get_response(rand_new_comm_idx)?;
+        verify_host_rand_new_comm_anchor(
+            &common_proof.host_commitment_proof.resp_rand_new_comm_anchor,
+            common_proof.auth_proof.rand_new_comm_anchor,
+            anchor_gen,
+            challenge,
+            resp_rand_new_comm,
+            rmc.as_deref_mut(),
+        )?;
 
         // Verify BP/null sigma protocols
         let resp_new_current_rho = common_proof
@@ -1293,6 +1317,7 @@ impl<
             account_tree_params,
             account_comm_key,
             enc_gen,
+            account_tree_params.even_parameters.pc_gens().B,
             rng,
             rmc_0,
         )?;

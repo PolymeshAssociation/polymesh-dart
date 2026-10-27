@@ -176,6 +176,12 @@ define_dsts! {
     HOST_CT_ASSET_ID_2 = b"dart/host/ct-asset-id-2";
     /// Host's `ct_amount_2 = enc_gen * amount + B_blinding * (-k)`.
     HOST_CT_AMOUNT_2 = b"dart/host/ct-amount-2";
+    /// Host's `-rand_new_comm_anchor = anchor_gen * (-rand_new_comm)`, leg-affirmation domain.
+    HOST_ACC_COMM_NEW_ANCHOR = b"dart/host/acc-comm-new-anchor";
+    /// Host's `-rand_new_comm_anchor = anchor_gen * (-rand_new_comm)`, transparent domain.
+    TRANSPARENT_HOST_ACC_COMM_NEW_ANCHOR = b"dart/host/transparent-acc-comm-new-anchor";
+    /// Host's `-rand_new_comm_anchor = anchor_gen * (-rand_new_comm)`, fee-account domain.
+    FEE_HOST_ACC_COMM_NEW_ANCHOR = b"dart/host/fee-acc-comm-new-anchor";
 
     // --- Encryption-key distribution ---
     /// BP vector commitment to all chunks of the distributed secret key.
@@ -245,10 +251,16 @@ define_dsts! {
     TRANSPARENT_AUTH_ACC_COMM_OLD = b"dart/auth/transparent-acc-comm-old";
     /// Opening of the auth device's share of the new account commitment, transparent domain.
     TRANSPARENT_AUTH_ACC_COMM_NEW = b"dart/auth/transparent-acc-comm-new";
+    /// Auth device's `rand_new_comm_anchor = anchor_gen * rand_new_comm`, leg-affirmation domain.
+    AUTH_ACC_COMM_NEW_ANCHOR = b"dart/auth/acc-comm-new-anchor";
+    /// Auth device's `rand_new_comm_anchor = anchor_gen * rand_new_comm`, transparent domain.
+    TRANSPARENT_AUTH_ACC_COMM_NEW_ANCHOR = b"dart/auth/transparent-acc-comm-new-anchor";
     /// Opening of the auth device's share of the old account commitment, fee-account domain.
     FEE_AUTH_ACC_COMM_OLD = b"dart/auth/fee-acc-comm-old";
     /// Opening of the auth device's share of the new account commitment, fee-account domain.
     FEE_AUTH_ACC_COMM_NEW = b"dart/auth/fee-acc-comm-new";
+    /// Auth device's `rand_new_comm_anchor = anchor_gen * rand_new_comm`, fee-account domain.
+    FEE_AUTH_ACC_COMM_NEW_ANCHOR = b"dart/auth/fee-acc-comm-new-anchor";
     /// Auth device's `ct_amount_1 = Eph_amt * sk_enc^-1 + comm_re_rand_gen * k_1` for a leg.
     AUTH_LEG_AMOUNT = b"dart/auth/leg-amount";
     /// Auth device's leg participant relation:

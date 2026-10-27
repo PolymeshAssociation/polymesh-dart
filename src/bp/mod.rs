@@ -487,7 +487,8 @@ mod tests {
     };
     use crate::auth_proofs::{
         create_affirmation_auth_proof, create_fee_account_auth_proof,
-        create_fee_payment_auth_proof, create_registration_auth_proof,
+        create_fee_account_registration_auth_proof, create_fee_payment_auth_proof,
+        create_registration_auth_proof,
     };
     use crate::curve_tree::ProverCurveTree;
     use crate::fee_split::{FeePaymentHostProtocol, FeeRegHostProtocol, FeeTopupHostProtocol};
@@ -957,7 +958,7 @@ mod tests {
         let (protocol, device_request) =
             FeeRegHostProtocol::init(&mut rng, &keys.acct.public, &account_state, ctx).unwrap();
 
-        let device_response = create_fee_account_auth_proof(
+        let device_response = create_fee_account_registration_auth_proof(
             &mut rng,
             &keys.acct,
             &device_request,
@@ -1134,8 +1135,8 @@ mod tests {
             &keys.acct,
             &device_request,
             gens.account_comm_key().sk_gen(),
-            gens.account_comm_key().randomness_gen(),
             comm_re_rand_gen,
+            tree_params_for_gens.even_parameters.sl_params.pc_gens().B,
         )
         .unwrap();
 
@@ -1420,15 +1421,15 @@ mod tests {
         keys: &AccountKeys,
         request: &AffirmationDeviceRequest,
         comm_re_rand_gen: Affine<PallasParameters>,
+        anchor_gen: Affine<PallasParameters>,
     ) -> AffirmationDeviceResponse {
         let gens = dart_gens();
         create_affirmation_auth_proof(
             rng,
             keys,
             request,
-            gens.account_comm_key().sk_gen(),
-            gens.enc_key_gen(),
             comm_re_rand_gen,
+            anchor_gen,
             gens.leg_asset_value_gen(),
         )
         .unwrap()
@@ -1731,11 +1732,13 @@ mod tests {
 
             let tree_params = AccountTreeConfig::parameters();
             let comm_re_rand_gen = tree_params.even_parameters.pc_gens().B_blinding;
+            let anchor_gen = tree_params.even_parameters.pc_gens().B;
             let device_response = make_affirmation_device_response(
                 &mut rng,
                 &sender_keys,
                 &device_request,
                 comm_re_rand_gen,
+                anchor_gen,
             );
 
             let proof = protocol
@@ -1800,11 +1803,13 @@ mod tests {
 
             let tree_params = AccountTreeConfig::parameters();
             let comm_re_rand_gen = tree_params.even_parameters.pc_gens().B_blinding;
+            let anchor_gen = tree_params.even_parameters.pc_gens().B;
             let device_response = make_affirmation_device_response(
                 &mut rng,
                 &receiver_keys,
                 &device_request,
                 comm_re_rand_gen,
+                anchor_gen,
             );
 
             let proof = protocol
@@ -1857,12 +1862,14 @@ mod tests {
 
         let tree_params = AccountTreeConfig::parameters();
         let comm_re_rand_gen = tree_params.even_parameters.pc_gens().B_blinding;
+        let anchor_gen = tree_params.even_parameters.pc_gens().B;
 
         let device_response = make_affirmation_device_response(
             &mut rng,
             &receiver_keys,
             &device_request,
             comm_re_rand_gen,
+            anchor_gen,
         );
         let proof = protocol
             .finish::<_, ()>(&mut rng, &device_response)
@@ -1911,12 +1918,14 @@ mod tests {
 
         let tree_params = AccountTreeConfig::parameters();
         let comm_re_rand_gen = tree_params.even_parameters.pc_gens().B_blinding;
+        let anchor_gen = tree_params.even_parameters.pc_gens().B;
 
         let device_response = make_affirmation_device_response(
             &mut rng,
             &sender_keys,
             &device_request,
             comm_re_rand_gen,
+            anchor_gen,
         );
         let proof = protocol
             .finish::<_, ()>(&mut rng, &device_response)
@@ -1965,12 +1974,14 @@ mod tests {
 
         let tree_params = AccountTreeConfig::parameters();
         let comm_re_rand_gen = tree_params.even_parameters.pc_gens().B_blinding;
+        let anchor_gen = tree_params.even_parameters.pc_gens().B;
 
         let device_response = make_affirmation_device_response(
             &mut rng,
             &sender_keys,
             &device_request,
             comm_re_rand_gen,
+            anchor_gen,
         );
         let proof = protocol
             .finish::<_, ()>(&mut rng, &device_response)
@@ -2039,12 +2050,14 @@ mod tests {
 
         let tree_params = AccountTreeConfig::parameters();
         let comm_re_rand_gen = tree_params.even_parameters.pc_gens().B_blinding;
+        let anchor_gen = tree_params.even_parameters.pc_gens().B;
 
         let device_response = make_affirmation_device_response(
             &mut rng,
             &receiver_keys,
             &device_request,
             comm_re_rand_gen,
+            anchor_gen,
         );
         let proof = protocol
             .finish::<_, ()>(&mut rng, &device_response)
@@ -2093,12 +2106,14 @@ mod tests {
 
         let tree_params = AccountTreeConfig::parameters();
         let comm_re_rand_gen = tree_params.even_parameters.pc_gens().B_blinding;
+        let anchor_gen = tree_params.even_parameters.pc_gens().B;
 
         let device_response = make_affirmation_device_response(
             &mut rng,
             &sender_keys,
             &device_request,
             comm_re_rand_gen,
+            anchor_gen,
         );
         let proof = protocol
             .finish::<_, ()>(&mut rng, &device_response)
@@ -2146,12 +2161,14 @@ mod tests {
 
         let tree_params = AccountTreeConfig::parameters();
         let comm_re_rand_gen = tree_params.even_parameters.pc_gens().B_blinding;
+        let anchor_gen = tree_params.even_parameters.pc_gens().B;
 
         let device_response = make_affirmation_device_response(
             &mut rng,
             &receiver_keys,
             &device_request,
             comm_re_rand_gen,
+            anchor_gen,
         );
         let proof = protocol
             .finish::<_, ()>(&mut rng, &device_response)

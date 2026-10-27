@@ -275,6 +275,7 @@ macro_rules! impl_txn_proof {
                             encryption: leg_enc_core,
                             party_eph_pk: PartyEphemeralPublicKey::$EphPkVariant(eph_pk),
                             amount,
+                            asset_id: account.asset_id,
                             has_balance_changed: true,
                             has_counter_decreased: $ver_ctr_dec,
                         }],
@@ -529,6 +530,7 @@ macro_rules! impl_txn_proof {
                             encryption: leg_enc_core,
                             party_eph_pk: PartyEphemeralPublicKey::$EphPkVariant(eph_pk),
                             amount,
+                            asset_id: account.asset_id,
                             has_balance_changed: false,
                             has_counter_decreased: $ver_ctr_dec,
                         }],
@@ -809,6 +811,7 @@ macro_rules! impl_txn_split_proof {
                             encryption: leg_enc_core,
                             party_eph_pk: PartyEphemeralPublicKey::$EphPkVariant(eph_pk),
                             amount,
+                            asset_id: account.asset_id,
                             has_balance_changed: true,
                             has_counter_decreased: $ver_ctr_dec,
                         }],
@@ -1051,6 +1054,7 @@ macro_rules! impl_txn_split_proof {
                     account_tree_params,
                     account_comm_key,
                     enc_gen,
+                    account_tree_params.even_parameters.pc_gens().B,
                     rng,
                     rmc,
                 )
@@ -1129,6 +1133,7 @@ macro_rules! impl_txn_split_proof {
                     account_tree_params,
                     account_comm_key,
                     enc_gen,
+                    account_tree_params.even_parameters.pc_gens().B,
                     rmc,
                 )
             }
@@ -1251,6 +1256,7 @@ macro_rules! impl_txn_split_proof {
                             encryption: leg_enc_core,
                             party_eph_pk: PartyEphemeralPublicKey::$EphPkVariant(eph_pk),
                             amount,
+                            asset_id: account.asset_id,
                             has_balance_changed: false,
                             has_counter_decreased: $ver_ctr_dec,
                         }],
@@ -1450,6 +1456,7 @@ macro_rules! impl_txn_split_proof {
                     account_tree_params,
                     account_comm_key,
                     enc_gen,
+                    account_tree_params.even_parameters.pc_gens().B,
                     rng,
                     rmc,
                 )
@@ -1528,6 +1535,7 @@ macro_rules! impl_txn_split_proof {
                     account_tree_params,
                     account_comm_key,
                     enc_gen,
+                    account_tree_params.even_parameters.pc_gens().B,
                     rmc,
                 )
             }
