@@ -4,6 +4,8 @@ use crate::error::Result;
 use crate::leg::LegEncryptionCore;
 use ark_ec::AffineRepr;
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+use ark_std::format;
 use ark_std::string::ToString;
 use ark_std::vec::Vec;
 use polymesh_dart_common::{AssetId, Balance};
@@ -13,32 +15,32 @@ use schnorr_pok::partial::{
 };
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
-/// Per-leg link binding the affirming account to the leg via one `enc_gen`-generator ciphertext
-/// relation. `ct_amount` when the asset-id is revealed in this leg, else `ct_asset_id`.
-/// `sk_enc^-1` is shared from the randomness BP. For `ct_amount`, `v` is owned here and shared into
-/// the balance BP, for hidden `asset_id` is shared from the  account commitment.
-
-#[derive(Clone, Debug)]
-pub enum RespAssetId<G0: SWCurveConfig> {
-    /// `ct_asset_id = Eph_at * sk_enc^-1 + enc_gen * asset_id`, `sk_enc^-1` and `asset_id` shared
-    Hidden(PartialPokPedersenCommitment<Affine<G0>>),
-    /// `ct_asset_id - enc_gen * at = Eph_at * sk_enc^-1`, `sk_enc^-1` shared
-    Elsewhere(PartialPokDiscreteLog<Affine<G0>>),
+/// Per-leg link binding the affirming account to the leg. The participant relations
+/// `ct_participant = eph_pk_participant * sk_enc^-1 + enc_key_gen * sk_enc` and
+/// `ct_participant_prime = eph_pk_participant_prime * sk_enc^-1` are always proved and bind the leg party point
+/// to the account's encryption key. `ct_amount` is proved when the balance changes, and `ct_asset_id`
+/// when the asset-id is hidden.
+/// `sk_enc^-1` is shared from the randomness BP and `sk_enc` from the account commitment. For
+/// `ct_amount`, `v` is owned here and shared into the balance BP. For hidden `asset_id`, `asset_id`
+/// is shared from the account commitment.
+#[derive(Clone, Debug, Zeroize, ZeroizeOnDrop)]
+pub struct LegAccountLinkProtocol<G0: SWCurveConfig> {
+    pub t_participant: PokPedersenCommitmentProtocol<Affine<G0>>,
+    pub t_participant_prime: PokDiscreteLogProtocol<Affine<G0>>,
+    /// Present when the balance changes.
+    pub t_amount: Option<PokPedersenCommitmentProtocol<Affine<G0>>>,
+    /// Present when the asset-id is encrypted in this leg.
+    pub t_asset_id: Option<AssetIdProtocol<G0>>,
 }
 
-#[derive(Clone, Debug)]
-pub enum LegAccountLink<G0: SWCurveConfig> {
-    /// asset-id revealed in this leg: `ct_amount = Eph_amt * sk_enc^-1 + enc_gen * v`
-    AmountOnly {
-        resp_amount: Partial2PokPedersenCommitment<Affine<G0>>,
-    },
-    /// asset-id encrypted, balance unchanged
-    AssetIdOnly { resp_asset_id: RespAssetId<G0> },
-    /// asset-id encrypted, balance changed
-    AssetIdAndAmount {
-        resp_asset_id: RespAssetId<G0>,
-        resp_amount: Partial2PokPedersenCommitment<Affine<G0>>,
-    },
+#[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
+pub struct LegAccountLink<G0: SWCurveConfig> {
+    pub resp_participant: PartialPokPedersenCommitment<Affine<G0>>,
+    pub resp_participant_prime: PartialPokDiscreteLog<Affine<G0>>,
+    /// `ct_amount = Eph_amt * sk_enc^-1 + enc_gen * v`. Present when the balance changes.
+    pub resp_amount: Option<Partial2PokPedersenCommitment<Affine<G0>>>,
+    /// Present when the asset-id is encrypted in this leg.
+    pub resp_asset_id: Option<RespAssetId<G0>>,
 }
 
 #[derive(Clone, Debug, Zeroize, ZeroizeOnDrop)]
@@ -49,18 +51,12 @@ pub enum AssetIdProtocol<G0: SWCurveConfig> {
     Elsewhere(PokDiscreteLogProtocol<Affine<G0>>),
 }
 
-#[derive(Clone, Debug, Zeroize, ZeroizeOnDrop)]
-pub enum LegAccountLinkProtocol<G0: SWCurveConfig> {
-    AmountOnly {
-        t_amount: PokPedersenCommitmentProtocol<Affine<G0>>,
-    },
-    AssetIdOnly {
-        t_asset_id: AssetIdProtocol<G0>,
-    },
-    AssetIdAndAmount {
-        t_asset_id: AssetIdProtocol<G0>,
-        t_amount: PokPedersenCommitmentProtocol<Affine<G0>>,
-    },
+#[derive(Clone, Debug)]
+pub enum RespAssetId<G0: SWCurveConfig> {
+    /// `ct_asset_id = Eph_at * sk_enc^-1 + enc_gen * asset_id`, `sk_enc^-1` and `asset_id` shared
+    Hidden(PartialPokPedersenCommitment<Affine<G0>>),
+    /// `ct_asset_id - enc_gen * at = Eph_at * sk_enc^-1`, `sk_enc^-1` shared
+    Elsewhere(PartialPokDiscreteLog<Affine<G0>>),
 }
 
 impl<G0: SWCurveConfig> AssetIdProtocol<G0> {
@@ -73,57 +69,59 @@ impl<G0: SWCurveConfig> AssetIdProtocol<G0> {
 }
 
 impl<G0: SWCurveConfig> LegAccountLinkProtocol<G0> {
-    pub fn t_amount(&self) -> Option<&PokPedersenCommitmentProtocol<Affine<G0>>> {
-        match self {
-            Self::AmountOnly { t_amount } => Some(t_amount),
-            Self::AssetIdAndAmount { t_amount, .. } => Some(t_amount),
-            Self::AssetIdOnly { .. } => None,
-        }
-    }
-
-    pub fn t_asset_id(&self) -> Option<&AssetIdProtocol<G0>> {
-        match self {
-            Self::AssetIdOnly { t_asset_id } => Some(t_asset_id),
-            Self::AssetIdAndAmount { t_asset_id, .. } => Some(t_asset_id),
-            Self::AmountOnly { .. } => None,
-        }
-    }
-
     pub fn gen_proof(&self, challenge: &G0::ScalarField) -> LegAccountLink<G0> {
-        match self {
-            Self::AmountOnly { t_amount } => LegAccountLink::AmountOnly {
-                resp_amount: t_amount.clone().gen_partial2_proof(challenge),
-            },
-            Self::AssetIdOnly { t_asset_id } => LegAccountLink::AssetIdOnly {
-                resp_asset_id: t_asset_id.gen_proof(),
-            },
-            Self::AssetIdAndAmount {
-                t_asset_id,
-                t_amount,
-            } => LegAccountLink::AssetIdAndAmount {
-                resp_asset_id: t_asset_id.gen_proof(),
-                resp_amount: t_amount.clone().gen_partial2_proof(challenge),
-            },
+        LegAccountLink {
+            resp_participant: self.t_participant.clone().gen_partial_proof(),
+            resp_participant_prime: self.t_participant_prime.clone().gen_partial_proof(),
+            resp_amount: self
+                .t_amount
+                .as_ref()
+                .map(|t| t.clone().gen_partial2_proof(challenge)),
+            resp_asset_id: self.t_asset_id.as_ref().map(|t| t.gen_proof()),
         }
     }
 }
 
 impl<G0: SWCurveConfig> LegAccountLink<G0> {
-    pub fn resp_amount(&self) -> Option<&Partial2PokPedersenCommitment<Affine<G0>>> {
-        match self {
-            Self::AmountOnly { resp_amount } => Some(resp_amount),
-            Self::AssetIdAndAmount { resp_amount, .. } => Some(resp_amount),
-            Self::AssetIdOnly { .. } => None,
-        }
+    /// Errors unless `resp_amount` is present if `needs_amount` and `resp_asset_id` is present if
+    /// the asset-id is encrypted in the leg.
+    pub fn ensure_expected_responses(
+        &self,
+        leg_index: usize,
+        needs_amount: bool,
+        is_asset_id_revealed: bool,
+    ) -> Result<()> {
+        ensure_expected_leg_link_responses(
+            leg_index,
+            self.resp_amount.is_some(),
+            self.resp_asset_id.is_some(),
+            needs_amount,
+            is_asset_id_revealed,
+        )
     }
+}
 
-    pub fn resp_asset_id(&self) -> Option<&RespAssetId<G0>> {
-        match self {
-            Self::AssetIdOnly { resp_asset_id } => Some(resp_asset_id),
-            Self::AssetIdAndAmount { resp_asset_id, .. } => Some(resp_asset_id),
-            Self::AmountOnly { .. } => None,
-        }
+/// Errors unless the amount response is present if `needs_amount` and the asset-id response is
+/// present if the asset-id is encrypted in the leg.
+pub fn ensure_expected_leg_link_responses(
+    leg_index: usize,
+    has_resp_amount: bool,
+    has_resp_asset_id: bool,
+    needs_amount: bool,
+    is_asset_id_revealed: bool,
+) -> Result<()> {
+    if has_resp_amount != needs_amount {
+        return Err(Error::ProofVerificationError(format!(
+            "Leg {leg_index}: amount response present = {has_resp_amount}, expected {needs_amount}"
+        )));
     }
+    if has_resp_asset_id == is_asset_id_revealed {
+        return Err(Error::ProofVerificationError(format!(
+            "Leg {leg_index}: asset-id response present = {has_resp_asset_id}, expected {}",
+            !is_asset_id_revealed
+        )));
+    }
+    Ok(())
 }
 
 /// Per-leg action tag to be added to proof transcript. The tag binds whether the balance and the
@@ -188,9 +186,9 @@ impl<G: AffineRepr> LegProverConfig<G> {
         self.encryption.is_asset_id_revealed()
     }
 
-    /// `ct_amount` is proven when the leg reveals its asset-id or the balance changes
+    /// `ct_amount` is proven only when this leg changes the account's balance.
     pub fn needs_ct_amount(&self) -> bool {
-        self.is_asset_id_revealed() || self.has_balance_changed
+        self.has_balance_changed
     }
 
     /// Prover skips the same-asset check under ignore_prover_input_sanitation; verifier always checks.
@@ -222,7 +220,7 @@ impl<G: AffineRepr> LegVerifierConfig<G> {
     }
 
     pub fn needs_ct_amount(&self) -> bool {
-        self.is_asset_id_revealed() || self.has_balance_decreased.is_some()
+        self.has_balance_decreased.is_some()
     }
 
     pub fn has_balance_changed(configs: &[Self]) -> bool {
@@ -395,102 +393,6 @@ mod serialization {
             match self {
                 RespAssetId::Hidden(p) => p.check(),
                 RespAssetId::Elsewhere(p) => p.check(),
-            }
-        }
-    }
-
-    impl<G0: SWCurveConfig> CanonicalSerialize for LegAccountLink<G0> {
-        fn serialize_with_mode<W: Write>(
-            &self,
-            mut writer: W,
-            compress: Compress,
-        ) -> Result<(), SerializationError> {
-            match self {
-                LegAccountLink::AmountOnly { resp_amount } => {
-                    0u8.serialize_with_mode(&mut writer, compress)?;
-                    resp_amount.serialize_with_mode(&mut writer, compress)
-                }
-                LegAccountLink::AssetIdOnly { resp_asset_id } => {
-                    1u8.serialize_with_mode(&mut writer, compress)?;
-                    resp_asset_id.serialize_with_mode(&mut writer, compress)
-                }
-                LegAccountLink::AssetIdAndAmount {
-                    resp_asset_id,
-                    resp_amount,
-                } => {
-                    2u8.serialize_with_mode(&mut writer, compress)?;
-                    resp_asset_id.serialize_with_mode(&mut writer, compress)?;
-                    resp_amount.serialize_with_mode(&mut writer, compress)
-                }
-            }
-        }
-
-        fn serialized_size(&self, compress: Compress) -> usize {
-            1 + match self {
-                LegAccountLink::AmountOnly { resp_amount } => resp_amount.serialized_size(compress),
-                LegAccountLink::AssetIdOnly { resp_asset_id } => {
-                    resp_asset_id.serialized_size(compress)
-                }
-                LegAccountLink::AssetIdAndAmount {
-                    resp_asset_id,
-                    resp_amount,
-                } => {
-                    resp_asset_id.serialized_size(compress) + resp_amount.serialized_size(compress)
-                }
-            }
-        }
-    }
-
-    impl<G0: SWCurveConfig> CanonicalDeserialize for LegAccountLink<G0> {
-        fn deserialize_with_mode<R: Read>(
-            mut reader: R,
-            compress: Compress,
-            validate: Validate,
-        ) -> Result<Self, SerializationError> {
-            match u8::deserialize_with_mode(&mut reader, compress, validate)? {
-                0 => Ok(LegAccountLink::AmountOnly {
-                    resp_amount: Partial2PokPedersenCommitment::deserialize_with_mode(
-                        &mut reader,
-                        compress,
-                        validate,
-                    )?,
-                }),
-                1 => Ok(LegAccountLink::AssetIdOnly {
-                    resp_asset_id: RespAssetId::deserialize_with_mode(
-                        &mut reader,
-                        compress,
-                        validate,
-                    )?,
-                }),
-                2 => Ok(LegAccountLink::AssetIdAndAmount {
-                    resp_asset_id: RespAssetId::deserialize_with_mode(
-                        &mut reader,
-                        compress,
-                        validate,
-                    )?,
-                    resp_amount: Partial2PokPedersenCommitment::deserialize_with_mode(
-                        &mut reader,
-                        compress,
-                        validate,
-                    )?,
-                }),
-                _ => Err(SerializationError::InvalidData),
-            }
-        }
-    }
-
-    impl<G0: SWCurveConfig> Valid for LegAccountLink<G0> {
-        fn check(&self) -> Result<(), SerializationError> {
-            match self {
-                LegAccountLink::AmountOnly { resp_amount } => resp_amount.check(),
-                LegAccountLink::AssetIdOnly { resp_asset_id } => resp_asset_id.check(),
-                LegAccountLink::AssetIdAndAmount {
-                    resp_asset_id,
-                    resp_amount,
-                } => {
-                    resp_asset_id.check()?;
-                    resp_amount.check()
-                }
             }
         }
     }

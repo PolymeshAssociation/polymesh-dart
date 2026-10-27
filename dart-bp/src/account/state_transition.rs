@@ -2887,15 +2887,19 @@ mod tests {
             )
             .unwrap();
 
-        // Revealed leg proves only its amount, so it carries no asset-id response. The hidden leg
-        // proves its asset id elsewhere since the revealed leg already makes the asset id public.
+        // The revealed leg proves the participant relations only (no balance change), so it carries
+        // no asset-id response. The hidden leg proves its asset id elsewhere since the revealed leg
+        // already makes the asset id public.
         assert!(
             alice_proof.common_proof.resp_leg_link[0]
-                .resp_asset_id()
+                .resp_asset_id
+                .as_ref()
                 .is_none()
         );
         assert!(matches!(
-            alice_proof.common_proof.resp_leg_link[1].resp_asset_id(),
+            alice_proof.common_proof.resp_leg_link[1]
+                .resp_asset_id
+                .as_ref(),
             Some(RespAssetId::Elsewhere(_))
         ));
 
@@ -2914,6 +2918,30 @@ mod tests {
                 None,
             )
             .unwrap();
+
+        // An extra asset-id response on the revealed leg is rejected.
+        let mut wrong_proof = alice_proof.clone();
+        wrong_proof.common_proof.resp_leg_link[0].resp_asset_id =
+            wrong_proof.common_proof.resp_leg_link[1]
+                .resp_asset_id
+                .clone();
+        let mut alice_verifier =
+            AccountStateTransitionProofVerifier::init(alice_updated_comm, alice_nullifier, nonce);
+        alice_verifier.add_receive_affirmation(leg_enc_revealed.core_and_eph_keys_for_receiver());
+        alice_verifier.add_receive_affirmation(leg_enc_hidden.core_and_eph_keys_for_receiver());
+        assert!(
+            alice_verifier
+                .verify::<_, PallasParams, VestaParams>(
+                    &mut rng,
+                    &wrong_proof,
+                    &account_tree_root,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    enc_gen,
+                    None,
+                )
+                .is_err()
+        );
     }
 
     #[test]

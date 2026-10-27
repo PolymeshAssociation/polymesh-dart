@@ -316,6 +316,9 @@ pub struct PobWithAnyoneProof<G: AffineRepr> {
     pub resp_pk_enc: PokDiscreteLog<G>,
     pub resp_enc_key_gen: PokDiscreteLog<G>,
     pub resp_participant: Vec<PartialPokDiscreteLog<G>>,
+    /// For proving `ct_participant_prime = S' * sk_enc^{-1}` on `ct_s_prime` / `ct_r_prime`. Shares
+    /// the account's `sk_enc^{-1}` response with every other relation.
+    pub resp_participant_prime: Vec<PartialPokDiscreteLog<G>>,
     /// For proving correctness of twisted Elgamal ciphertext of asset-id in each leg: `C_{at} - h * at = S[3] * sk_en^{-1}`
     pub resp_asset_id: Vec<Option<PartialPokDiscreteLog<G>>>,
     /// Proving relationship `\sum{C_v} - (\sum{R[2]}) * sk_en^{-1} = h * \sum{v}`
@@ -482,6 +485,9 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
         // For proving correctness of twisted Elgamal ciphertext of participant in each leg: `C_s - pk_enc = S[0] * sk_en^{-1}` or `C_r - pk_enc = R[0] * sk_en^{-1}`
         let mut t_participant = Vec::with_capacity(num_pending_txns);
 
+        // `C_s' = S[0]' * sk_en^{-1}` or `C_r' = R[1]' * sk_en^{-1}`, reusing the same `sk_en^{-1}` and blinding
+        let mut t_participant_prime = Vec::with_capacity(num_pending_txns);
+
         // Sum of all C_v where prover is sender
         let mut enc_total_send = G::Group::zero();
         let mut eph_pk_amount_total_send = G::Group::zero();
@@ -501,6 +507,12 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
                     &legs[i].leg_enc_core_and_eph_keys.eph_pk_r.r2,
                 ));
 
+                t_participant_prime.push(PokDiscreteLogProtocol::init(
+                    sk_enc_inv,
+                    sk_enc_inv_blinding,
+                    &legs[i].leg_enc_core_and_eph_keys.eph_pk_r.r6,
+                ));
+
                 eph_pk_bases_for_asset_id
                     .push(legs[i].leg_enc_core_and_eph_keys.eph_pk_r.r4.clone());
             } else if sender_in_leg_indices.contains(&i) {
@@ -512,6 +524,12 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
                     sk_enc_inv,
                     sk_enc_inv_blinding,
                     &legs[i].leg_enc_core_and_eph_keys.eph_pk_s.r1,
+                ));
+
+                t_participant_prime.push(PokDiscreteLogProtocol::init(
+                    sk_enc_inv,
+                    sk_enc_inv_blinding,
+                    &legs[i].leg_enc_core_and_eph_keys.eph_pk_s.r5,
                 ));
 
                 eph_pk_bases_for_asset_id
@@ -580,11 +598,23 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
                     dst::POB_PARTICIPANT_RECV,
                     &mut transcript,
                 )?;
+                t_participant_prime[i].challenge_contribution(
+                    &legs[i].leg_enc_core_and_eph_keys.eph_pk_r.r6,
+                    &legs[i].ct_r_prime(),
+                    dst::POB_PARTICIPANT_RECV_PRIME,
+                    &mut transcript,
+                )?;
             } else {
                 t_participant[i].challenge_contribution(
                     &legs[i].leg_enc_core_and_eph_keys.eph_pk_s.r1,
                     &(legs[i].ct_s() - pk_enc_proj).into_affine(),
                     dst::POB_PARTICIPANT_SEND,
+                    &mut transcript,
+                )?;
+                t_participant_prime[i].challenge_contribution(
+                    &legs[i].leg_enc_core_and_eph_keys.eph_pk_s.r5,
+                    &legs[i].ct_s_prime(),
+                    dst::POB_PARTICIPANT_SEND_PRIME,
                     &mut transcript,
                 )?;
             }
@@ -640,9 +670,15 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
         let resp_enc_key_gen = t_enc_key_gen.gen_proof(&challenge);
 
         let mut resp_participant = Vec::with_capacity(num_pending_txns);
+        let mut resp_participant_prime = Vec::with_capacity(num_pending_txns);
         let mut resp_asset_id = Vec::with_capacity(num_pending_txns);
-        for (t_p, t_a) in t_participant.into_iter().zip(t_asset_id.into_iter()) {
+        for ((t_p, t_pp), t_a) in t_participant
+            .into_iter()
+            .zip(t_participant_prime.into_iter())
+            .zip(t_asset_id.into_iter())
+        {
             resp_participant.push(t_p.gen_partial_proof());
+            resp_participant_prime.push(t_pp.gen_partial_proof());
             resp_asset_id.push(t_a.map(|t| t.gen_partial_proof()));
         }
 
@@ -657,6 +693,7 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
             resp_pk_enc,
             resp_enc_key_gen,
             resp_participant,
+            resp_participant_prime,
             resp_asset_id,
             resp_recv_amount,
             resp_sent_amount,
@@ -747,6 +784,14 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
                 "resp_participant length mismatch: expected {}, got {}",
                 legs.len(),
                 self.resp_participant.len()
+            )));
+        }
+
+        if self.resp_participant_prime.len() != legs.len() {
+            return Err(Error::ProofVerificationError(format!(
+                "resp_participant_prime length mismatch: expected {}, got {}",
+                legs.len(),
+                self.resp_participant_prime.len()
             )));
         }
 
@@ -858,25 +903,40 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
         let mut y_asset_id = Vec::with_capacity(legs.len());
 
         let mut y_participant = Vec::with_capacity(legs.len());
+        let mut y_participant_prime = Vec::with_capacity(legs.len());
 
         let pk_enc_proj = pk_enc.into_group();
 
         for i in 0..num_pending_txns {
             if receiver_in_leg_indices.contains(&i) {
+                if legs[i].ct_r_prime().is_zero() {
+                    return Err(Error::ProofVerificationError(format!(
+                        "Leg {i}: ct_participant_prime is identity"
+                    )));
+                }
+
                 enc_total_recv += legs[i].ct_amount();
                 eph_pk_amount_total_recv +=
                     legs[i].leg_enc_core_and_eph_keys.eph_pk_r.r3.into_group();
 
                 y_participant.push(legs[i].ct_r() - pk_enc_proj);
+                y_participant_prime.push(legs[i].ct_r_prime().into_group());
 
                 eph_pk_bases_for_asset_id
                     .push(legs[i].leg_enc_core_and_eph_keys.eph_pk_r.r4.clone());
             } else if sender_in_leg_indices.contains(&i) {
+                if legs[i].ct_s_prime().is_zero() {
+                    return Err(Error::ProofVerificationError(format!(
+                        "Leg {i}: ct_participant_prime is identity"
+                    )));
+                }
+
                 enc_total_send += legs[i].ct_amount();
                 eph_pk_amount_total_send +=
                     legs[i].leg_enc_core_and_eph_keys.eph_pk_s.r3.into_group();
 
                 y_participant.push(legs[i].ct_s() - pk_enc_proj);
+                y_participant_prime.push(legs[i].ct_s_prime().into_group());
 
                 eph_pk_bases_for_asset_id
                     .push(legs[i].leg_enc_core_and_eph_keys.eph_pk_s.r4.clone());
@@ -918,6 +978,7 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
         }
 
         let y_participant = G::Group::normalize_batch(&y_participant);
+        let y_participant_prime = G::Group::normalize_batch(&y_participant_prime);
 
         for i in 0..num_pending_txns {
             if receiver_in_leg_indices.contains(&i) {
@@ -927,11 +988,23 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
                     dst::POB_PARTICIPANT_RECV,
                     &mut transcript,
                 )?;
+                self.resp_participant_prime[i].challenge_contribution(
+                    &legs[i].leg_enc_core_and_eph_keys.eph_pk_r.r6,
+                    &y_participant_prime[i],
+                    dst::POB_PARTICIPANT_RECV_PRIME,
+                    &mut transcript,
+                )?;
             } else {
                 self.resp_participant[i].challenge_contribution(
                     &legs[i].leg_enc_core_and_eph_keys.eph_pk_s.r1,
                     &y_participant[i],
                     dst::POB_PARTICIPANT_SEND,
+                    &mut transcript,
+                )?;
+                self.resp_participant_prime[i].challenge_contribution(
+                    &legs[i].leg_enc_core_and_eph_keys.eph_pk_s.r5,
+                    &y_participant_prime[i],
+                    dst::POB_PARTICIPANT_SEND_PRIME,
                     &mut transcript,
                 )?;
             }
@@ -1045,6 +1118,18 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
                             "Receiver verification failed for leg {i}"
                         ))
                     })?;
+                self.resp_participant_prime[i]
+                    .verify(
+                        &y_participant_prime[i],
+                        &legs[i].leg_enc_core_and_eph_keys.eph_pk_r.r6,
+                        &challenge,
+                        &resp_sk_enc_inv,
+                    )
+                    .map_err(|_| {
+                        Error::ProofVerificationError(format!(
+                            "Receiver prime verification failed for leg {i}"
+                        ))
+                    })?;
             } else {
                 self.resp_participant[i]
                     .verify(
@@ -1056,6 +1141,18 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
                     .map_err(|_| {
                         Error::ProofVerificationError(format!(
                             "Sender verification failed for leg {i}"
+                        ))
+                    })?;
+                self.resp_participant_prime[i]
+                    .verify(
+                        &y_participant_prime[i],
+                        &legs[i].leg_enc_core_and_eph_keys.eph_pk_s.r5,
+                        &challenge,
+                        &resp_sk_enc_inv,
+                    )
+                    .map_err(|_| {
+                        Error::ProofVerificationError(format!(
+                            "Sender prime verification failed for leg {i}"
                         ))
                     })?;
             }
@@ -1108,7 +1205,8 @@ mod tests {
     use crate::account_registration::tests::{new_account, setup_comm_key};
     use crate::keys::{keygen_enc, keygen_sig};
     use crate::leg::tests::setup_keys;
-    use crate::leg::{AssetIdEncryption, Leg, LegEncConfig, PartyVisibility};
+    use crate::leg::{AssetIdEncryption, Leg, LegEncConfig, LegEncCoreAndEphKeys, PartyVisibility};
+    use crate::test_utils::crafted_party_point_leg;
     use std::time::Instant;
 
     type PallasA = ark_pallas::Affine;
@@ -1565,8 +1663,8 @@ mod tests {
 
     #[test]
     fn pob_with_anyone_resp_len_mismatch_fails() {
-        // Popping one entry off resp_asset_id or resp_participant makes its length no longer match
-        // the number of legs; verification must reject on the length-mismatch check.
+        // Popping one entry off resp_asset_id, resp_participant or resp_participant_prime makes its
+        // length no longer match the number of legs; verification must reject on the length-mismatch check.
         let mut rng = rand::thread_rng();
 
         let account_comm_key = setup_comm_key(b"testing");
@@ -1654,6 +1752,30 @@ mod tests {
         proof_participant.resp_participant.pop();
         assert!(
             proof_participant
+                .verify(
+                    asset_id,
+                    account.balance,
+                    account.counter,
+                    account.id,
+                    &pk.0,
+                    &pk_e.0,
+                    account_comm.clone(),
+                    legs.clone(),
+                    sender_in_leg_indices.clone(),
+                    receiver_in_leg_indices.clone(),
+                    pending_sent_amount,
+                    pending_recv_amount,
+                    nonce,
+                    account_comm_key.clone(),
+                    enc_gen,
+                )
+                .is_err()
+        );
+
+        let mut proof_participant_prime = proof.clone();
+        proof_participant_prime.resp_participant_prime.pop();
+        assert!(
+            proof_participant_prime
                 .verify(
                     asset_id,
                     account.balance,
@@ -1783,5 +1905,163 @@ mod tests {
 
         // Claiming a receiver leg index while disclosing no legs
         assert!(verify(&honest, BTreeSet::new(), BTreeSet::from([0usize]), 0, 0).is_err());
+    }
+
+    /// Proves and verifies a PoB for an account that is the chosen party of one pending leg, made by
+    /// `crafted_party_point_leg` when `malicious` and honestly otherwise. The account's key opens the
+    /// leg to a different amount. `tamper` changes the leg before proving.
+    fn pob_with_party_point_leg(
+        is_sender: bool,
+        reveal_asset_id: bool,
+        malicious: bool,
+        tamper: impl Fn(&mut LegEncCoreAndEphKeys<PallasA>),
+    ) -> Result<()> {
+        const PENDING_AMOUNT: Balance = 10;
+        let mut rng = rand::thread_rng();
+
+        let account_comm_key = setup_comm_key(b"testing");
+        let enc_key_gen = account_comm_key.sk_enc_gen();
+        let enc_gen = PallasA::rand(&mut rng);
+
+        let (((sk, pk), (sk_e, pk_e)), (_, (_, pk_e_other)), ((_, _), (_, pk_a_e))) =
+            setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
+
+        let asset_id = 1;
+        let id = PallasFr::rand(&mut rng);
+        let (mut account, _, _, _) = new_account(&mut rng, asset_id, pk, pk_e, id);
+        account.balance = 1000;
+        account.counter = 1;
+        let account_comm = account.commit(account_comm_key.clone()).unwrap();
+
+        let mut leg_enc = if malicious {
+            let leg_asset_id = if reveal_asset_id {
+                asset_id
+            } else {
+                asset_id + 1
+            };
+            crafted_party_point_leg(
+                &mut rng,
+                is_sender,
+                sk_e.0,
+                pk_e_other.0,
+                vec![pk_a_e.0],
+                1000,
+                leg_asset_id,
+                PENDING_AMOUNT,
+                asset_id,
+                reveal_asset_id,
+                enc_key_gen,
+                enc_gen,
+            )
+            .1
+        } else {
+            let (sender_pk, receiver_pk) = if is_sender {
+                (pk_e.0, pk_e_other.0)
+            } else {
+                (pk_e_other.0, pk_e.0)
+            };
+            let leg = Leg::new(
+                sender_pk,
+                receiver_pk,
+                PENDING_AMOUNT,
+                asset_id,
+                vec![pk_a_e.0],
+                vec![],
+                vec![],
+            )
+            .unwrap();
+            let cfg = LegEncConfig {
+                visibility: PartyVisibility::FullVisibility,
+                reveal_asset_id,
+            };
+            leg.encrypt(&mut rng, cfg, enc_key_gen, enc_gen).unwrap().0
+        };
+        tamper(&mut leg_enc.leg_enc_core_and_eph_keys);
+
+        let (sender_in_leg_indices, receiver_in_leg_indices, sent, recv) = if is_sender {
+            (BTreeSet::from([0]), BTreeSet::new(), PENDING_AMOUNT, 0)
+        } else {
+            (BTreeSet::new(), BTreeSet::from([0]), 0, PENDING_AMOUNT)
+        };
+        let nonce = b"test-nonce";
+
+        // The prover accepts the crafted point
+        let proof = PobWithAnyoneProof::new(
+            &mut rng,
+            sk.0,
+            sk_e.0,
+            &account,
+            account_comm.clone(),
+            vec![leg_enc.clone()],
+            sender_in_leg_indices.clone(),
+            receiver_in_leg_indices.clone(),
+            sent,
+            recv,
+            nonce,
+            account_comm_key.clone(),
+            enc_gen,
+        )
+        .unwrap();
+
+        proof.verify(
+            asset_id,
+            account.balance,
+            account.counter,
+            id,
+            &pk.0,
+            &pk_e.0,
+            account_comm,
+            vec![leg_enc],
+            sender_in_leg_indices,
+            receiver_in_leg_indices,
+            sent,
+            recv,
+            nonce,
+            account_comm_key,
+            enc_gen,
+        )
+    }
+
+    #[test]
+    fn pob_with_anyone_rejects_crafted_party_point() {
+        // Only the second participant relation rejects the crafted point
+        for is_sender in [true, false] {
+            for reveal_asset_id in [true, false] {
+                pob_with_party_point_leg(is_sender, reveal_asset_id, false, |_| {}).unwrap();
+                let msg = if is_sender {
+                    "Sender prime verification failed"
+                } else {
+                    "Receiver prime verification failed"
+                };
+                assert_err!(
+                    pob_with_party_point_leg(is_sender, reveal_asset_id, true, |_| {}),
+                    Error::ProofVerificationError(_),
+                    msg
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn pob_with_anyone_rejects_identity_participant_prime_ct() {
+        // With `r_5 = 0` or `r_6 = 0` both prime points are identity and the second participant
+        // relation holds for the crafted point
+        for is_sender in [true, false] {
+            for reveal_asset_id in [true, false] {
+                assert_err!(
+                    pob_with_party_point_leg(is_sender, reveal_asset_id, true, |k| {
+                        if is_sender {
+                            k.core.ct_s_prime = PallasA::zero();
+                            k.eph_pk_s.r5 = PallasA::zero();
+                        } else {
+                            k.core.ct_r_prime = PallasA::zero();
+                            k.eph_pk_r.r6 = PallasA::zero();
+                        }
+                    }),
+                    Error::ProofVerificationError(_),
+                    "ct_participant_prime is identity"
+                );
+            }
+        }
     }
 }

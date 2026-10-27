@@ -2205,7 +2205,7 @@ mod tests {
         let alice_leaf_path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
         let nonce = b"test-nonce";
 
-        let k_amount = PallasFr::rand(&mut rng); // for the revealed send leg (needs_ct_amount)
+        let k_amount = PallasFr::rand(&mut rng); // for the send leg (balance changed -> ct_amount)
 
         let (leg_enc_core_1, eph_pk_s_1) = leg_enc_1.core_and_eph_keys_for_sender();
         let (leg_enc_core_2, eph_pk_r_2) = leg_enc_2.core_and_eph_keys_for_receiver();
@@ -3152,7 +3152,6 @@ mod tests {
 
             // Auth random keys
             let k_amount_1 = PallasFr::rand(&mut rng);
-            let k_amount_2 = PallasFr::rand(&mut rng); // for receive leg (needed when asset-id revealed)
             let k_asset_id_1 = PallasFr::rand(&mut rng);
             let k_asset_id_2 = PallasFr::rand(&mut rng);
 
@@ -3223,14 +3222,7 @@ mod tests {
                     &account_tree_params,
                     account_comm_key.clone(),
                     enc_gen,
-                    &[
-                        &[k_amount_1],
-                        if reveal_asset_id {
-                            core::slice::from_ref(&k_amount_2)
-                        } else {
-                            &[]
-                        },
-                    ],
+                    &[&[k_amount_1], &[]],
                     &[&k_asset_ids_1[..], &k_asset_ids_2[..]],
                 )
                 .unwrap();
@@ -3291,11 +3283,7 @@ mod tests {
                 sk_alice_e_scalar,
                 auth_rerand_2,
                 auth_rand_new_comm_2,
-                if reveal_asset_id {
-                    vec![k_amount_2]
-                } else {
-                    vec![]
-                },
+                vec![],
                 k_asset_ids_2.clone(),
                 vec![LegProverConfig {
                     encryption: leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
@@ -3632,9 +3620,7 @@ mod tests {
 
             // Auth random keys
             let k_amount_alice = PallasFr::rand(&mut rng);
-            let k_amount_alice_2 = PallasFr::rand(&mut rng); // receive leg, needed when revealed
             let k_amount_bob = PallasFr::rand(&mut rng);
-            let k_amount_bob_1 = PallasFr::rand(&mut rng); // receive leg, needed when revealed
             let k_asset_id_alice_1 = PallasFr::rand(&mut rng);
             let k_asset_id_alice_2 = PallasFr::rand(&mut rng);
             let k_asset_id_bob_1 = PallasFr::rand(&mut rng);
@@ -3716,14 +3702,7 @@ mod tests {
                     &account_tree_params,
                     account_comm_key.clone(),
                     enc_gen,
-                    &[
-                        &[k_amount_alice],
-                        if reveal_asset_id {
-                            core::slice::from_ref(&k_amount_alice_2)
-                        } else {
-                            &[]
-                        },
-                    ],
+                    &[&[k_amount_alice], &[]],
                     &[&k_asset_ids_alice_1[..], &k_asset_ids_alice_2[..]],
                 )
                 .unwrap();
@@ -3782,11 +3761,7 @@ mod tests {
                 sk_alice_e_scalar,
                 alice_auth_rerand_2,
                 alice_auth_rand_new_comm_2,
-                if reveal_asset_id {
-                    vec![k_amount_alice_2]
-                } else {
-                    vec![]
-                },
+                vec![],
                 k_asset_ids_alice_2.clone(),
                 vec![LegProverConfig {
                     encryption: leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
@@ -3891,14 +3866,7 @@ mod tests {
                     &account_tree_params,
                     account_comm_key.clone(),
                     enc_gen,
-                    &[
-                        if reveal_asset_id {
-                            core::slice::from_ref(&k_amount_bob_1)
-                        } else {
-                            &[]
-                        },
-                        &[k_amount_bob],
-                    ],
+                    &[&[], &[k_amount_bob]],
                     &[&k_asset_ids_bob_1[..], &k_asset_ids_bob_2[..]],
                 )
                 .unwrap();
@@ -3925,11 +3893,7 @@ mod tests {
                 sk_bob_e_scalar,
                 bob_auth_rerand_1,
                 bob_auth_rand_new_comm_1,
-                if reveal_asset_id {
-                    vec![k_amount_bob_1]
-                } else {
-                    vec![]
-                },
+                vec![],
                 k_asset_ids_bob_1.clone(),
                 vec![LegProverConfig {
                     encryption: leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),

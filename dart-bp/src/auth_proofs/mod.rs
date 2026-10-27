@@ -16,7 +16,7 @@ use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use polymesh_dart_common::{AssetId, Balance};
 use rand_core::CryptoRngCore;
 use schnorr_pok::discrete_log::{PokDiscreteLog, PokDiscreteLogProtocol};
-use schnorr_pok::partial::{Partial2PokPedersenCommitment, PartialPokDiscreteLog};
+use schnorr_pok::partial::PartialPokDiscreteLog;
 
 pub const AUTH_TXN_LABEL: &'static [u8; 8] = b"auth-txn";
 pub const NULLIFIER_LABEL: &[u8; 9] = b"nullifier";
@@ -1325,7 +1325,7 @@ pub mod tests {
     }
 
     #[test]
-    fn affirmation_extra_amount_response_ignored() {
+    fn affirmation_extra_amount_response_rejected() {
         let mut rng = rand::thread_rng();
 
         const NUM_GENS: usize = 1 << 12;
@@ -1375,7 +1375,7 @@ pub mod tests {
         let (leg_enc_core, eph_pk) = leg_enc.core_and_eph_keys_for_sender();
 
         let k_asset_id = Fr::rand(&mut rng);
-        // Hidden asset id, no balance change -> LegAuthLink::AssetIdOnly, partial_ct_amounts empty.
+        // Hidden asset id, no balance change -> LegAuthLink with resp_asset_id only, partial_ct_amounts empty.
         let legs_prover = vec![LegProverConfig {
             encryption: leg_enc_core.clone(),
             party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk.clone()),
@@ -1409,12 +1409,7 @@ pub mod tests {
 
         assert!(proof.partial_ct_amounts.is_empty());
         // Add an amount response the leg does not need; partial_ct_amounts stays empty.
-        let resp_asset_id = proof.leg_links[0].resp_asset_id().unwrap().clone();
-        let resp_amount = proof.resp_D.clone();
-        proof.leg_links[0] = LegAuthLink::AssetIdAndAmount {
-            resp_asset_id,
-            resp_amount,
-        };
+        proof.leg_links[0].resp_amount = Some(proof.resp_D.clone());
 
         let legs_verifier = vec![LegVerifierConfig {
             encryption: leg_enc_core,
@@ -1440,7 +1435,7 @@ pub mod tests {
                     enc_gen,
                     None,
                 )
-                .is_ok()
+                .is_err()
         );
     }
 
@@ -1490,12 +1485,9 @@ pub mod tests {
                 enc_gen,
             );
             let (core, eph_pk) = leg_enc.core_and_eph_keys_for_sender();
-            let needs_amount = reveal || balance;
-            let k_amounts = if needs_amount {
-                vec![Fr::rand(rng)]
-            } else {
-                vec![]
-            };
+            // `ct_amount` is proved only when the balance changes; every leg proves the two
+            // participant relations, and a hidden asset-id also proves `ct_asset_id`.
+            let k_amounts = if balance { vec![Fr::rand(rng)] } else { vec![] };
             let k_asset_ids = if reveal { vec![] } else { vec![Fr::rand(rng)] };
             let rand_part_old_comm = Fr::rand(rng);
             let rand_new_comm = Fr::rand(rng);
@@ -1558,7 +1550,7 @@ pub mod tests {
         for reveal in [false, true] {
             for balance in [false, true] {
                 let (proof, verifier_leg) = build(&mut rng, reveal, balance);
-                let needs_amount = reveal || balance;
+                let needs_amount = balance;
                 let needs_asset_id = !reveal;
 
                 assert!(
@@ -1566,49 +1558,48 @@ pub mod tests {
                     "honest reveal={reveal} balance={balance}"
                 );
 
-                let honest_amount = proof.leg_links[0].resp_amount().cloned();
-                let honest_asset_id = proof.leg_links[0].resp_asset_id().cloned();
+                let honest_amount = proof.leg_links[0].resp_amount.clone();
+                let honest_asset_id = proof.leg_links[0].resp_asset_id.clone();
+                let participant = proof.leg_links[0].resp_participant.clone();
+                let participant_prime = proof.leg_links[0].resp_participant_prime.clone();
                 let bogus_amount = proof.resp_D.clone();
                 let bogus_asset_id = RespAssetId::Hidden(proof.resp_D.clone());
 
+                let link = |resp_amount, resp_asset_id| LegAuthLink {
+                    resp_participant: participant.clone(),
+                    resp_participant_prime: participant_prime.clone(),
+                    resp_amount,
+                    resp_asset_id,
+                };
+
                 if needs_amount {
                     let mut p = proof.clone();
-                    p.leg_links[0] = LegAuthLink::AssetIdOnly {
-                        resp_asset_id: bogus_asset_id.clone(),
-                    };
+                    p.leg_links[0] = link(None, honest_asset_id.clone());
                     assert!(
                         verify(&p, &verifier_leg).is_err(),
                         "dropped amount reveal={reveal} balance={balance}"
                     );
                 } else {
                     let mut p = proof.clone();
-                    p.leg_links[0] = LegAuthLink::AssetIdAndAmount {
-                        resp_asset_id: honest_asset_id.clone().unwrap(),
-                        resp_amount: bogus_amount.clone(),
-                    };
+                    p.leg_links[0] = link(Some(bogus_amount.clone()), honest_asset_id.clone());
                     assert!(
-                        verify(&p, &verifier_leg).is_ok(),
+                        verify(&p, &verifier_leg).is_err(),
                         "extra amount reveal={reveal} balance={balance}"
                     );
                 }
 
                 if needs_asset_id {
                     let mut p = proof.clone();
-                    p.leg_links[0] = LegAuthLink::AmountOnly {
-                        resp_amount: bogus_amount.clone(),
-                    };
+                    p.leg_links[0] = link(honest_amount.clone(), None);
                     assert!(
                         verify(&p, &verifier_leg).is_err(),
                         "dropped asset-id reveal={reveal} balance={balance}"
                     );
                 } else {
                     let mut p = proof.clone();
-                    p.leg_links[0] = LegAuthLink::AssetIdAndAmount {
-                        resp_asset_id: bogus_asset_id.clone(),
-                        resp_amount: honest_amount.clone().unwrap(),
-                    };
+                    p.leg_links[0] = link(honest_amount.clone(), Some(bogus_asset_id.clone()));
                     assert!(
-                        verify(&p, &verifier_leg).is_ok(),
+                        verify(&p, &verifier_leg).is_err(),
                         "extra asset-id reveal={reveal} balance={balance}"
                     );
                 }

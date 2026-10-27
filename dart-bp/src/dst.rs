@@ -39,6 +39,12 @@ define_dsts! {
     LEG_ASSET_ID = b"dart/leg/asset-id";
     /// Asset-id revealed elsewhere: discrete-log form for a leg.
     LEG_ASSET_ID_ELSEWHERE = b"dart/leg/asset-id-elsewhere";
+    /// Participant ciphertext well-formedness for a leg:
+    /// `ct_participant = eph_pk_participant * sk_enc^-1 + enc_key_gen * sk_enc`.
+    LEG_PARTICIPANT = b"dart/leg/participant";
+    /// Second participant ciphertext well-formedness for a leg:
+    /// `ct_participant_prime = eph_pk_participant_prime * sk_enc^-1`.
+    LEG_PARTICIPANT_PRIME = b"dart/leg/participant-prime";
 
     // --- Leg creation (leg's own internal well-formedness, distinct from the leg-link above) ---
     /// Opening of the BP vector commitment to amount, the `r_i` chain, and the auditor/mediator
@@ -46,18 +52,26 @@ define_dsts! {
     LEG_CREATE_BP_R_I_AMOUNT = b"dart/leg-create/bp-r-i-amount";
     /// Sender's ciphertext `ct_s = enc_key_gen * r_1 + pk_s`.
     LEG_CREATE_CT_S = b"dart/leg-create/ct-s";
+    /// Sender's second ciphertext `ct_s' = enc_key_gen * r_5`.
+    LEG_CREATE_CT_S_PRIME = b"dart/leg-create/ct-s-prime";
     /// Receiver's ciphertext `ct_r = enc_key_gen * r_2 + pk_r`.
     LEG_CREATE_CT_R = b"dart/leg-create/ct-r";
+    /// Receiver's second ciphertext `ct_r' = enc_key_gen * r_6`.
+    LEG_CREATE_CT_R_PRIME = b"dart/leg-create/ct-r-prime";
     /// `ct_amount = enc_key_gen * r_3 + enc_gen * amount`.
     LEG_CREATE_CT_AMOUNT = b"dart/leg-create/ct-amount";
     /// `ct_asset_id = enc_key_gen * r_4 + enc_gen * asset_id`.
     LEG_CREATE_CT_ASSET_ID = b"dart/leg-create/ct-asset-id";
     /// Sender's `S[2] = S[0] * r_3/r_1` (amount channel).
     LEG_CREATE_EPH_PK_S_V = b"dart/leg-create/eph-pk-s-v";
+    /// Sender's `S[0]' = S[0] * r_5/r_1` (second participant encryption).
+    LEG_CREATE_EPH_PK_S_PRIME = b"dart/leg-create/eph-pk-s-prime";
     /// Sender's `S[3] = S[0] * r_4/r_1` (asset-id channel).
     LEG_CREATE_EPH_PK_S_AT = b"dart/leg-create/eph-pk-s-at";
     /// Receiver's `R[2] = R[1] * r_3/r_2` (amount channel).
     LEG_CREATE_EPH_PK_R_V = b"dart/leg-create/eph-pk-r-v";
+    /// Receiver's `R[1]' = R[1] * r_6/r_2` (second participant encryption).
+    LEG_CREATE_EPH_PK_R_PRIME = b"dart/leg-create/eph-pk-r-prime";
     /// Receiver's `R[3] = R[1] * r_4/r_2` (asset-id channel).
     LEG_CREATE_EPH_PK_R_AT = b"dart/leg-create/eph-pk-r-at";
     /// Sender's `S[1] = S[0] * r_2/r_1`, present only when parties see each other.
@@ -97,14 +111,22 @@ define_dsts! {
     PUBLIC_ASSET_LEG_CREATE_BP_R_I_AMOUNT = b"dart/public-asset-leg-create/bp-r-i-amount";
     /// Sender's ciphertext `ct_s = enc_key_gen * r_1 + pk_s`, public-asset variant.
     PUBLIC_ASSET_LEG_CREATE_CT_S = b"dart/public-asset-leg-create/ct-s";
+    /// Sender's second ciphertext `ct_s' = enc_key_gen * r_5`, public-asset variant.
+    PUBLIC_ASSET_LEG_CREATE_CT_S_PRIME = b"dart/public-asset-leg-create/ct-s-prime";
     /// Receiver's ciphertext `ct_r = enc_key_gen * r_2 + pk_r`, public-asset variant.
     PUBLIC_ASSET_LEG_CREATE_CT_R = b"dart/public-asset-leg-create/ct-r";
+    /// Receiver's second ciphertext `ct_r' = enc_key_gen * r_6`, public-asset variant.
+    PUBLIC_ASSET_LEG_CREATE_CT_R_PRIME = b"dart/public-asset-leg-create/ct-r-prime";
     /// `ct_amount = enc_key_gen * r_3 + enc_gen * amount`, public-asset variant.
     PUBLIC_ASSET_LEG_CREATE_CT_AMOUNT = b"dart/public-asset-leg-create/ct-amount";
     /// Sender's `S[2] = S[0] * r_3/r_1`, public-asset variant.
     PUBLIC_ASSET_LEG_CREATE_EPH_PK_S_V = b"dart/public-asset-leg-create/eph-pk-s-v";
+    /// Sender's `S[0]' = S[0] * r_5/r_1`, public-asset variant.
+    PUBLIC_ASSET_LEG_CREATE_EPH_PK_S_PRIME = b"dart/public-asset-leg-create/eph-pk-s-prime";
     /// Receiver's `R[2] = R[1] * r_3/r_2`, public-asset variant.
     PUBLIC_ASSET_LEG_CREATE_EPH_PK_R_V = b"dart/public-asset-leg-create/eph-pk-r-v";
+    /// Receiver's `R[1]' = R[1] * r_6/r_2`, public-asset variant.
+    PUBLIC_ASSET_LEG_CREATE_EPH_PK_R_PRIME = b"dart/public-asset-leg-create/eph-pk-r-prime";
     /// Sender's `S[1] = S[0] * r_2/r_1`, public-asset variant, present only when parties see each other.
     PUBLIC_ASSET_LEG_CREATE_EPH_PK_S_R = b"dart/public-asset-leg-create/eph-pk-s-r";
     /// Receiver's `R[0] = R[1] * r_1/r_2`, public-asset variant, present only when parties see each other.
@@ -136,8 +158,12 @@ define_dsts! {
     POB_ENC_KEY_GEN_INV = b"dart/pob/enc-key-gen-inv";
     /// PoB prover's sender-role ciphertext-participant proof: `ct_s - pk_enc = S[0] * sk_enc^-1`.
     POB_PARTICIPANT_SEND = b"dart/pob/participant-send";
+    /// PoB prover's second sender-role proof: `ct_s' = S[0]' * sk_enc^-1`.
+    POB_PARTICIPANT_SEND_PRIME = b"dart/pob/participant-send-prime";
     /// PoB prover's receiver-role ciphertext-participant proof: `ct_r - pk_enc = R[0] * sk_enc^-1`.
     POB_PARTICIPANT_RECV = b"dart/pob/participant-recv";
+    /// PoB prover's second receiver-role proof: `ct_r' = R[1]' * sk_enc^-1`.
+    POB_PARTICIPANT_RECV_PRIME = b"dart/pob/participant-recv-prime";
     /// PoB pending-leg asset-id ciphertext consistency: `ct_at - enc_gen * at = eph_pk * sk_enc^-1`.
     POB_ASSET_ID = b"dart/pob/asset-id";
     /// PoB total pending-sent-amount consistency across sender-role legs.
@@ -225,6 +251,12 @@ define_dsts! {
     FEE_AUTH_ACC_COMM_NEW = b"dart/auth/fee-acc-comm-new";
     /// Auth device's `ct_amount_1 = Eph_amt * sk_enc^-1 + comm_re_rand_gen * k_1` for a leg.
     AUTH_LEG_AMOUNT = b"dart/auth/leg-amount";
+    /// Auth device's leg participant relation:
+    /// `ct_participant = eph_pk_participant * sk_enc^-1 + enc_key_gen * sk_enc`.
+    AUTH_LEG_PARTICIPANT = b"dart/auth/leg-participant";
+    /// Auth device's second leg participant relation:
+    /// `ct_participant_prime = eph_pk_participant_prime * sk_enc^-1`.
+    AUTH_LEG_PARTICIPANT_PRIME = b"dart/auth/leg-participant-prime";
     /// Auth device's hidden `ct_asset_id_1 = Eph_at * sk_enc^-1 + comm_re_rand_gen * k_2` for a leg.
     AUTH_LEG_ASSET_ID = b"dart/auth/leg-asset-id";
     /// Auth device's asset-id-revealed-elsewhere form: `ct_asset_id - enc_gen * at = Eph_at * sk_enc^-1`.

@@ -17,6 +17,7 @@ use ark_ec_divisors::DivisorCurve;
 use ark_ff::PrimeField;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::marker::PhantomData;
+use ark_std::string::String;
 use ark_std::string::ToString;
 use ark_std::{collections::BTreeSet, format, vec, vec::Vec};
 use bulletproofs::r1cs::{
@@ -69,7 +70,7 @@ pub struct LegCreationProof<
     pub resp_asset_id: PokPedersenCommitment<Affine<G0>>,
     pub re_randomized_points: ReRandomizedPoints<G0>,
     /// Bulletproof vector commitment to the following list
-    /// `[amount, r_1, r_2, r_3, r_4, 1/r_1, 1/r_2, r_3/r_1, r_3/r_2, r_4/r_1, r_4/r_2] || [r_2/r_1, r_1/r_2] || [l_0, l_0 * r_1, l_1, l_1 * r_1, ...,] || [m_0, m_0 / r_1, m_1, m_1 / r_1, ....]`
+    /// `[amount, r_1, r_2, r_3, r_4, 1/r_1, 1/r_2, r_3/r_1, r_3/r_2, r_4/r_1, r_4/r_2, r_5, r_5/r_1, r_6, r_6/r_2] || [r_2/r_1, r_1/r_2] || [l_0, l_0 * r_1, l_1, l_1 * r_1, ...,] || [m_0, m_0 / r_1, m_1, m_1 / r_1, ....]`
     /// present only when sender and receiver decryption is needed.
     /// The third list is when asset has any encryption keys and fourth list when asset has mediators
     pub comm_r_i_amount: Affine<G0>,
@@ -78,8 +79,16 @@ pub struct LegCreationProof<
     pub ped_comms: Vec<DivisorComms<Affine<G1>>>,
     /// Response for proving `ct_s = enc_key_gen * r_1 + pk_s = enc_key_gen * r_1 + S[0] * r_1^{-1}`
     pub resp_ct_s: PartialPokPedersenCommitment<Affine<G0>>,
+    /// Response for proving `ct_s' = enc_key_gen * r_5`
+    pub resp_ct_s_prime: PartialPokDiscreteLog<Affine<G0>>,
+    /// Response for proving `S[0]' = S[0] * r_5/r_1`
+    pub resp_eph_pk_s_prime: PartialPokDiscreteLog<Affine<G0>>,
     /// Response for proving `ct_r = enc_key_gen * r_2 + pk_r = enc_key_gen * r_2 + R[1] * r_2^{-1}`
     pub resp_ct_r: PartialPokPedersenCommitment<Affine<G0>>,
+    /// Response for proving `ct_r' = enc_key_gen * r_6`
+    pub resp_ct_r_prime: PartialPokDiscreteLog<Affine<G0>>,
+    /// Response for proving `R[1]' = R[1] * r_6/r_2`
+    pub resp_eph_pk_r_prime: PartialPokDiscreteLog<Affine<G0>>,
     /// Response for proving `S[2] = S[0] * r_3/r_1`
     pub resp_eph_pk_s_v: PartialPokDiscreteLog<Affine<G0>>,
     /// Response for proving `S[3] = S[0] * r_4/r_1`
@@ -399,6 +408,8 @@ impl<
         let mut r_4 = leg_enc_rand.r4.ok_or_else(|| {
             Error::ProofGenerationError("r4 is missing in leg encryption randomness".to_string())
         })?;
+        let mut r_5 = leg_enc_rand.r5;
+        let mut r_6 = leg_enc_rand.r6;
 
         // Randomness used in mediator ciphertext, `ct_{m,i} = enc_key_gen * m_i + pk_m`.
         // `M_i = pk_{e, j} * m_i` is the ephemeral public key so that mediator can get `enc_key_gen * m_i` to
@@ -439,6 +450,10 @@ impl<
         let mut r_4_r_1_inv = r_4 * r_1_inv;
         // r_4/r_2
         let mut r_4_r_2_inv = r_4 * r_2_inv;
+        // r_5/r_1
+        let mut r_5_r_1_inv = r_5 * r_1_inv;
+        // r_6/r_2
+        let mut r_6_r_2_inv = r_6 * r_2_inv;
         // r_2/r_1
         let mut r_2_r_1_inv = commit_r_2_r_1_inv.then(|| r_2 * r_1_inv);
         // r_1/r_2
@@ -461,6 +476,10 @@ impl<
         let mut r_3_r_2_inv_blinding = F0::rand(rng);
         let mut r_4_r_1_inv_blinding = F0::rand(rng);
         let mut r_4_r_2_inv_blinding = F0::rand(rng);
+        let mut r_5_blinding = F0::rand(rng);
+        let mut r_5_r_1_inv_blinding = F0::rand(rng);
+        let mut r_6_blinding = F0::rand(rng);
+        let mut r_6_r_2_inv_blinding = F0::rand(rng);
         let mut r_2_r_1_inv_blinding = commit_r_2_r_1_inv.then(|| F0::rand(rng));
         let mut r_1_r_2_inv_blinding = commit_r_1_r_2_inv.then(|| F0::rand(rng));
         let mut l_blindings = (0..l.len()).map(|_| F0::rand(rng)).collect::<Vec<_>>();
@@ -484,6 +503,10 @@ impl<
             r_3_r_2_inv,
             r_4_r_1_inv,
             r_4_r_2_inv,
+            r_5,
+            r_5_r_1_inv,
+            r_6,
+            r_6_r_2_inv,
         ];
 
         if commit_r_2_r_1_inv {
@@ -531,6 +554,10 @@ impl<
             r_3_r_2_inv_blinding,
             r_4_r_1_inv_blinding,
             r_4_r_2_inv_blinding,
+            r_5_blinding,
+            r_5_r_1_inv_blinding,
+            r_6_blinding,
+            r_6_r_2_inv_blinding,
         ];
         if commit_r_2_r_1_inv {
             blindings.push(r_2_r_1_inv_blinding.unwrap());
@@ -585,29 +612,49 @@ impl<
 
         // In the following comments, S and R are the ephemeral public keys of sender and receiver respectively
 
-        let (ct_s_proto, eph_pk_s_v_proto, eph_pk_s_at_proto) = Self::sender_key_protos(
+        let (
+            ct_s_proto,
+            ct_s_prime_proto,
+            eph_pk_s_v_proto,
+            eph_pk_s_prime_proto,
+            eph_pk_s_at_proto,
+        ) = Self::sender_key_protos(
             r_1,
             r_1_blinding,
-            enc_key_gen,
             r_1_inv,
             r_1_inv_blinding,
+            r_5,
+            r_5_blinding,
+            r_5_r_1_inv,
+            r_5_r_1_inv_blinding,
             r_3_r_1_inv,
             r_3_r_1_inv_blinding,
             r_4_r_1_inv,
             r_4_r_1_inv_blinding,
+            enc_key_gen,
             &leg_enc,
         );
 
-        let (ct_r_proto, eph_pk_r_v_proto, eph_pk_r_at_proto) = Self::receiver_key_protos(
+        let (
+            ct_r_proto,
+            ct_r_prime_proto,
+            eph_pk_r_v_proto,
+            eph_pk_r_prime_proto,
+            eph_pk_r_at_proto,
+        ) = Self::receiver_key_protos(
             r_2,
             r_2_blinding,
-            enc_key_gen,
             r_2_inv,
             r_2_inv_blinding,
+            r_6,
+            r_6_blinding,
+            r_6_r_2_inv,
+            r_6_r_2_inv_blinding,
             r_3_r_2_inv,
             r_3_r_2_inv_blinding,
             r_4_r_2_inv,
             r_4_r_2_inv_blinding,
+            enc_key_gen,
             &leg_enc,
         );
 
@@ -683,6 +730,10 @@ impl<
         Zeroize::zeroize(&mut r_4_r_1_inv_blinding);
         Zeroize::zeroize(&mut r_4_r_2_inv_blinding);
         Zeroize::zeroize(&mut r_1_r_2_inv_blinding);
+        Zeroize::zeroize(&mut r_5_blinding);
+        Zeroize::zeroize(&mut r_5_r_1_inv_blinding);
+        Zeroize::zeroize(&mut r_6_blinding);
+        Zeroize::zeroize(&mut r_6_r_2_inv_blinding);
 
         Zeroize::zeroize(&mut r_3_blinding);
         Zeroize::zeroize(&mut amount_blinding);
@@ -707,11 +758,25 @@ impl<
             &mut transcript,
         )?;
 
+        ct_s_prime_proto.challenge_contribution(
+            &enc_key_gen,
+            &leg_enc.ct_s_prime(),
+            dst::LEG_CREATE_CT_S_PRIME,
+            &mut transcript,
+        )?;
+
         ct_r_proto.challenge_contribution(
             &enc_key_gen,
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
             &leg_enc.ct_r(),
             dst::LEG_CREATE_CT_R,
+            &mut transcript,
+        )?;
+
+        ct_r_prime_proto.challenge_contribution(
+            &enc_key_gen,
+            &leg_enc.ct_r_prime(),
+            dst::LEG_CREATE_CT_R_PRIME,
             &mut transcript,
         )?;
 
@@ -742,6 +807,13 @@ impl<
             &mut transcript,
         )?;
 
+        eph_pk_s_prime_proto.challenge_contribution(
+            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
+            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r5,
+            dst::LEG_CREATE_EPH_PK_S_PRIME,
+            &mut transcript,
+        )?;
+
         eph_pk_s_at_proto.challenge_contribution(
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
             leg_enc
@@ -758,6 +830,13 @@ impl<
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r3,
             dst::LEG_CREATE_EPH_PK_R_V,
+            &mut transcript,
+        )?;
+
+        eph_pk_r_prime_proto.challenge_contribution(
+            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
+            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r6,
+            dst::LEG_CREATE_EPH_PK_R_PRIME,
             &mut transcript,
         )?;
 
@@ -966,7 +1045,11 @@ impl<
 
         // Responses for various r_i and its variations and amount are present in response for t_comm_r_i_amount
         let resp_ct_s = ct_s_proto.gen_partial_proof();
+        let resp_ct_s_prime = ct_s_prime_proto.gen_partial_proof();
+        let resp_eph_pk_s_prime = eph_pk_s_prime_proto.gen_partial_proof();
         let resp_ct_r = ct_r_proto.gen_partial_proof();
+        let resp_ct_r_prime = ct_r_prime_proto.gen_partial_proof();
+        let resp_eph_pk_r_prime = eph_pk_r_prime_proto.gen_partial_proof();
         let resp_amount_enc = ct_amount_proto.gen_partial_proof();
         let resp_asset_id_enc = ct_asset_id_proto.gen_partial_proof();
         let resp_eph_pk_s_v = eph_pk_s_v_proto.gen_partial_proof();
@@ -1022,6 +1105,8 @@ impl<
         Zeroize::zeroize(&mut r_2);
         Zeroize::zeroize(&mut r_3);
         Zeroize::zeroize(&mut r_4);
+        Zeroize::zeroize(&mut r_5);
+        Zeroize::zeroize(&mut r_6);
         Zeroize::zeroize(&mut r_1_inv);
         Zeroize::zeroize(&mut r_2_inv);
         Zeroize::zeroize(&mut r_2_r_1_inv);
@@ -1029,6 +1114,8 @@ impl<
         Zeroize::zeroize(&mut r_3_r_2_inv);
         Zeroize::zeroize(&mut r_4_r_1_inv);
         Zeroize::zeroize(&mut r_4_r_2_inv);
+        Zeroize::zeroize(&mut r_5_r_1_inv);
+        Zeroize::zeroize(&mut r_6_r_2_inv);
         Zeroize::zeroize(&mut r_1_r_2_inv);
         Zeroize::zeroize(&mut amount);
 
@@ -1045,7 +1132,11 @@ impl<
             comm_r_i_amount,
             resp_comm_r_i_amount,
             resp_ct_s,
+            resp_ct_s_prime,
+            resp_eph_pk_s_prime,
             resp_ct_r,
+            resp_ct_r_prime,
+            resp_eph_pk_r_prime,
             resp_eph_pk_s_v,
             resp_eph_pk_s_at,
             resp_eph_pk_r_v,
@@ -1369,9 +1460,11 @@ impl<
             }
         }
 
-        ensure_sender_receiver_not_same(&leg_enc)?;
+        ensure_sender_receiver_not_same(&leg_enc, Error::ProofVerificationError)?;
 
-        ensure_eph_key_not_identity(&leg_enc)?;
+        ensure_eph_key_not_identity(&leg_enc, Error::ProofVerificationError)?;
+
+        ensure_participant_prime_cts_not_identity(&leg_enc, Error::ProofVerificationError)?;
 
         // r_2/r_1 is committed when the sender can see the receiver or auditor ciphertexts must be
         // decrypted; r_1/r_2 only when the receiver can see the sender.
@@ -1379,10 +1472,10 @@ impl<
         let commit_r_1_r_2_inv = receiver_sees_sender;
         let num_vis_resps = commit_r_2_r_1_inv as usize + commit_r_1_r_2_inv as usize;
         // Response index where the l/m (auditor/mediator) begin
-        let l_m_offset = 12 + num_vis_resps;
+        let l_m_offset = 16 + num_vis_resps;
 
         // +1 for blinding
-        let num_resps = 1 + 11 + 2 * (num_enc_keys + num_med_keys) + num_vis_resps;
+        let num_resps = 1 + 15 + 2 * (num_enc_keys + num_med_keys) + num_vis_resps;
         if self.resp_comm_r_i_amount.len() != num_resps {
             return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(
                 num_resps,
@@ -1409,7 +1502,7 @@ impl<
         )?;
 
         let vars_count =
-            11 + (self.resp_eph_pk_enc.len() + self.resp_eph_pk_meds.len()) * 2 + num_vis_resps;
+            15 + (self.resp_eph_pk_enc.len() + self.resp_eph_pk_meds.len()) * 2 + num_vis_resps;
         let vars = odd_verifier.commit_vec(vars_count, self.comm_r_i_amount);
         LegCreationProof::<L, F0, F1, G0, G1>::enforce_constraints(
             odd_verifier,
@@ -1438,11 +1531,25 @@ impl<
             &mut transcript,
         )?;
 
+        self.resp_ct_s_prime.challenge_contribution(
+            &enc_key_gen,
+            &leg_enc.ct_s_prime(),
+            dst::LEG_CREATE_CT_S_PRIME,
+            &mut transcript,
+        )?;
+
         self.resp_ct_r.challenge_contribution(
             &enc_key_gen,
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
             &leg_enc.ct_r(),
             dst::LEG_CREATE_CT_R,
+            &mut transcript,
+        )?;
+
+        self.resp_ct_r_prime.challenge_contribution(
+            &enc_key_gen,
+            &leg_enc.ct_r_prime(),
+            dst::LEG_CREATE_CT_R_PRIME,
             &mut transcript,
         )?;
 
@@ -1469,6 +1576,13 @@ impl<
             &mut transcript,
         )?;
 
+        self.resp_eph_pk_s_prime.challenge_contribution(
+            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
+            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r5,
+            dst::LEG_CREATE_EPH_PK_S_PRIME,
+            &mut transcript,
+        )?;
+
         self.resp_eph_pk_s_at.challenge_contribution(
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
             &eph_pk_s_at,
@@ -1480,6 +1594,13 @@ impl<
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r3,
             dst::LEG_CREATE_EPH_PK_R_V,
+            &mut transcript,
+        )?;
+
+        self.resp_eph_pk_r_prime.challenge_contribution(
+            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
+            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r6,
+            dst::LEG_CREATE_EPH_PK_R_PRIME,
             &mut transcript,
         )?;
 
@@ -1714,6 +1835,16 @@ impl<
             &self.resp_comm_r_i_amount.0[6],
         );
 
+        verify_or_rmc_2!(
+            rmc,
+            self.resp_ct_s_prime,
+            "resp_ct_s_prime verification failed",
+            leg_enc.ct_s_prime(),
+            enc_key_gen,
+            &challenge,
+            &self.resp_comm_r_i_amount.0[12],
+        );
+
         verify_or_rmc_3!(
             rmc,
             self.resp_ct_r,
@@ -1724,6 +1855,16 @@ impl<
             &challenge,
             &self.resp_comm_r_i_amount.0[3],
             &self.resp_comm_r_i_amount.0[7],
+        );
+
+        verify_or_rmc_2!(
+            rmc,
+            self.resp_ct_r_prime,
+            "resp_ct_r_prime verification failed",
+            leg_enc.ct_r_prime(),
+            enc_key_gen,
+            &challenge,
+            &self.resp_comm_r_i_amount.0[14],
         );
 
         verify_or_rmc_3!(
@@ -1772,12 +1913,32 @@ impl<
 
         verify_or_rmc_2!(
             rmc,
+            self.resp_eph_pk_s_prime,
+            "resp_eph_pk_s_prime verification failed",
+            leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r5,
+            leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
+            &challenge,
+            &self.resp_comm_r_i_amount.0[13],
+        );
+
+        verify_or_rmc_2!(
+            rmc,
             self.resp_eph_pk_r_v,
             "resp_eph_pk_r_v verification failed",
             leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r3,
             leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
             &challenge,
             &self.resp_comm_r_i_amount.0[9],
+        );
+
+        verify_or_rmc_2!(
+            rmc,
+            self.resp_eph_pk_r_prime,
+            "resp_eph_pk_r_prime verification failed",
+            leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r6,
+            leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
+            &challenge,
+            &self.resp_comm_r_i_amount.0[15],
         );
 
         verify_or_rmc_2!(
@@ -1823,7 +1984,7 @@ impl<
                 eph_pk_s_r,
                 leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
                 &challenge,
-                &self.resp_comm_r_i_amount.0[12],
+                &self.resp_comm_r_i_amount.0[16],
             );
         }
         if receiver_sees_sender {
@@ -1849,7 +2010,7 @@ impl<
                 eph_pk_r_s,
                 leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
                 &challenge,
-                &self.resp_comm_r_i_amount.0[12 + commit_r_2_r_1_inv as usize],
+                &self.resp_comm_r_i_amount.0[16 + commit_r_2_r_1_inv as usize],
             );
         }
 
@@ -1900,7 +2061,7 @@ impl<
                 eph_pk_enc_key.r2,
                 eph_pk_enc_key.r1,
                 &challenge,
-                &self.resp_comm_r_i_amount.0[12],
+                &self.resp_comm_r_i_amount.0[16],
             );
             verify_or_rmc_2!(
                 rmc,
@@ -2092,6 +2253,10 @@ impl<
         let var_r1_r2_inv = commit_r_1_r_2_inv.then(|| committed_variables.pop().unwrap());
         let var_r2_r1_inv = commit_r_2_r_1_inv.then(|| committed_variables.pop().unwrap());
 
+        let var_r6_r2_inv = committed_variables.pop().unwrap();
+        let var_r6 = committed_variables.pop().unwrap();
+        let var_r5_r1_inv = committed_variables.pop().unwrap();
+        let var_r5 = committed_variables.pop().unwrap();
         let var_r4_r2_inv = committed_variables.pop().unwrap();
         let var_r4_r1_inv = committed_variables.pop().unwrap();
         let var_r3_r2_inv = committed_variables.pop().unwrap();
@@ -2138,6 +2303,18 @@ impl<
         let (_, _, r4) = cs.multiply(lc_r2.clone(), var_r4_r2_inv.into());
         cs.constrain(lc_r4.clone() - r4);
 
+        let lc_r5 = LinearCombination::from(var_r5);
+
+        // r_1 * r_5/r_1 = r_5.
+        let (_, _, r5) = cs.multiply(lc_r1.clone(), var_r5_r1_inv.into());
+        cs.constrain(lc_r5 - r5);
+
+        let lc_r6 = LinearCombination::from(var_r6);
+
+        // r_2 * r_6/r_2 = r_6
+        let (_, _, r6) = cs.multiply(lc_r2.clone(), var_r6_r2_inv.into());
+        cs.constrain(lc_r6 - r6);
+
         if commit_r_2_r_1_inv {
             // r_1 * r_2/r_1 = r_2
             let (_, _, r2) = cs.multiply(lc_r1.clone(), var_r2_r1_inv.unwrap().into());
@@ -2179,7 +2356,7 @@ impl<
         tree_params: &SelRerandProofParametersNew<G1, G0, Parameters1, Parameters0>,
     ) -> Vec<Affine<G0>> {
         let num_vis_resps = commit_r_2_r_1_inv as usize + commit_r_1_r_2_inv as usize;
-        let count = 11 + 2 * (num_enc_keys + num_med_keys) + num_vis_resps;
+        let count = 15 + 2 * (num_enc_keys + num_med_keys) + num_vis_resps;
         let mut gens = vec![tree_params.odd_parameters.pc_gens().B_blinding];
         for g in bp_gens_for_vec_commitment(count as u32, tree_params.odd_parameters.bp_gens()) {
             gens.push(g);
@@ -2190,16 +2367,22 @@ impl<
     fn sender_key_protos(
         r_1: F0,
         r_1_blinding: F0,
-        enc_key_gen: Affine<G0>,
         r_1_inv: F0,
         r_1_inv_blinding: F0,
+        r_5: F0,
+        r_5_blinding: F0,
+        r_5_r_1_inv: F0,
+        r_5_r_1_inv_blinding: F0,
         r_3_r_1_inv: F0,
         r_3_r_1_inv_blinding: F0,
         r_4_r_1_inv: F0,
         r_4_r_1_inv_blinding: F0,
+        enc_key_gen: Affine<G0>,
         leg_enc: &LegEncryption<Affine<G0>>,
     ) -> (
         PokPedersenCommitmentProtocol<Affine<G0>>,
+        PokDiscreteLogProtocol<Affine<G0>>,
+        PokDiscreteLogProtocol<Affine<G0>>,
         PokDiscreteLogProtocol<Affine<G0>>,
         PokDiscreteLogProtocol<Affine<G0>>,
     ) {
@@ -2213,10 +2396,20 @@ impl<
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
         );
 
+        // For proving ct_s' = enc_key_gen * r_5
+        let ct_s_prime_proto = PokDiscreteLogProtocol::init(r_5, r_5_blinding, &enc_key_gen);
+
         // For proving S[2] = S[0] * r_3/r_1
         let eph_pk_s_v_proto = PokDiscreteLogProtocol::init(
             r_3_r_1_inv,
             r_3_r_1_inv_blinding,
+            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
+        );
+
+        // For proving S[0]' = S[0] * r_5/r_1.
+        let eph_pk_s_prime_proto = PokDiscreteLogProtocol::init(
+            r_5_r_1_inv,
+            r_5_r_1_inv_blinding,
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
         );
 
@@ -2227,22 +2420,34 @@ impl<
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
         );
 
-        (ct_s_proto, eph_pk_s_v_proto, eph_pk_s_at_proto)
+        (
+            ct_s_proto,
+            ct_s_prime_proto,
+            eph_pk_s_v_proto,
+            eph_pk_s_prime_proto,
+            eph_pk_s_at_proto,
+        )
     }
 
     fn receiver_key_protos(
         r_2: F0,
         r_2_blinding: F0,
-        enc_key_gen: Affine<G0>,
         r_2_inv: F0,
         r_2_inv_blinding: F0,
+        r_6: F0,
+        r_6_blinding: F0,
+        r_6_r_2_inv: F0,
+        r_6_r_2_inv_blinding: F0,
         r_3_r_2_inv: F0,
         r_3_r_2_inv_blinding: F0,
         r_4_r_2_inv: F0,
         r_4_r_2_inv_blinding: F0,
+        enc_key_gen: Affine<G0>,
         leg_enc: &LegEncryption<Affine<G0>>,
     ) -> (
         PokPedersenCommitmentProtocol<Affine<G0>>,
+        PokDiscreteLogProtocol<Affine<G0>>,
+        PokDiscreteLogProtocol<Affine<G0>>,
         PokDiscreteLogProtocol<Affine<G0>>,
         PokDiscreteLogProtocol<Affine<G0>>,
     ) {
@@ -2256,10 +2461,20 @@ impl<
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
         );
 
+        // For proving ct_r' = enc_key_gen * r_6
+        let ct_r_prime_proto = PokDiscreteLogProtocol::init(r_6, r_6_blinding, &enc_key_gen);
+
         // For proving R[2] = R[1] * r_3/r_2
         let eph_pk_r_v_proto = PokDiscreteLogProtocol::init(
             r_3_r_2_inv,
             r_3_r_2_inv_blinding,
+            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
+        );
+
+        // For proving R[1]' = R[1] * r_6/r_2.
+        let eph_pk_r_prime_proto = PokDiscreteLogProtocol::init(
+            r_6_r_2_inv,
+            r_6_r_2_inv_blinding,
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
         );
 
@@ -2270,7 +2485,13 @@ impl<
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
         );
 
-        (ct_r_proto, eph_pk_r_v_proto, eph_pk_r_at_proto)
+        (
+            ct_r_proto,
+            ct_r_prime_proto,
+            eph_pk_r_v_proto,
+            eph_pk_r_prime_proto,
+            eph_pk_r_at_proto,
+        )
     }
 
     fn enc_key_protos(
@@ -2524,36 +2745,50 @@ pub(crate) fn ensure_leg_encryption_consistent<
             }
         }
 
-        ensure_sender_receiver_not_same(leg_enc)?;
-        ensure_eph_key_not_identity(leg_enc)?;
+        ensure_sender_receiver_not_same(leg_enc, Error::ProofGenerationError)?;
+        ensure_eph_key_not_identity(leg_enc, Error::ProofGenerationError)?;
+        ensure_participant_prime_cts_not_identity(leg_enc, Error::ProofGenerationError)?;
         Ok(())
     }
 }
 
+/// Errors with `err`: `Error::ProofGenerationError` on the prover and `Error::ProofVerificationError` on the verifier.
+pub(crate) fn ensure_participant_prime_cts_not_identity<G0: SWCurveConfig>(
+    leg_enc: &LegEncryption<Affine<G0>>,
+    err: fn(String) -> Error,
+) -> Result<()> {
+    let core = &leg_enc.leg_enc_core_and_eph_keys.core;
+    if core.ct_s_prime.is_zero() {
+        return Err(err("leg_enc.ct_s_prime is identity".to_string()));
+    }
+    if core.ct_r_prime.is_zero() {
+        return Err(err("leg_enc.ct_r_prime is identity".to_string()));
+    }
+    Ok(())
+}
+
+/// Errors with `err`: `Error::ProofGenerationError` on the prover and `Error::ProofVerificationError` on the verifier.
 pub(crate) fn ensure_sender_receiver_not_same<G0: SWCurveConfig>(
     leg_enc: &LegEncryption<Affine<G0>>,
+    err: fn(String) -> Error,
 ) -> Result<()> {
     if let Some(r2) = leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r2 {
         if leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2 == r2 {
-            return Err(Error::ProofGenerationError(
-                "leg_enc.eph_pk_r.r2 == leg_enc.eph_pk_s.r2".to_string(),
-            ));
+            return Err(err("leg_enc.eph_pk_r.r2 == leg_enc.eph_pk_s.r2".to_string()));
         }
     }
 
     if let Some(r1) = leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r1 {
         if leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1 == r1 {
-            return Err(Error::ProofGenerationError(
-                "leg_enc.eph_pk_r.r1 == leg_enc.eph_pk_s.r1".to_string(),
-            ));
+            return Err(err("leg_enc.eph_pk_r.r1 == leg_enc.eph_pk_s.r1".to_string()));
         }
     }
 
     if leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r3
         == leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r3
     {
-        return Err(Error::ProofGenerationError(
-            "leg_enc.eph_pk_s.r3 and leg_enc.eph_pk_r.r3 are equal".to_string(),
+        return Err(err(
+            "leg_enc.eph_pk_s.r3 and leg_enc.eph_pk_r.r3 are equal".to_string()
         ));
     }
 
@@ -2561,15 +2796,25 @@ pub(crate) fn ensure_sender_receiver_not_same<G0: SWCurveConfig>(
         && (leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r4
             == leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r4)
     {
-        return Err(Error::ProofGenerationError(
-            "leg_enc.eph_pk_s.r4 and leg_enc.eph_pk_r.r4 are equal".to_string(),
+        return Err(err(
+            "leg_enc.eph_pk_s.r4 and leg_enc.eph_pk_r.r4 are equal".to_string()
+        ));
+    }
+
+    if leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r5
+        == leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r6
+    {
+        return Err(err(
+            "leg_enc.eph_pk_s.r5 and leg_enc.eph_pk_r.r6 are equal".to_string()
         ));
     }
     Ok(())
 }
 
+/// Errors with `err`: `Error::ProofGenerationError` on the prover and `Error::ProofVerificationError` on the verifier.
 pub(crate) fn ensure_eph_key_not_identity<G0: SWCurveConfig>(
     leg_enc: &LegEncryption<Affine<G0>>,
+    err: fn(String) -> Error,
 ) -> Result<()> {
     let s = &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s;
     let r = &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r;
@@ -2577,21 +2822,19 @@ pub(crate) fn ensure_eph_key_not_identity<G0: SWCurveConfig>(
         || (s.r2.is_some() && s.r2.as_ref().unwrap().is_zero())
         || s.r3.is_zero()
         || (s.r4.is_some() && s.r4.as_ref().unwrap().is_zero())
+        || s.r5.is_zero()
         || r.r1.is_some() && r.r1.as_ref().unwrap().is_zero()
         || r.r2.is_zero()
         || r.r3.is_zero()
         || (r.r4.is_some() && r.r4.as_ref().unwrap().is_zero())
+        || r.r6.is_zero()
     {
-        return Err(Error::ProofGenerationError(
-            "eph_pk_s or eph_pk_r is identity".to_string(),
-        ));
+        return Err(err("eph_pk_s or eph_pk_r is identity".to_string()));
     }
     if let Some(mediators) = leg_enc.mediators.as_ref() {
         for (i, mediator) in mediators.iter().enumerate() {
             if mediator.eph_pk_med_keys.iter().any(|e| e.is_zero()) {
-                return Err(Error::ProofGenerationError(format!(
-                    "mediators[{i}] eph_pk_med_keys is identity"
-                )));
+                return Err(err(format!("mediators[{i}] eph_pk_med_keys is identity")));
             }
         }
     }
@@ -3593,18 +3836,26 @@ mod mocking_tests {
             .mock_safe(
                 move |_r_1,
                       _r_1_blinding,
-                      enc_key_gen,
                       _r_1_inv,
                       _r_1_inv_blinding,
+                      _r_5,
+                      _r_5_blinding,
+                      _r_5_r_1_inv,
+                      _r_5_r_1_inv_blinding,
                       _r_3_r_1_inv,
                       _r_3_r_1_inv_blinding,
                       _r_4_r_1_inv,
                       _r_4_r_1_inv_blinding,
+                      enc_key_gen,
                       leg_enc| {
                     let mocked_r_1 = PallasF::from(7u64);
                     let mocked_r_1_blinding = PallasF::from(11u64);
                     let mocked_r_1_inv = PallasF::from(13u64);
                     let mocked_r_1_inv_blinding = PallasF::from(17u64);
+                    let mocked_r_5 = PallasF::from(33u64);
+                    let mocked_r_5_blinding = PallasF::from(35u64);
+                    let mocked_r_5_r_1_inv = PallasF::from(39u64);
+                    let mocked_r_5_r_1_inv_blinding = PallasF::from(41u64);
                     let mocked_r_3_r_1_inv = PallasF::from(19u64);
                     let mocked_r_3_r_1_inv_blinding = PallasF::from(23u64);
                     let mocked_r_4_r_1_inv = PallasF::from(29u64);
@@ -3618,9 +3869,19 @@ mod mocking_tests {
                         mocked_r_1_inv_blinding,
                         &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
                     );
+                    let ct_s_prime_proto = PokDiscreteLogProtocol::init(
+                        mocked_r_5,
+                        mocked_r_5_blinding,
+                        &enc_key_gen,
+                    );
                     let eph_pk_s_v_proto = PokDiscreteLogProtocol::init(
                         mocked_r_3_r_1_inv,
                         mocked_r_3_r_1_inv_blinding,
+                        &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
+                    );
+                    let eph_pk_s_prime_proto = PokDiscreteLogProtocol::init(
+                        mocked_r_5_r_1_inv,
+                        mocked_r_5_r_1_inv_blinding,
                         &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
                     );
                     let eph_pk_s_at_proto = PokDiscreteLogProtocol::init(
@@ -3629,7 +3890,13 @@ mod mocking_tests {
                         &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
                     );
 
-                    MockResult::Return((ct_s_proto, eph_pk_s_v_proto, eph_pk_s_at_proto))
+                    MockResult::Return((
+                        ct_s_proto,
+                        ct_s_prime_proto,
+                        eph_pk_s_v_proto,
+                        eph_pk_s_prime_proto,
+                        eph_pk_s_at_proto,
+                    ))
                 },
             );
 
@@ -3685,18 +3952,26 @@ mod mocking_tests {
             .mock_safe(
                 move |_r_2,
                       _r_2_blinding,
-                      enc_key_gen,
                       _r_2_inv,
                       _r_2_inv_blinding,
+                      _r_6,
+                      _r_6_blinding,
+                      _r_6_r_2_inv,
+                      _r_6_r_2_inv_blinding,
                       _r_3_r_2_inv,
                       _r_3_r_2_inv_blinding,
                       _r_4_r_2_inv,
                       _r_4_r_2_inv_blinding,
+                      enc_key_gen,
                       leg_enc| {
                     let mocked_r_2 = PallasF::from(37u64);
                     let mocked_r_2_blinding = PallasF::from(41u64);
                     let mocked_r_2_inv = PallasF::from(43u64);
                     let mocked_r_2_inv_blinding = PallasF::from(47u64);
+                    let mocked_r_6 = PallasF::from(71u64);
+                    let mocked_r_6_blinding = PallasF::from(73u64);
+                    let mocked_r_6_r_2_inv = PallasF::from(79u64);
+                    let mocked_r_6_r_2_inv_blinding = PallasF::from(83u64);
                     let mocked_r_3_r_2_inv = PallasF::from(53u64);
                     let mocked_r_3_r_2_inv_blinding = PallasF::from(59u64);
                     let mocked_r_4_r_2_inv = PallasF::from(61u64);
@@ -3710,9 +3985,19 @@ mod mocking_tests {
                         mocked_r_2_inv_blinding,
                         &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
                     );
+                    let ct_r_prime_proto = PokDiscreteLogProtocol::init(
+                        mocked_r_6,
+                        mocked_r_6_blinding,
+                        &enc_key_gen,
+                    );
                     let eph_pk_r_v_proto = PokDiscreteLogProtocol::init(
                         mocked_r_3_r_2_inv,
                         mocked_r_3_r_2_inv_blinding,
+                        &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
+                    );
+                    let eph_pk_r_prime_proto = PokDiscreteLogProtocol::init(
+                        mocked_r_6_r_2_inv,
+                        mocked_r_6_r_2_inv_blinding,
                         &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
                     );
                     let eph_pk_r_at_proto = PokDiscreteLogProtocol::init(
@@ -3721,7 +4006,13 @@ mod mocking_tests {
                         &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
                     );
 
-                    MockResult::Return((ct_r_proto, eph_pk_r_v_proto, eph_pk_r_at_proto))
+                    MockResult::Return((
+                        ct_r_proto,
+                        ct_r_prime_proto,
+                        eph_pk_r_v_proto,
+                        eph_pk_r_prime_proto,
+                        eph_pk_r_at_proto,
+                    ))
                 },
             );
 

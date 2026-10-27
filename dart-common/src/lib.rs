@@ -62,10 +62,10 @@ pub const COMPRESSED_POINT_SIZE: u32 = 32;
 /// keys in a leg.
 pub const MAX_PUBLIC_ENC_KEYS: u32 = 2;
 
-/// Upper bound on the size of a `LegEncryption`. Curve points: 4 core + 8 sender/receiver ephemeral
+/// Upper bound on the size of a `LegEncryption`. Curve points: 6 core + 10 sender/receiver ephemeral
 /// + 4 per auditor and per public key + one ephemeral per auditor key and one `ct_med` per
 /// mediator. Rest 40 bytes for approx. vec lengths and option/enum tags.
-pub const MAX_LEG_ENCRYPTION_SIZE: u32 = (12
+pub const MAX_LEG_ENCRYPTION_SIZE: u32 = (16
     + 4 * (MAX_ASSET_ENC_KEYS + MAX_PUBLIC_ENC_KEYS)
     + MAX_ASSET_MEDIATORS * (MAX_ASSET_ENC_KEYS + 1))
     * COMPRESSED_POINT_SIZE

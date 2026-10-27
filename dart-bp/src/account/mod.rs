@@ -1230,7 +1230,6 @@ macro_rules! impl_txn_split_proof {
                 account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
                 enc_gen: Affine<G0>,
                 k_asset_id: Option<F0>,
-                k_amount: F0,
             ) -> Result<(
                 Self,
                 Prover<'a, MerlinTranscript, Affine<G0>>,
@@ -1241,12 +1240,9 @@ macro_rules! impl_txn_split_proof {
                 let (leg_enc_core, eph_pk, amount) = leg_details;
 
                 let k_asset_ids: Vec<F0> = k_asset_id.into_iter().collect();
-                // No balance change: ct_amount is needed only when this leg reveals its asset-id.
-                let k_amounts: Vec<F0> = if leg_enc_core.is_asset_id_revealed() {
-                    vec![k_amount]
-                } else {
-                    vec![]
-                };
+                // No balance change: no `ct_amount` relation is proved. The participant relations
+                // bind the account and a hidden asset-id keeps its own relation.
+                let k_amounts: Vec<F0> = vec![];
 
                 let (inner, even_prover, odd_prover, nullifier) =
                     CommonAffirmationSplitProtocol::init::<_, Parameters0, Parameters1>(
@@ -1318,7 +1314,6 @@ macro_rules! impl_txn_split_proof {
                 account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
                 enc_gen: Affine<G0>,
                 k_asset_id: Option<F0>,
-                k_amount: F0,
             ) -> Result<(
                 CommonAffirmationHostProof<L, F0, F1, G0, G1>,
                 Affine<G0>, // rerandomized_leaf
@@ -1340,7 +1335,6 @@ macro_rules! impl_txn_split_proof {
                         account_comm_key,
                         enc_gen,
                         k_asset_id,
-                        k_amount,
                     )?;
                 let rerandomized_leaf = protocol.rerandomized_leaf();
                 let auth_rerandomization = protocol.auth_rerandomization();

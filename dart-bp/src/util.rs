@@ -1057,10 +1057,13 @@ pub(crate) fn create_leg_link_t_values<
     amounts: &[Balance],
     has_balance_changed: &[bool],
     sk_enc_inv: F0,
+    sk_enc: F0,
     sk_enc_inv_blinding: F0,
+    sk_enc_blinding: F0,
     amount_blindings: &[F0],
     asset_id: AssetId,
     asset_id_blinding: Option<F0>,
+    enc_key_gen: Affine<G0>,
     enc_gen: Affine<G0>,
 ) -> Vec<LegAccountLinkProtocol<G0>> {
     let mut t_leg_link = Vec::with_capacity(legs.len());
@@ -1068,8 +1071,25 @@ pub(crate) fn create_leg_link_t_values<
 
     for (i, ((core, party_eph_pk), amount)) in legs.iter().zip(amounts).enumerate() {
         let revealed = core.is_asset_id_revealed();
-        // ct_amount when the leg reveals its asset-id or the balance changes
-        let t_amount = if revealed || has_balance_changed[i] {
+
+        // ct_participant = eph_pk_participant * sk_enc^{-1} + enc_key_gen * sk_enc
+        let t_participant = PokPedersenCommitmentProtocol::init(
+            sk_enc_inv,
+            sk_enc_inv_blinding,
+            &party_eph_pk.eph_pk_participant(),
+            sk_enc,
+            sk_enc_blinding,
+            &enc_key_gen,
+        );
+        // ct_participant_prime = eph_pk_participant_prime * sk_enc^{-1}
+        let t_participant_prime = PokDiscreteLogProtocol::init(
+            sk_enc_inv,
+            sk_enc_inv_blinding,
+            &party_eph_pk.eph_pk_participant_prime(),
+        );
+
+        // ct_amount is proven only when the leg changes the balance.
+        let t_amount = if has_balance_changed[i] {
             let eph_pk_amount = party_eph_pk.eph_pk_amount();
             let t = PokPedersenCommitmentProtocol::init(
                 sk_enc_inv,
@@ -1085,14 +1105,11 @@ pub(crate) fn create_leg_link_t_values<
             None
         };
 
-        if revealed {
-            // Asset id revealed in this leg — no extra asset-id ciphertext proof, only the amount
-            t_leg_link.push(LegAccountLinkProtocol::AmountOnly {
-                t_amount: t_amount.unwrap(),
-            });
+        let t_asset_id = if revealed {
+            None
         } else {
             let eph_pk_asset_id = party_eph_pk.eph_pk_asset_id().unwrap();
-            let t_asset_id = match asset_id_blinding {
+            Some(match asset_id_blinding {
                 Some(asset_id_blinding) => {
                     AssetIdProtocol::Hidden(PokPedersenCommitmentProtocol::init(
                         sk_enc_inv,
@@ -1108,16 +1125,15 @@ pub(crate) fn create_leg_link_t_values<
                     sk_enc_inv_blinding,
                     &eph_pk_asset_id,
                 )),
-            };
+            })
+        };
 
-            match t_amount {
-                Some(t_amount) => t_leg_link.push(LegAccountLinkProtocol::AssetIdAndAmount {
-                    t_asset_id,
-                    t_amount,
-                }),
-                None => t_leg_link.push(LegAccountLinkProtocol::AssetIdOnly { t_asset_id }),
-            }
-        }
+        t_leg_link.push(LegAccountLinkProtocol {
+            t_participant,
+            t_participant_prime,
+            t_amount,
+            t_asset_id,
+        });
     }
 
     t_leg_link
@@ -1131,11 +1147,28 @@ pub(crate) fn add_leg_link_challenge_contributions<G0: SWCurveConfig + Copy>(
     )],
     t_leg_link: &[LegAccountLinkProtocol<G0>],
     h_at: Option<Affine<G0>>,
+    enc_key_gen: Affine<G0>,
     enc_gen: Affine<G0>,
     transcript: &mut MerlinTranscript,
 ) -> Result<()> {
     for ((core, party_eph_pk), t_leg_link) in legs.iter().zip(t_leg_link.iter()) {
-        if let Some(t_amount) = t_leg_link.t_amount() {
+        let is_sender = party_eph_pk.is_sender();
+
+        t_leg_link.t_participant.challenge_contribution(
+            &party_eph_pk.eph_pk_participant(),
+            &enc_key_gen,
+            &core.ct_participant(is_sender),
+            dst::LEG_PARTICIPANT,
+            &mut *transcript,
+        )?;
+        t_leg_link.t_participant_prime.challenge_contribution(
+            &party_eph_pk.eph_pk_participant_prime(),
+            &core.ct_participant_prime(is_sender),
+            dst::LEG_PARTICIPANT_PRIME,
+            &mut *transcript,
+        )?;
+
+        if let Some(t_amount) = &t_leg_link.t_amount {
             let eph_pk_amount = party_eph_pk.eph_pk_amount();
             t_amount.challenge_contribution(
                 &eph_pk_amount,
@@ -1145,7 +1178,7 @@ pub(crate) fn add_leg_link_challenge_contributions<G0: SWCurveConfig + Copy>(
                 &mut *transcript,
             )?;
         }
-        if let Some(t_asset_id) = t_leg_link.t_asset_id() {
+        if let Some(t_asset_id) = &t_leg_link.t_asset_id {
             let eph_pk_asset_id = party_eph_pk.eph_pk_asset_id().unwrap();
             match t_asset_id {
                 AssetIdProtocol::Hidden(t) => t.challenge_contribution(
@@ -1202,7 +1235,7 @@ pub(crate) fn generate_sigma_t_values_for_common_state_change<
     mut asset_id_blinding: Option<F0>,
     mut sk_enc_blinding: F0,
     mut sk_enc_inv_blinding: F0,
-    amount_blindings: Vec<F0>,
+    amount_blindings: &[F0],
     prover: &mut Prover<MerlinTranscript, Affine<G0>>,
     account_comm_key: &impl AccountCommitmentKeyTrait<Affine<G0>>,
     pc_gens: &PedersenGens<Affine<G0>>,
@@ -1286,15 +1319,19 @@ pub(crate) fn generate_sigma_t_values_for_common_state_change<
     let sk_enc_inv = sk_enc_inv.ok_or(Error::InvertingZero)?;
 
     // Create leg-link T-values (solo only)
+    let enc_key_gen = account_comm_key.sk_enc_gen();
     let t_leg_link = create_leg_link_t_values(
         &legs,
         &amounts,
         &has_balance_changed,
         sk_enc_inv,
+        sk_enc,
         sk_enc_inv_blinding,
-        &amount_blindings,
+        sk_enc_blinding,
+        amount_blindings,
         old_account.asset_id(),
         asset_id_blinding,
+        enc_key_gen,
         enc_gen,
     );
 
@@ -1324,7 +1361,14 @@ pub(crate) fn generate_sigma_t_values_for_common_state_change<
     let null_gen = account_comm_key.current_rho_gen();
     t_null.challenge_contribution(&null_gen, &nullifier, dst::NULLIFIER, &mut transcript)?;
 
-    add_leg_link_challenge_contributions(&legs, &t_leg_link, h_at, enc_gen, &mut transcript)?;
+    add_leg_link_challenge_contributions(
+        &legs,
+        &t_leg_link,
+        h_at,
+        enc_key_gen,
+        enc_gen,
+        &mut transcript,
+    )?;
 
     Ok((
         nullifier,
@@ -1686,10 +1730,12 @@ pub(crate) fn add_leg_link_verifier_challenge_contributions<G0: SWCurveConfig + 
     asset_id: Option<AssetId>,
     resp_leg_link: &[LegAccountLink<G0>],
     needs_ct_amount: &[bool],
+    account_comm_key: &impl AccountCommitmentKeyTrait<Affine<G0>>,
     enc_gen: Affine<G0>,
     transcript: &mut MerlinTranscript,
     // Returns `y_elsewhere` so the paired verify phase can skip recomputing it.
 ) -> Result<Vec<Affine<G0>>> {
+    let enc_key_gen = account_comm_key.sk_enc_gen();
     let h_at = asset_id.map(|a| enc_gen * G0::ScalarField::from(a));
 
     // `y = ct_asset_id - h_at` for every revealed-elsewhere leg, with one shared batch
@@ -1702,7 +1748,7 @@ pub(crate) fn add_leg_link_verifier_challenge_contributions<G0: SWCurveConfig + 
                 .filter_map(|((core, _), rll)| {
                     match (
                         core.is_asset_id_revealed(),
-                        rll.resp_asset_id(),
+                        rll.resp_asset_id.as_ref(),
                         core.asset_id_ciphertext(),
                     ) {
                         (false, Some(RespAssetId::Elsewhere(_)), Some(ct)) => {
@@ -1723,9 +1769,29 @@ pub(crate) fn add_leg_link_verifier_challenge_contributions<G0: SWCurveConfig + 
         .zip(needs_ct_amount.iter())
         .enumerate()
     {
+        let is_sender = party_eph_pk.is_sender();
+
+        resp_leg_link.ensure_expected_responses(i, *needs_amount, core.is_asset_id_revealed())?;
+
+        resp_leg_link.resp_participant.challenge_contribution(
+            &party_eph_pk.eph_pk_participant(),
+            &enc_key_gen,
+            &core.ct_participant(is_sender),
+            dst::LEG_PARTICIPANT,
+            &mut *transcript,
+        )?;
+        resp_leg_link
+            .resp_participant_prime
+            .challenge_contribution(
+                &party_eph_pk.eph_pk_participant_prime(),
+                &core.ct_participant_prime(is_sender),
+                dst::LEG_PARTICIPANT_PRIME,
+                &mut *transcript,
+            )?;
+
         // It's been validated resp_leg_link contains amount and asset-id responses for required leg-link proofs
         if *needs_amount {
-            let resp_amount = resp_leg_link.resp_amount().ok_or_else(|| {
+            let resp_amount = resp_leg_link.resp_amount.as_ref().ok_or_else(|| {
                 Error::ProofVerificationError(format!(
                     "Leg {i} required amount proof but the proof is missing it"
                 ))
@@ -1740,7 +1806,7 @@ pub(crate) fn add_leg_link_verifier_challenge_contributions<G0: SWCurveConfig + 
             )?;
         }
         if !core.is_asset_id_revealed() {
-            let resp_asset_id = resp_leg_link.resp_asset_id().ok_or_else(|| {
+            let resp_asset_id = resp_leg_link.resp_asset_id.as_ref().ok_or_else(|| {
                 Error::ProofVerificationError(format!(
                     "Leg {i} required asset-id proof but the proof is missing it"
                 ))
@@ -1841,6 +1907,7 @@ pub(crate) fn enforce_constraints_and_take_challenge_contrib_of_sigma_t_values_f
         asset_id,
         resp_leg_link,
         needs_ct_amount,
+        account_comm_key,
         enc_gen,
         &mut transcript,
     )?;
@@ -1860,6 +1927,7 @@ pub(crate) fn take_challenge_contrib_of_balance_bp<G0: SWCurveConfig + Copy>(
 
 /// Verify leg-link proofs for each leg (participant ciphertext + asset-id proofs).
 /// `resp_sk_enc_inv_bp` is the response for sk_enc_inv extracted from resp_bp.
+/// `resp_sk_enc` is the response for sk_enc extracted from the old account commitment.
 /// `resp_asset_id_acc_old` is the response for asset_id (only when asset_id is hidden).
 pub(crate) fn verify_leg_link_for_common_state_change<G0: SWCurveConfig + Copy>(
     legs: &[(
@@ -1870,13 +1938,16 @@ pub(crate) fn verify_leg_link_for_common_state_change<G0: SWCurveConfig + Copy>(
     resp_leg_link: &[LegAccountLink<G0>],
     needs_ct_amount: &[bool],
     resp_sk_enc_inv_bp: &G0::ScalarField,
+    resp_sk_enc: &G0::ScalarField,
     resp_asset_id_acc_old: Option<&G0::ScalarField>,
     verifier_challenge: &G0::ScalarField,
+    account_comm_key: &impl AccountCommitmentKeyTrait<Affine<G0>>,
     enc_gen: Affine<G0>,
     // `y_elsewhere` precomputed in the challenge phase; `None` recomputes it here (same values).
     precomputed_y_elsewhere: Option<&[Affine<G0>]>,
     mut rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
 ) -> Result<()> {
+    let enc_key_gen = account_comm_key.sk_enc_gen();
     // `y = ct_asset_id - h_at` for every revealed-elsewhere leg; reuse the challenge-phase value
     // when available, else recompute (same values).
     let recomputed_y_elsewhere;
@@ -1892,7 +1963,7 @@ pub(crate) fn verify_leg_link_for_common_state_change<G0: SWCurveConfig + Copy>(
                         .filter_map(|((core, _), rll)| {
                             match (
                                 core.is_asset_id_revealed(),
-                                rll.resp_asset_id(),
+                                rll.resp_asset_id.as_ref(),
                                 core.asset_id_ciphertext(),
                             ) {
                                 (false, Some(RespAssetId::Elsewhere(_)), Some(ct)) => {
@@ -1917,10 +1988,47 @@ pub(crate) fn verify_leg_link_for_common_state_change<G0: SWCurveConfig + Copy>(
         .enumerate()
     {
         let (core, party_eph_pk) = leg;
+        let is_sender = party_eph_pk.is_sender();
+
+        // ct_participant = eph_pk_participant * sk_enc^-1 + enc_key_gen * sk_enc and
+        // ct_participant_prime = eph_pk_participant_prime * sk_enc^-1, sharing the `sk_enc^-1` response.
+        let ct_participant = core.ct_participant(is_sender);
+        let ct_participant_prime = core.ct_participant_prime(is_sender);
+
+        // `ct_participant_prime = enc_key_gen * r_5` (resp. `r_6`) is identity iff `r_5 = 0`, which makes
+        // the second relation hold for any party point. Mirrors the creation proofs'
+        // `ensure_participant_prime_cts_not_identity`.
+        if ct_participant_prime.is_zero() {
+            return Err(Error::ProofVerificationError(format!(
+                "Leg {i}: ct_participant_prime is identity"
+            )));
+        }
+
+        verify_or_rmc_3!(
+            rmc,
+            resp_leg_link.resp_participant,
+            format!("Participant ciphertext verification failed for leg {i}"),
+            ct_participant,
+            party_eph_pk.eph_pk_participant(),
+            enc_key_gen,
+            verifier_challenge,
+            resp_sk_enc_inv_bp,
+            resp_sk_enc,
+        );
+
+        verify_or_rmc_2!(
+            rmc,
+            resp_leg_link.resp_participant_prime,
+            format!("Participant prime ciphertext verification failed for leg {i}"),
+            ct_participant_prime,
+            party_eph_pk.eph_pk_participant_prime(),
+            verifier_challenge,
+            resp_sk_enc_inv_bp,
+        );
 
         // ct_amount = Eph_amt * sk_enc^-1 + enc_gen * v
         if *needs_amount {
-            let resp_amount = resp_leg_link.resp_amount().ok_or_else(|| {
+            let resp_amount = resp_leg_link.resp_amount.as_ref().ok_or_else(|| {
                 Error::ProofVerificationError(format!(
                     "Leg {i} required amount proof but the proof is missing it"
                 ))
@@ -1940,7 +2048,7 @@ pub(crate) fn verify_leg_link_for_common_state_change<G0: SWCurveConfig + Copy>(
 
         // ct_asset_id when the asset-id is encrypted in this leg
         if !core.is_asset_id_revealed() {
-            let resp_asset_id = resp_leg_link.resp_asset_id().ok_or_else(|| {
+            let resp_asset_id = resp_leg_link.resp_asset_id.as_ref().ok_or_else(|| {
                 Error::ProofVerificationError(format!(
                     "Leg {i} required asset-id proof but the proof is missing it"
                 ))
@@ -2186,16 +2294,22 @@ pub(crate) fn verify_sigma_for_common_state_change<G0: SWCurveConfig + Copy>(
             )
         })?;
 
+    // The response for sk_enc (shared with the account commitment) is at `SK_ENC_GEN_INDEX` in
+    // `resp_acc_old`, adjusted for the asset-id-revealed offset.
+    let resp_sk_enc = &resp_acc_old.0[SK_ENC_GEN_INDEX - offset_when_asset_id_revealed];
+
     verify_leg_link_for_common_state_change(
         legs,
         asset_id,
         resp_leg_link,
         needs_ct_amount,
         resp_sk_enc_inv_bp,
+        resp_sk_enc,
         asset_id
             .is_none()
             .then(|| &resp_acc_old.0[ASSET_ID_GEN_INDEX]),
         verifier_challenge,
+        account_comm_key,
         enc_gen,
         precomputed_y_elsewhere,
         rmc.as_deref_mut(),
