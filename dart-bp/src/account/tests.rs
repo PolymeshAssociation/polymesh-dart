@@ -14045,6 +14045,7 @@ mod input_sanitation_disabled {
     };
     use crate::account_registration::tests::new_account;
     use crate::leg::tests::setup_keys;
+    use crate::util::handle_verification_tuples;
     use ark_pallas::Fr as PallasFr;
     use ark_std::UniformRand;
 
@@ -14094,11 +14095,10 @@ mod input_sanitation_disabled {
         }};
     }
 
-    #[test]
-    fn split_affirmation_rejects_blinding_offset_in_new_commitment() {
-        // The host gives the device `rand_new_comm + delta` and submits `C_new + B_blinding * delta`.
-        // The verifier rejects the proof.
-
+    /// Builds a split sender affirmation where the host gives the device `rand_new_comm + delta` and
+    /// submits `C_new + B_blinding * delta`. Returns whether the host part verifies without and with
+    /// `RandomizedMultChecker`, after asserting the auth proof does.
+    fn split_affirmation_with_new_blinding_offset(delta: PallasFr) -> (bool, bool) {
         let mut rng = rand::thread_rng();
 
         const NUM_GENS: usize = 1 << 12;
@@ -14148,7 +14148,6 @@ mod input_sanitation_disabled {
 
         let updated_account = account.get_state_for_send(amount).unwrap();
         let correct_comm = updated_account.commit(account_comm_key.clone()).unwrap();
-        let delta = PallasFr::rand(&mut rng);
         let updated_account_comm =
             AccountStateCommitment((correct_comm.0 + b_blinding * delta).into_affine());
 
@@ -14245,7 +14244,7 @@ mod input_sanitation_disabled {
             )
             .unwrap();
 
-        let mut verify_host = || -> Result<()> {
+        let mut verify_host = |use_rmc: bool| -> Result<()> {
             let mut verifier = proof.challenge_contribution::<PallasParams, VestaParams>(
                 updated_account_comm,
                 nullifier,
@@ -14263,6 +14262,8 @@ mod input_sanitation_disabled {
                 .unwrap()
                 .transcript()
                 .challenge_scalar::<PallasFr>(TXN_CHALLENGE_LABEL);
+            let mut rmc_0 = RandomizedMultChecker::new(PallasFr::rand(&mut rng));
+            let mut rmc_1 = RandomizedMultChecker::new(VestaFr::rand(&mut rng));
             let (even_tuple, odd_tuple) = proof
                 .verify_and_return_tuples::<_, PallasParams, VestaParams>(
                     verifier,
@@ -14272,12 +14273,38 @@ mod input_sanitation_disabled {
                     &account_comm_key,
                     enc_gen,
                     &mut rng,
-                    None,
+                    use_rmc.then_some(&mut rmc_0),
                 )?;
-            verify_given_verification_tuples(even_tuple, odd_tuple, &account_tree_params)
+            if !use_rmc {
+                return verify_given_verification_tuples(
+                    even_tuple,
+                    odd_tuple,
+                    &account_tree_params,
+                );
+            }
+            handle_verification_tuples(
+                even_tuple,
+                odd_tuple,
+                &account_tree_params,
+                Some((&mut rmc_0, &mut rmc_1)),
+            )?;
+            verify_rmc(rmc_0, rmc_1)
         };
+        (verify_host(false).is_ok(), verify_host(true).is_ok())
+    }
+
+    #[test]
+    fn split_affirmation_rejects_blinding_offset_in_new_commitment() {
+        // The host gives the device `rand_new_comm + delta` and submits `C_new + B_blinding * delta`.
+        // The verifier rejects the proof.
+        let (verified, verified_rmc) =
+            split_affirmation_with_new_blinding_offset(PallasFr::rand(&mut rand::thread_rng()));
         assert!(
-            verify_host().is_err(),
+            !verified,
+            "verifier accepted a new commitment with a B_blinding offset"
+        );
+        assert!(
+            !verified_rmc,
             "verifier accepted a new commitment with a B_blinding offset"
         );
     }
@@ -15330,8 +15357,10 @@ mod input_sanitation_disabled {
         use crate::account::state::NUM_GENERATORS;
         use crate::util::{
             create_bp_and_null_t_values, create_leg_link_t_values, enforce_balance_change_prover,
+            init_host_rand_new_comm_anchor_protocol,
         };
         use mocktopus::mocking::{MockResult, Mockable};
+        use schnorr_pok::discrete_log::PokDiscreteLogProtocol;
 
         struct MockGuard {
             clear_fn: fn(),
@@ -15346,6 +15375,31 @@ mod input_sanitation_disabled {
         impl Drop for MockGuard {
             fn drop(&mut self) {
                 (self.clear_fn)();
+            }
+        }
+
+        #[test]
+        fn split_affirmation_rejects_host_anchor_not_matching_new_commitment() {
+            // The host hashes the device's anchor `anchor_gen * (rand_new_comm + delta)` but its new
+            // commitment carries `-rand_new_comm`, so only the anchor relation fails.
+            let mut rng = rand::thread_rng();
+            for (delta, verifies) in [
+                (PallasFr::from(0u8), true),
+                (PallasFr::rand(&mut rng), false),
+            ] {
+                init_host_rand_new_comm_anchor_protocol::<PallasA>.mock_safe(
+                    move |rand_new_comm, blinding, anchor_gen| {
+                        MockResult::Return((
+                            PokDiscreteLogProtocol::init(-rand_new_comm, blinding, &anchor_gen),
+                            (anchor_gen * (rand_new_comm + delta)).into_affine(),
+                        ))
+                    },
+                );
+                assert_eq!(
+                    split_affirmation_with_new_blinding_offset(delta),
+                    (verifies, verifies)
+                );
+                init_host_rand_new_comm_anchor_protocol::<PallasA>.clear_mock();
             }
         }
 

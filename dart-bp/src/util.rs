@@ -2639,6 +2639,10 @@ pub fn batch_digest(mut transcript: MerlinTranscript) -> [u8; 32] {
 /// Starts the host's proof of `-rand_new_comm_anchor = anchor_gen * (-rand_new_comm)` and returns
 /// it with `rand_new_comm_anchor = anchor_gen * rand_new_comm`. `blinding` is the blinding of
 /// `-rand_new_comm` in the host's new account commitment, so the proof shares that response.
+#[cfg_attr(
+    all(test, feature = "nightly_mocking_tests"),
+    mocktopus::macros::mockable
+)]
 pub fn init_host_rand_new_comm_anchor_protocol<G: AffineRepr>(
     rand_new_comm: G::ScalarField,
     blinding: G::ScalarField,

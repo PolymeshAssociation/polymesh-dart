@@ -85,7 +85,7 @@ impl FeeAccountState {
     pub fn nullifier(&self) -> Result<FeeAccountStateNullifier, Error> {
         let account_comm_key = dart_gens().account_comm_key();
         let rho = self.rho.decode()?;
-        let nullifier = (account_comm_key.rho_gen() * rho).into();
+        let nullifier = (account_comm_key.current_rho_gen() * rho).into();
         FeeAccountStateNullifier::from_affine(nullifier)
     }
 }

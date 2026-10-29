@@ -1,7 +1,7 @@
 use super::split_types::*;
 use super::*;
 use crate::Error;
-use ark_std::vec::Vec;
+use ark_std::{format, string::ToString, vec::Vec};
 use polymesh_dart_bp::account::state::NUM_GENERATORS;
 use polymesh_dart_bp::auth_proofs::{
     self, account::AuthProofAffirmation as BPAuthProofAffirmation,

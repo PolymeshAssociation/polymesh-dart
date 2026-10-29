@@ -133,10 +133,10 @@ impl<G: AffineRepr> FeeAccountState<G> {
             &[
                 G::ScalarField::from(self.balance),
                 G::ScalarField::from(self.asset_id),
-                self.rho,
                 self.initial_rho,
-                self.randomness,
+                self.rho,
                 self.initial_randomness,
+                self.randomness,
             ],
         )
         .map_err(Error::size_mismatch)?;
@@ -172,7 +172,7 @@ impl<G: AffineRepr> FeeAccountState<G> {
     }
 
     pub fn nullifier<CK: AccountCommitmentKeyTrait<G>>(&self, comm_key: &CK) -> G {
-        (comm_key.rho_gen() * self.rho()).into()
+        (comm_key.current_rho_gen() * self.rho()).into()
     }
 
     #[inline]
@@ -808,7 +808,7 @@ impl<
             None,
         );
 
-        let nullifier_gen = account_comm_key.rho_gen();
+        let nullifier_gen = account_comm_key.current_rho_gen();
         let nullifier = account.nullifier(&account_comm_key);
         let new_balance = F0::from(updated_account.balance());
 
@@ -1100,7 +1100,7 @@ impl<
             updated_account_commitment
         );
 
-        let nullifier_gen = account_comm_key.rho_gen();
+        let nullifier_gen = account_comm_key.current_rho_gen();
 
         self.account_comm_proof
             .resp_acc_old
@@ -1215,7 +1215,7 @@ impl<
         missing_resps.insert(2, self.account_comm_proof.resp_acc_old.0[2]);
         missing_resps.insert(4, self.account_comm_proof.resp_acc_old.0[4]);
 
-        let nullifier_gen = account_comm_key.rho_gen();
+        let nullifier_gen = account_comm_key.current_rho_gen();
 
         verify_schnorr_resp_or_rmc!(
             rmc,
@@ -2374,7 +2374,7 @@ impl<
         // 2. Old balance = new balance + fee_amount
         // 3. Range proof on new balance
 
-        let nullifier_gen = account_comm_key.rho_gen();
+        let nullifier_gen = account_comm_key.current_rho_gen();
         let nullifier = account.nullifier(&account_comm_key);
 
         // Schnorr commitment for proving correctness of nullifier.
@@ -2583,7 +2583,7 @@ impl<
             updated_account_commitment
         );
 
-        let nullifier_gen = account_comm_key.rho_gen();
+        let nullifier_gen = account_comm_key.current_rho_gen();
 
         self.resp_null.challenge_contribution(
             &nullifier_gen,
@@ -2666,7 +2666,7 @@ impl<
             ));
         }
 
-        let nullifier_gen = account_comm_key.rho_gen();
+        let nullifier_gen = account_comm_key.current_rho_gen();
         // rho in nullifier matches the rho in the old account commitment
         verify_or_rmc_2!(
             rmc,
@@ -2998,7 +2998,7 @@ impl<
         let fee_amount_f = F0::from(fee_amount);
 
         // Old re-randomized leaf minus public terms and fee_amount offset.
-        // This gives: sk_gen*sk + balance_gen*new_balance + rho_gen*old_rho + randomness_gen*old_randomness + B_blinding*rerandomization
+        // This gives: sk_gen*sk + balance_gen*new_balance + current_rho_gen*old_rho + current_randomness_gen*old_randomness + B_blinding*rerandomization
         let y_old = self
             .partial
             .re_randomized_path
@@ -3010,7 +3010,7 @@ impl<
         let y_old_affine = y_old.into_affine();
 
         // New account commitment minus public terms.
-        // This gives: sk_gen*sk + balance_gen*new_balance + rho_gen*new_rho + randomness_gen*new_randomness
+        // This gives: sk_gen*sk + balance_gen*new_balance + current_rho_gen*new_rho + current_randomness_gen*new_randomness
         let y_new = updated_account_commitment.0.into_group() - asset_id_comm;
         let y_new_affine = y_new.into_affine();
 
@@ -3732,7 +3732,7 @@ impl<
 }
 
 /// Generators for the re-randomized leaf Schnorr proof (solo, with sk).
-/// Order: [sk_gen, balance_gen, rho_gen, current_rho_gen, randomness_gen, current_randomness_gen, B_blinding]
+/// Order: [sk_gen, balance_gen, current_rho_gen, rho_gen, current_randomness_gen, randomness_gen, B_blinding]
 pub fn acc_old_gens_with_sk<G0: SWCurveConfig + Clone + Copy>(
     account_comm_key: &impl AccountCommitmentKeyTrait<Affine<G0>>,
     blinding_gen: Affine<G0>,
@@ -3740,75 +3740,75 @@ pub fn acc_old_gens_with_sk<G0: SWCurveConfig + Clone + Copy>(
     [
         account_comm_key.sk_gen(),
         account_comm_key.balance_gen(),
-        account_comm_key.rho_gen(),
         account_comm_key.current_rho_gen(),
-        account_comm_key.randomness_gen(),
+        account_comm_key.rho_gen(),
         account_comm_key.current_randomness_gen(),
+        account_comm_key.randomness_gen(),
         blinding_gen,
     ]
 }
 
 /// Generators for the new account commitment Schnorr proof (solo, with sk).
-/// Order: [sk_gen, balance_gen, rho_gen, current_rho_gen, randomness_gen, current_randomness_gen]
+/// Order: [sk_gen, balance_gen, current_rho_gen, rho_gen, current_randomness_gen, randomness_gen]
 pub fn acc_new_gens_with_sk<G0: SWCurveConfig + Clone + Copy>(
     account_comm_key: &impl AccountCommitmentKeyTrait<Affine<G0>>,
 ) -> [Affine<G0>; 6] {
     [
         account_comm_key.sk_gen(),
         account_comm_key.balance_gen(),
-        account_comm_key.rho_gen(),
         account_comm_key.current_rho_gen(),
-        account_comm_key.randomness_gen(),
+        account_comm_key.rho_gen(),
         account_comm_key.current_randomness_gen(),
+        account_comm_key.randomness_gen(),
     ]
 }
 
 /// Generators for the re-randomized leaf Schnorr proof (split, without sk).
 /// AuthProofFeePayment handles `sk_gen*sk + B_blinding*auth_rerandomization`, the host proves the rest
 /// including its share of the B_blinding rerandomization.
-/// Order: [balance_gen, rho_gen, current_rho_gen, randomness_gen, current_randomness_gen, B_blinding]
+/// Order: [balance_gen, current_rho_gen, rho_gen, current_randomness_gen, randomness_gen, B_blinding]
 pub fn acc_old_gens_without_sk<G0: SWCurveConfig + Clone + Copy>(
     account_comm_key: &impl AccountCommitmentKeyTrait<Affine<G0>>,
     blinding_gen: Affine<G0>,
 ) -> [Affine<G0>; 6] {
     [
         account_comm_key.balance_gen(),
-        account_comm_key.rho_gen(),
         account_comm_key.current_rho_gen(),
-        account_comm_key.randomness_gen(),
+        account_comm_key.rho_gen(),
         account_comm_key.current_randomness_gen(),
+        account_comm_key.randomness_gen(),
         blinding_gen,
     ]
 }
 
 /// Generators for the new account commitment Schnorr proof (without sk).
-/// Order: [balance_gen, rho_gen, current_rho_gen, randomness_gen, current_randomness_gen]
+/// Order: [balance_gen, current_rho_gen, rho_gen, current_randomness_gen, randomness_gen]
 pub fn acc_new_gens_without_sk<G0: SWCurveConfig + Clone + Copy>(
     account_comm_key: &impl AccountCommitmentKeyTrait<Affine<G0>>,
 ) -> [Affine<G0>; 5] {
     [
         account_comm_key.balance_gen(),
-        account_comm_key.rho_gen(),
         account_comm_key.current_rho_gen(),
-        account_comm_key.randomness_gen(),
+        account_comm_key.rho_gen(),
         account_comm_key.current_randomness_gen(),
+        account_comm_key.randomness_gen(),
     ]
 }
 
 /// Generators for the host's new account commitment Schnorr proof in the split fee payment.
 /// `AuthProofFeePayment` proves `sk_gen*sk + B_blinding*auth_new_randomness`, the host proves the
 /// rest, including the full new randomness and its `B_blinding` share.
-/// Order: [balance_gen, rho_gen, current_rho_gen, randomness_gen, current_randomness_gen, B_blinding]
+/// Order: [balance_gen, current_rho_gen, rho_gen, current_randomness_gen, randomness_gen, B_blinding]
 pub fn acc_new_gens_split<G0: SWCurveConfig + Clone + Copy>(
     account_comm_key: &impl AccountCommitmentKeyTrait<Affine<G0>>,
     blinding_gen: Affine<G0>,
 ) -> [Affine<G0>; 6] {
     [
         account_comm_key.balance_gen(),
-        account_comm_key.rho_gen(),
         account_comm_key.current_rho_gen(),
-        account_comm_key.randomness_gen(),
+        account_comm_key.rho_gen(),
         account_comm_key.current_randomness_gen(),
+        account_comm_key.randomness_gen(),
         blinding_gen,
     ]
 }
@@ -3873,10 +3873,10 @@ fn init_acc_comm<R: CryptoRngCore, G: SWCurveConfig + Clone + Copy>(
 
     old_gens.extend_from_slice(&[
         account_comm_key.balance_gen(),
-        account_comm_key.rho_gen(),
         account_comm_key.current_rho_gen(),
-        account_comm_key.randomness_gen(),
+        account_comm_key.rho_gen(),
         account_comm_key.current_randomness_gen(),
+        account_comm_key.randomness_gen(),
         blinding_gen,
     ]);
     old_blindings.extend_from_slice(&[
@@ -3890,10 +3890,10 @@ fn init_acc_comm<R: CryptoRngCore, G: SWCurveConfig + Clone + Copy>(
 
     new_gens.extend_from_slice(&[
         account_comm_key.balance_gen(),
-        account_comm_key.rho_gen(),
         account_comm_key.current_rho_gen(),
-        account_comm_key.randomness_gen(),
+        account_comm_key.rho_gen(),
         account_comm_key.current_randomness_gen(),
+        account_comm_key.randomness_gen(),
     ]);
     new_blindings.extend_from_slice(&[
         new_balance_blinding,
@@ -4175,7 +4175,7 @@ pub const PALLAS_FR_SMOOTH_ORDER: [u64; 1] = [0x16ca4b3700000000];
 /// `account_commitment = pk + g_balance * balance + g_asset_id * asset_id + (g_rho + g_current_rho) * initial_rho + (g_randomness + g_current_randomness) * initial_randomness`,
 /// `initial_rho^smooth_order != 1` and `initial_randomness != 0`. With `smooth_order` the smooth
 /// part of `p - 1`, the order of `initial_rho` has a prime factor outside it, so the nullifiers
-/// `g_rho * initial_rho^k` don't repeat within that many state changes.
+/// `g_current_rho * initial_rho^k` don't repeat within that many state changes.
 pub fn ensure_valid_fee_registration_opening<G: AffineRepr>(
     account_commitment: &FeeAccountStateCommitment<G>,
     pk: &G,
@@ -5637,9 +5637,9 @@ pub mod tests {
     }
 
     /// Builds a split fee payment where the host gives the device `auth_new_randomness + delta`
-    /// and publishes `C_new + B_blinding * delta`. Returns whether the host part verifies, after
-    /// asserting the auth proof does.
-    fn split_payment_with_new_blinding_offset(delta: F0) -> bool {
+    /// and publishes `C_new + B_blinding * delta`. Returns whether the host part verifies without and
+    /// with `RandomizedMultChecker`, after asserting the auth proof does.
+    fn split_payment_with_new_blinding_offset(delta: F0) -> (bool, bool) {
         let mut rng = rand::thread_rng();
         let (account_tree_params, account_comm_key, _) = setup_gens_new::<{ 1 << 13 }>(b"testing");
         let asset_id = 1;
@@ -5723,7 +5723,7 @@ pub mod tests {
                 host_proof: host_commitment_proof,
             },
         };
-        proof
+        let verified = proof
             .verify_host_and_return_tuples::<_, PallasParams, VestaParams>(
                 asset_id,
                 fee_amount,
@@ -5739,17 +5739,48 @@ pub mod tests {
             .and_then(|(even_tuple, odd_tuple, _)| {
                 handle_verification_tuples(even_tuple, odd_tuple, &account_tree_params, None)
             })
-            .is_ok()
+            .is_ok();
+
+        let mut rmc_0 = RandomizedMultChecker::new(F0::rand(&mut rng));
+        let mut rmc_1 = RandomizedMultChecker::new(F1::rand(&mut rng));
+        let verified_with_rmc = proof
+            .verify_host_and_return_tuples::<_, PallasParams, VestaParams>(
+                asset_id,
+                fee_amount,
+                updated_account_comm,
+                nullifier,
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                &mut rng,
+                Some(&mut rmc_0),
+            )
+            .and_then(|(even_tuple, odd_tuple, _)| {
+                handle_verification_tuples(
+                    even_tuple,
+                    odd_tuple,
+                    &account_tree_params,
+                    Some((&mut rmc_0, &mut rmc_1)),
+                )
+            })
+            .and_then(|_| verify_rmc(rmc_0, rmc_1))
+            .is_ok();
+        (verified, verified_with_rmc)
     }
 
     #[test]
     fn split_fee_payment_rejects_blinding_offset_in_new_commitment() {
         // The device's `B_blinding` share in the new commitment is anchored by `rand_new_comm_anchor`,
         // so a host that offsets it by `delta` (moving the new commitment off its opening) is rejected.
-        assert!(split_payment_with_new_blinding_offset(F0::from(0u8)));
-        assert!(!split_payment_with_new_blinding_offset(F0::rand(
-            &mut rand::thread_rng()
-        )));
+        assert_eq!(
+            split_payment_with_new_blinding_offset(F0::from(0u8)),
+            (true, true)
+        );
+        assert_eq!(
+            split_payment_with_new_blinding_offset(F0::rand(&mut rand::thread_rng())),
+            (false, false)
+        );
     }
 
     #[test]
@@ -6717,6 +6748,28 @@ pub mod tests {
             }
 
             #[test]
+            fn split_fee_payment_rejects_host_anchor_not_matching_new_commitment() {
+                // The host hashes the device's anchor `anchor_gen * (rand_new_comm + delta)` but its new
+                // commitment carries `-rand_new_comm`, so only the anchor relation fails.
+                let mut rng = rand::thread_rng();
+                for (delta, verifies) in [(F0::from(0u8), true), (F0::rand(&mut rng), false)] {
+                    init_host_rand_new_comm_anchor_protocol::<PallasA>.mock_safe(
+                        move |rand_new_comm, blinding, anchor_gen| {
+                            MockResult::Return((
+                                PokDiscreteLogProtocol::init(-rand_new_comm, blinding, &anchor_gen),
+                                (anchor_gen * (rand_new_comm + delta)).into_affine(),
+                            ))
+                        },
+                    );
+                    assert_eq!(
+                        split_payment_with_new_blinding_offset(delta),
+                        (verifies, verifies)
+                    );
+                    init_host_rand_new_comm_anchor_protocol::<PallasA>.clear_mock();
+                }
+            }
+
+            #[test]
             fn fee_account_topup_txn_with_mocked_rho_fails_verification() {
                 // Mock the topup nullifier proof to use a forged rho (so the published nullifier no longer matches the committed account's rho); the verifier must reject the proof.
                 let mut rng = rand::thread_rng();
@@ -6750,10 +6803,11 @@ pub mod tests {
                 let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
                 let root = account_tree.root_node();
 
-                let honest_nullifier = (account_comm_key.rho_gen() * account.rho).into_affine();
+                let honest_nullifier =
+                    (account_comm_key.current_rho_gen() * account.rho).into_affine();
                 let mocked_rho = F0::rand(&mut rng);
                 let expected_mocked_nullifier =
-                    (account_comm_key.rho_gen() * mocked_rho).into_affine();
+                    (account_comm_key.current_rho_gen() * mocked_rho).into_affine();
 
                 mock_nullifier_for_ck(&account_comm_key, expected_mocked_nullifier);
                 FeeAccountTopupTxnWithoutSkProtocol::<
@@ -6975,10 +7029,11 @@ pub mod tests {
                 let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
                 let root = account_tree.root_node();
 
-                let honest_nullifier = (account_comm_key.rho_gen() * account.rho).into_affine();
+                let honest_nullifier =
+                    (account_comm_key.current_rho_gen() * account.rho).into_affine();
                 let mocked_rho = F0::rand(&mut rng);
                 let expected_mocked_nullifier =
-                    (account_comm_key.rho_gen() * mocked_rho).into_affine();
+                    (account_comm_key.current_rho_gen() * mocked_rho).into_affine();
 
                 mock_nullifier_for_ck(&account_comm_key, expected_mocked_nullifier);
                 FeePaymentWithoutCommitmentsProtocol::<
