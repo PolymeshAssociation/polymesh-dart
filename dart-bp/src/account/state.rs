@@ -245,8 +245,8 @@ impl<G: AffineRepr> AccountStateBuilder<G> {
     /// Update state for minting (increase balance)
     pub fn update_for_mint(&mut self, amount: u64) -> Result<()> {
         #[cfg(not(feature = "ignore_prover_input_sanitation"))]
-        if amount + self.state.balance > MAX_BALANCE {
-            return Err(Error::AmountTooLarge(amount + self.state.balance));
+        {
+            checked_add_balance(self.state.balance, amount)?;
         }
         self.state.balance += amount;
         Ok(())
@@ -255,9 +255,7 @@ impl<G: AffineRepr> AccountStateBuilder<G> {
     /// Update state for sending (decrease balance, increment counter)
     pub fn update_for_send(&mut self, amount: u64) -> Result<()> {
         #[cfg(not(feature = "ignore_prover_input_sanitation"))]
-        if amount > self.state.balance {
-            return Err(Error::AmountTooLarge(amount));
-        }
+        ensure_sufficient_balance(self.state.balance, amount)?;
         self.state.balance -= amount;
         self.state.counter += 1;
         Ok(())
@@ -272,14 +270,8 @@ impl<G: AffineRepr> AccountStateBuilder<G> {
     pub fn update_for_claiming_received(&mut self, amount: u64) -> Result<()> {
         #[cfg(not(feature = "ignore_prover_input_sanitation"))]
         {
-            if self.state.counter == 0 {
-                return Err(Error::ProofOfBalanceError(
-                    "Counter must be greater than 0".to_string(),
-                ));
-            }
-            if amount + self.state.balance > MAX_BALANCE {
-                return Err(Error::AmountTooLarge(amount + self.state.balance));
-            }
+            ensure_nonzero_counter(self.state.counter)?;
+            checked_add_balance(self.state.balance, amount)?;
         }
         self.state.balance += amount;
         self.state.counter -= 1;
@@ -290,14 +282,8 @@ impl<G: AffineRepr> AccountStateBuilder<G> {
     pub fn update_for_reversing_send(&mut self, amount: u64) -> Result<()> {
         #[cfg(not(feature = "ignore_prover_input_sanitation"))]
         {
-            if self.state.counter == 0 {
-                return Err(Error::ProofOfBalanceError(
-                    "Counter must be greater than 0".to_string(),
-                ));
-            }
-            if amount + self.state.balance > MAX_BALANCE {
-                return Err(Error::AmountTooLarge(amount + self.state.balance));
-            }
+            ensure_nonzero_counter(self.state.counter)?;
+            checked_add_balance(self.state.balance, amount)?;
         }
         self.state.balance += amount;
         self.state.counter -= 1;
@@ -323,9 +309,7 @@ impl<G: AffineRepr> AccountStateBuilder<G> {
     /// Update state for irreversible send (decrease balance only, no counter change)
     pub fn update_for_irreversible_send(&mut self, amount: u64) -> Result<()> {
         #[cfg(not(feature = "ignore_prover_input_sanitation"))]
-        if amount > self.state.balance {
-            return Err(Error::AmountTooLarge(amount));
-        }
+        ensure_sufficient_balance(self.state.balance, amount)?;
         self.state.balance -= amount;
         Ok(())
     }
@@ -333,8 +317,8 @@ impl<G: AffineRepr> AccountStateBuilder<G> {
     /// Update state for irreversible receive (increase balance only, no counter change)
     pub fn update_for_irreversible_receive(&mut self, amount: u64) -> Result<()> {
         #[cfg(not(feature = "ignore_prover_input_sanitation"))]
-        if amount + self.state.balance > MAX_BALANCE {
-            return Err(Error::AmountTooLarge(amount + self.state.balance));
+        {
+            checked_add_balance(self.state.balance, amount)?;
         }
         self.state.balance += amount;
         Ok(())
@@ -509,8 +493,8 @@ where
 
     pub fn get_state_for_mint(&self, amount: u64) -> Result<Self> {
         #[cfg(not(feature = "ignore_prover_input_sanitation"))]
-        if amount + self.balance > MAX_BALANCE {
-            return Err(Error::AmountTooLarge(amount + self.balance));
+        {
+            checked_add_balance(self.balance, amount)?;
         }
         let mut new = self.clone();
         new.balance += amount;
@@ -520,9 +504,7 @@ where
 
     pub fn get_state_for_send(&self, amount: u64) -> Result<Self> {
         #[cfg(not(feature = "ignore_prover_input_sanitation"))]
-        if amount > self.balance {
-            return Err(Error::AmountTooLarge(amount));
-        }
+        ensure_sufficient_balance(self.balance, amount)?;
         let mut new = self.clone();
         new.balance -= amount;
         new.counter += 1;
@@ -540,14 +522,8 @@ where
     pub fn get_state_for_claiming_received(&self, amount: u64) -> Result<Self> {
         #[cfg(not(feature = "ignore_prover_input_sanitation"))]
         {
-            if self.counter == 0 {
-                return Err(Error::ProofOfBalanceError(
-                    "Counter must be greater than 0".to_string(),
-                ));
-            }
-            if amount + self.balance > MAX_BALANCE {
-                return Err(Error::AmountTooLarge(amount + self.balance));
-            }
+            ensure_nonzero_counter(self.counter)?;
+            checked_add_balance(self.balance, amount)?;
         }
         let mut new = self.clone();
         new.balance += amount;
@@ -559,14 +535,8 @@ where
     pub fn get_state_for_reversing_send(&self, amount: u64) -> Result<Self> {
         #[cfg(not(feature = "ignore_prover_input_sanitation"))]
         {
-            if self.counter == 0 {
-                return Err(Error::ProofOfBalanceError(
-                    "Counter must be greater than 0".to_string(),
-                ));
-            }
-            if amount + self.balance > MAX_BALANCE {
-                return Err(Error::AmountTooLarge(amount + self.balance));
-            }
+            ensure_nonzero_counter(self.counter)?;
+            checked_add_balance(self.balance, amount)?;
         }
         let mut new = self.clone();
         new.balance += amount;
@@ -594,9 +564,7 @@ where
 
     pub fn get_state_for_irreversible_send(&self, amount: u64) -> Result<Self> {
         #[cfg(not(feature = "ignore_prover_input_sanitation"))]
-        if amount > self.balance {
-            return Err(Error::AmountTooLarge(amount));
-        }
+        ensure_sufficient_balance(self.balance, amount)?;
         let mut new = self.clone();
         new.balance -= amount;
         new.refresh_randomness_for_state_change();
@@ -605,8 +573,8 @@ where
 
     pub fn get_state_for_irreversible_receive(&self, amount: u64) -> Result<Self> {
         #[cfg(not(feature = "ignore_prover_input_sanitation"))]
-        if amount + self.balance > MAX_BALANCE {
-            return Err(Error::AmountTooLarge(amount + self.balance));
+        {
+            checked_add_balance(self.balance, amount)?;
         }
         let mut new = self.clone();
         new.balance += amount;
@@ -616,8 +584,8 @@ where
 
     pub fn get_state_for_deposit(&self, amount: u64) -> Result<Self> {
         #[cfg(not(feature = "ignore_prover_input_sanitation"))]
-        if amount + self.balance > MAX_BALANCE {
-            return Err(Error::AmountTooLarge(amount + self.balance));
+        {
+            checked_add_balance(self.balance, amount)?;
         }
         let mut new = self.clone();
         new.balance += amount;
@@ -627,9 +595,7 @@ where
 
     pub fn get_state_for_withdraw(&self, amount: u64) -> Result<Self> {
         #[cfg(not(feature = "ignore_prover_input_sanitation"))]
-        if amount > self.balance {
-            return Err(Error::AmountTooLarge(amount));
-        }
+        ensure_sufficient_balance(self.balance, amount)?;
         let mut new = self.clone();
         new.balance -= amount;
         new.refresh_randomness_for_state_change();
@@ -677,6 +643,32 @@ where
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct AccountStateCommitment<G: AffineRepr>(pub G);
+
+fn checked_add_balance(balance: Balance, amount: Balance) -> Result<Balance> {
+    let new_balance = amount
+        .checked_add(balance)
+        .ok_or_else(|| Error::AmountTooLarge(Balance::MAX))?;
+    if new_balance > MAX_BALANCE {
+        return Err(Error::AmountTooLarge(new_balance));
+    }
+    Ok(new_balance)
+}
+
+fn ensure_sufficient_balance(balance: Balance, amount: Balance) -> Result<()> {
+    if amount > balance {
+        return Err(Error::AmountTooLarge(amount));
+    }
+    Ok(())
+}
+
+fn ensure_nonzero_counter(counter: PendingTxnCounter) -> Result<()> {
+    if counter == 0 {
+        return Err(Error::ProofOfBalanceError(
+            "Counter must be greater than 0".to_string(),
+        ));
+    }
+    Ok(())
+}
 
 #[cfg(test)]
 mod tests {
@@ -850,5 +842,58 @@ mod tests {
                 _ => unreachable!(),
             }
         }
+    }
+
+    #[test]
+    fn state_helpers_reject_balance_overflow_at_max() {
+        let at_max = test_account_state(MAX_BALANCE, 1);
+        assert_err!(
+            at_max.get_state_for_mint(1),
+            Error::AmountTooLarge(_),
+            "Amount is too large"
+        );
+        assert_err!(
+            at_max.get_state_for_irreversible_receive(1),
+            Error::AmountTooLarge(_),
+            "Amount is too large"
+        );
+        assert_err!(
+            at_max.get_state_for_deposit(1),
+            Error::AmountTooLarge(_),
+            "Amount is too large"
+        );
+
+        let near_max = test_account_state(MAX_BALANCE - 10, 1);
+        assert_err!(
+            near_max.get_state_for_irreversible_receive(20),
+            Error::AmountTooLarge(_),
+            "Amount is too large"
+        );
+        assert_err!(
+            near_max.get_state_for_claiming_received(20),
+            Error::AmountTooLarge(_),
+            "Amount is too large"
+        );
+
+        assert_eq!(
+            near_max
+                .get_state_for_irreversible_receive(10)
+                .unwrap()
+                .balance(),
+            MAX_BALANCE
+        );
+
+        let mut b = AccountStateBuilder::init(test_account_state(MAX_BALANCE, 1));
+        assert_err!(
+            b.update_for_mint(1),
+            Error::AmountTooLarge(_),
+            "Amount is too large"
+        );
+        let mut b = AccountStateBuilder::init(test_account_state(MAX_BALANCE - 10, 1));
+        assert_err!(
+            b.update_for_reversing_send(20),
+            Error::AmountTooLarge(_),
+            "Amount is too large"
+        );
     }
 }

@@ -4,7 +4,7 @@ use std::hint::black_box;
 use ark_pallas::Fr;
 use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
 use polymesh_dart_bp::discrete_log::solve_discrete_log_precomputed;
-use polymesh_dart_common::MAX_BALANCE;
+use polymesh_dart_common::MAX_AMOUNT;
 
 fn discrete_log_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("Discrete Log BSGS Alt");
@@ -17,7 +17,7 @@ fn discrete_log_benchmark(c: &mut Criterion) {
         let enc_amount = enc_gen * Fr::from(amount);
 
         let now = std::time::Instant::now();
-        let value = solve_discrete_log_precomputed(MAX_BALANCE, enc_gen, black_box(enc_amount))
+        let value = solve_discrete_log_precomputed(MAX_AMOUNT, enc_gen, black_box(enc_amount))
             .expect("Failed to solve discrete log for base");
         let elapsed = now.elapsed().as_secs_f32();
         println!("Warm-up discrete log took {:.3?} secs", elapsed);
@@ -32,7 +32,7 @@ fn discrete_log_benchmark(c: &mut Criterion) {
         group.bench_with_input(&name, &enc_amount, |b, enc_amount| {
             b.iter(|| {
                 let value =
-                    solve_discrete_log_precomputed(MAX_BALANCE, enc_gen, black_box(*enc_amount))
+                    solve_discrete_log_precomputed(MAX_AMOUNT, enc_gen, black_box(*enc_amount))
                         .expect("Failed to solve discrete log for base");
                 assert_eq!(amount, value);
             })
@@ -71,7 +71,7 @@ fn discrete_log_benchmark(c: &mut Criterion) {
             (2u64.pow(45), "2^45"),
             (2u64.pow(46), "2^46"),
             (2u64.pow(47), "2^47"),
-            (MAX_BALANCE, "MAX BALANCE"),
+            (MAX_AMOUNT, "MAX AMOUNT"),
             (2u64.pow(49), "2^49"),
             (2u64.pow(50), "2^50"),
             (2u64.pow(51), "2^51"),

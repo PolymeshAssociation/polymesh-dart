@@ -237,6 +237,34 @@ impl AssetInfo {
     pub fn mediators(&self) -> Result<Vec<(AccountPublicKey, EncryptionPublicKey)>> {
         Ok(Decode::decode(&mut self.mediators.as_slice())?)
     }
+
+    /// Read `total_supply`, stored as decimal `TEXT`: the full `u64` range does not fit
+    /// SQLite's signed-64-bit `INTEGER`. DBs written before the switch still hold `INTEGER`
+    /// values, which read back fine through the fallback arm.
+    fn read_total_supply(row: &rusqlite::Row) -> rusqlite::Result<Balance> {
+        let value = row.get::<_, rusqlite::types::Value>(5)?;
+        match &value {
+            rusqlite::types::Value::Text(s) => s.parse::<Balance>().map_err(|_| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    5,
+                    rusqlite::types::Type::Text,
+                    "total_supply is not a decimal integer".into(),
+                )
+            }),
+            rusqlite::types::Value::Integer(i) => u64::try_from(*i).map_err(|_| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    5,
+                    rusqlite::types::Type::Integer,
+                    "total_supply out of range".into(),
+                )
+            }),
+            _ => Err(rusqlite::Error::FromSqlConversionFailure(
+                5,
+                value.data_type(),
+                "total_supply is neither TEXT nor INTEGER".into(),
+            )),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -386,7 +414,7 @@ impl DartTestingDb {
                 issuer_signer_id INTEGER NOT NULL,
                 auditors BLOB NOT NULL,
                 mediators BLOB NOT NULL,
-                total_supply INTEGER NOT NULL DEFAULT 0,
+                total_supply TEXT NOT NULL DEFAULT '0',
                 FOREIGN KEY(issuer_signer_id) REFERENCES signers(id)
             )",
             [],
@@ -751,7 +779,7 @@ impl DartTestingDb {
                 issuer_signer_id: row.get(2)?,
                 auditors: row.get(3)?,
                 mediators: row.get(4)?,
-                total_supply: row.get(5)?,
+                total_supply: AssetInfo::read_total_supply(row)?,
             })
         })?;
         Ok(asset)
@@ -999,7 +1027,7 @@ impl DartTestingDb {
 
         self.conn.execute(
             "UPDATE assets SET total_supply = ?1 WHERE asset_id = ?2",
-            params![asset_info.total_supply, asset_id],
+            params![asset_info.total_supply.to_string(), asset_id],
         )?;
 
         Ok(())
@@ -1750,7 +1778,7 @@ impl DartTestingDb {
                 issuer_signer_id: row.get(2)?,
                 auditors: row.get(3)?,
                 mediators: row.get(4)?,
-                total_supply: row.get(5)?,
+                total_supply: AssetInfo::read_total_supply(row)?,
             })
         })?;
 

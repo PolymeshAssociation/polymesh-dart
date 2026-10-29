@@ -93,7 +93,9 @@ std = [
 	"lazy_static",
 	"itertools/use_std",
 	"ark-dlog-gadget/std",
-	"ark-ec-divisors/std"
+	"ark-ec-divisors/std",
+	"dock_crypto_utils/std",
+	"schnorr_pok/std"
 ]
 
 # Turn on this feature for faster proof verification.
