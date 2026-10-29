@@ -2049,16 +2049,17 @@ mod tests {
             auth_rand_new_comm,
             k_amounts.to_vec(),
             k_asset_ids.to_vec(),
+            alice_updated.openings(),
             device_legs,
             &re_randomized_leaf,
             &alice_updated_comm.0,
             nullifier,
             nonce,
             &device_txn_type,
-            account_comm_key.sk_gen(),
-            account_comm_key.sk_enc_gen(),
             b_blinding,
+            account_tree_params.even_parameters.pc_gens().B,
             enc_gen,
+            &account_comm_key,
         )
         .unwrap();
 
@@ -2100,6 +2101,7 @@ mod tests {
                 account_comm_key.sk_gen(),
                 account_comm_key.sk_enc_gen(),
                 b_blinding,
+                account_tree_params.even_parameters.pc_gens().B,
                 enc_gen,
                 None,
             )
