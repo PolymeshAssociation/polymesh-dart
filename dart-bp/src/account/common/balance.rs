@@ -179,7 +179,7 @@ pub fn ensure_peak_within_limit(
                 .sum::<u128>();
         if peak > MAX_BALANCE as u128 {
             // `peak` is u128
-            return Err(Error::AmountTooLarge(Balance::MAX));
+            return Err(Error::AmountTooLarge(MAX_BALANCE));
         }
         Ok(())
     }
