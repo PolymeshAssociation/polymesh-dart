@@ -295,6 +295,8 @@ pub fn enforce_constraints_for_balance_change<F: PrimeField, CS: ConstraintSyste
         new_bal.map(|a| a as u128),
         BALANCE_BITS.into(),
     )?;
+    // With both increases and decreases, an increases-first replay peaks at `old + \sum increases`.
+    // A range proof on that sum would ensure the replay never goes above `MAX_BALANCE` more.
     Ok(())
 }
 
