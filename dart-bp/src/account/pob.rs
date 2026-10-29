@@ -482,7 +482,7 @@ impl<G: AffineRepr> PobWithAnyoneProof<G> {
         let mut t_asset_id = Vec::with_capacity(num_pending_txns);
         let mut eph_pk_bases_for_asset_id = Vec::with_capacity(num_pending_txns);
 
-        // For proving correctness of twisted Elgamal ciphertext of participant in each leg: `C_s - pk_enc = S[0] * sk_en^{-1}` or `C_r - pk_enc = R[0] * sk_en^{-1}`
+        // For proving correctness of twisted Elgamal ciphertext of participant in each leg: `C_s - pk_enc = S[0] * sk_en^{-1}` or `C_r - pk_enc = R[1] * sk_en^{-1}`
         let mut t_participant = Vec::with_capacity(num_pending_txns);
 
         // `C_s' = S[0]' * sk_en^{-1}` or `C_r' = R[1]' * sk_en^{-1}`, reusing the same `sk_en^{-1}` and blinding

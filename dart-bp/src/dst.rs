@@ -160,7 +160,7 @@ define_dsts! {
     POB_PARTICIPANT_SEND = b"dart/pob/participant-send";
     /// PoB prover's second sender-role proof: `ct_s' = S[0]' * sk_enc^-1`.
     POB_PARTICIPANT_SEND_PRIME = b"dart/pob/participant-send-prime";
-    /// PoB prover's receiver-role ciphertext-participant proof: `ct_r - pk_enc = R[0] * sk_enc^-1`.
+    /// PoB prover's receiver-role ciphertext-participant proof: `ct_r - pk_enc = R[1] * sk_enc^-1`.
     POB_PARTICIPANT_RECV = b"dart/pob/participant-recv";
     /// PoB prover's second receiver-role proof: `ct_r' = R[1]' * sk_enc^-1`.
     POB_PARTICIPANT_RECV_PRIME = b"dart/pob/participant-recv-prime";
