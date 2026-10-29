@@ -10066,8 +10066,6 @@ macro_rules! gen_split_proof {
         b_blinding: $bb:expr,
         reveal_asset_id: $rai:expr $(,)?
     ) => {{
-        // ct_amount is needed when the leg reveals its asset-id (even with no balance change)
-        let k_1 = PallasFr::rand($rng);
         let k_asset_id = if !$rai {
             Some(PallasFr::rand($rng))
         } else {
@@ -10088,7 +10086,6 @@ macro_rules! gen_split_proof {
                 $ack.clone(),
                 $eg,
                 k_asset_id,
-                k_1,
             )
             .unwrap();
         let (challenge_h, re_randomized_leaf, auth_rerandomization, auth_rand_new_comm) =
@@ -10099,7 +10096,7 @@ macro_rules! gen_split_proof {
             $ske,
             auth_rerandomization,
             auth_rand_new_comm,
-            if $rai { vec![k_1] } else { vec![] },
+            vec![],
             if !$rai {
                 vec![k_asset_id.unwrap()]
             } else {
@@ -10280,7 +10277,6 @@ macro_rules! gen_split_proof {
         b_blinding: $bb:expr,
         reveal_asset_id: $rai:expr $(,)?
     ) => {{
-        let k_1 = PallasFr::rand($rng);
         let k_asset_id = if !$rai {
             Some(PallasFr::rand($rng))
         } else {
@@ -10301,7 +10297,6 @@ macro_rules! gen_split_proof {
                 $ack.clone(),
                 $eg,
                 k_asset_id,
-                k_1,
             )
             .unwrap();
         let (challenge_h, re_randomized_leaf, auth_rerandomization, auth_rand_new_comm) =
@@ -10322,7 +10317,7 @@ macro_rules! gen_split_proof {
             $ske,
             auth_rerandomization,
             auth_rand_new_comm,
-            if $rai { vec![k_1] } else { vec![] },
+            vec![],
             if !$rai {
                 vec![k_asset_id.unwrap()]
             } else {
@@ -12556,8 +12551,7 @@ fn make_receiver_split_proof(
     PallasA,
 ) {
     let b_blinding = account_tree_params.even_parameters.pc_gens().B_blinding;
-    // asset_id is revealed -> ct_amount is always needed; generate k_amount
-    let k_amount = PallasFr::rand(rng);
+    // Receiver affirmation does not change the balance: no ct_amount relation and no k_amount.
     let (protocol, mut even_prover, odd_prover, nullifier) = AffirmAsReceiverSplitProtocol::<
         64,
         PallasFr,
@@ -12577,7 +12571,6 @@ fn make_receiver_split_proof(
         account_comm_key.clone(),
         enc_gen,
         None, // asset_id revealed
-        k_amount,
     )
     .unwrap();
     let (challenge_h, re_randomized_leaf, auth_rerandomization, auth_rand_new_comm) =
@@ -12588,7 +12581,7 @@ fn make_receiver_split_proof(
         sk_e,
         auth_rerandomization,
         auth_rand_new_comm,
-        vec![k_amount], // revealed leg -> needs k_amount for ct_amount
+        vec![], // no balance change -> no ct_amount relation
         vec![],
         vec![LegProverConfig {
             encryption: leg_enc_core.clone(),
@@ -13808,7 +13801,6 @@ fn receiver_affirmation_w3_consistency() {
 
     // Derive a reference challenge_h for tampered cases.
     let reference_challenge_h = {
-        let k_amount_ref = PallasFr::rand(&mut rng);
         let (_, mut ep, _, _) = AffirmAsReceiverSplitProtocol::<
             64,
             PallasFr,
@@ -13828,7 +13820,6 @@ fn receiver_affirmation_w3_consistency() {
             account_comm_key.clone(),
             enc_gen,
             None,
-            k_amount_ref,
         )
         .unwrap();
         ep.transcript()
@@ -13845,7 +13836,6 @@ fn receiver_affirmation_w3_consistency() {
         PallasA,
     ) {
         let mut local_rng = rand::thread_rng();
-        let k_amount_local = PallasFr::rand(&mut local_rng);
         let (protocol, mut even_prover, odd_prover, nullifier) = AffirmAsReceiverSplitProtocol::<
             64,
             PallasFr,
@@ -13865,7 +13855,6 @@ fn receiver_affirmation_w3_consistency() {
             account_comm_key.clone(),
             enc_gen,
             None,
-            k_amount_local,
         )
         .unwrap();
         let mut ch_bytes = Vec::new();
@@ -13882,7 +13871,7 @@ fn receiver_affirmation_w3_consistency() {
             sk_r_e.0,
             auth_rerandomization,
             auth_rand_new_comm,
-            vec![k_amount_local], // revealed leg -> needs k_amount for ct_amount
+            vec![], // no balance change -> no ct_amount relation
             vec![],
             vec![LegProverConfig {
                 encryption: dev_leg_enc_core.clone(),
@@ -15793,10 +15782,13 @@ mod input_sanitation_disabled {
                       amounts,
                       has_balance_changed,
                       sk_enc_inv,
+                      sk_enc,
                       sk_enc_inv_blinding,
+                      sk_enc_blinding,
                       amount_blindings,
                       asset_id,
                       asset_id_blinding,
+                      enc_key_gen,
                       enc_gen| {
                     // amounts is &[Balance]; leak a forged slice of matching length.
                     let forged_amounts: &'static [Balance] =
@@ -15806,10 +15798,13 @@ mod input_sanitation_disabled {
                         forged_amounts,
                         has_balance_changed,
                         sk_enc_inv,
+                        sk_enc,
                         sk_enc_inv_blinding,
+                        sk_enc_blinding,
                         amount_blindings,
                         asset_id,
                         asset_id_blinding,
+                        enc_key_gen,
                         enc_gen,
                     ))
                 },
@@ -16252,10 +16247,11 @@ mod input_sanitation_disabled {
         #[test]
         fn revealed_receive_with_leg_link_wrong_enc_key_fails_verification() {
             // A receiver affirming a revealed-asset leg with no balance change must hold the
-            // account's encryption key, since the amount ciphertext is the only thing tying the
-            // account to the leg. Here the prover uses a different key (the kind of substitution the
-            // old participant relation allowed, e.g. the leg randomness r_1); the account commitment
-            // binds the real key, so verification must reject.
+            // account's encryption key, since the participant ciphertext relations are what bind the
+            // account to the leg (no amount relation is proved when the balance is unchanged). Here
+            // the prover uses a different key, the account commitment binds the real key, so
+            // verification fails.
+
             let mut rng = rand::thread_rng();
 
             const NUM_GENS: usize = 1 << 12;
@@ -16273,7 +16269,6 @@ mod input_sanitation_disabled {
             let asset_id = 1;
             let amount = 100u64;
 
-            // Revealed asset-id leg, no balance change -> LegAccountLink::AmountOnly.
             let conf = LegEncConfig {
                 visibility: PartyVisibility::FullVisibility,
                 reveal_asset_id: true,
@@ -16448,4 +16443,617 @@ mod input_sanitation_disabled {
     }
 
     // More tests can be added like secret key mismatch, incorrect rho or randomness creation, etc.
+}
+
+/// Binding of a leg's party points to the parties' registered encryption keys. A leg creator who
+/// holds a party's encryption key `sk_en` replaces that party's point `K = G * sk_en` with
+/// `K + H * sk_en * delta`, and sets the party's participant randomness (`r_1` for the sender, `r_2`
+/// for the receiver) to `sk_en`. With `delta = (v - v') / r_3` the party's key opens the amount
+/// ciphertext as `v'` while the other party opens it as `v`. With a hidden asset-id,
+/// `r_4 = (at - at') / delta` makes the party's key open the asset-id ciphertext as `at'`.
+mod leg_party_key_binding {
+    use super::*;
+    use crate::Error;
+    use crate::leg::LegEncCoreAndEphKeys;
+    use crate::test_utils::crafted_party_point_leg;
+    use ark_ec::AffineRepr;
+    use ark_ff::Field;
+
+    const NUM_GENS: usize = 1 << 13;
+    const L: usize = 64;
+    const ASSET_TREE_HEIGHT: usize = 4;
+    const ACCOUNT_TREE_HEIGHT: usize = 6;
+    /// Asset credited to the receiver.
+    const CREDITED_ASSET_ID: AssetId = 1;
+    /// Asset debited from the sender when the asset-id is hidden.
+    const OTHER_ASSET_ID: AssetId = 2;
+    const CREDIT: Balance = 100;
+    const DEBIT: Balance = 1;
+
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    enum Party {
+        Sender,
+        Receiver,
+    }
+
+    /// Plaintexts the leg encrypts and what each party's key opens them as.
+    struct LegView {
+        leg_amount: Balance,
+        leg_asset_id: AssetId,
+        sender_debit: Balance,
+        sender_asset_id: AssetId,
+        receiver_credit: Balance,
+        receiver_asset_id: AssetId,
+    }
+
+    fn leg_view(reveal_asset_id: bool, crafted: Option<Party>) -> LegView {
+        let debited_asset_id = if reveal_asset_id {
+            CREDITED_ASSET_ID
+        } else {
+            OTHER_ASSET_ID
+        };
+        let (leg_amount, leg_asset_id, sender_debit, sender_asset_id) = match crafted {
+            None => (CREDIT, CREDITED_ASSET_ID, CREDIT, CREDITED_ASSET_ID),
+            Some(Party::Sender) => (CREDIT, CREDITED_ASSET_ID, DEBIT, debited_asset_id),
+            Some(Party::Receiver) => (DEBIT, debited_asset_id, DEBIT, debited_asset_id),
+        };
+        LegView {
+            leg_amount,
+            leg_asset_id,
+            sender_debit,
+            sender_asset_id,
+            receiver_credit: CREDIT,
+            receiver_asset_id: CREDITED_ASSET_ID,
+        }
+    }
+
+    /// Creates the leg creation proof for `prover_leg_enc` and verifies it against
+    /// `verifier_leg_enc`.
+    fn prove_and_verify_leg(
+        reveal_asset_id: bool,
+        leg: Leg<PallasA>,
+        prover_leg_enc: LegEncryption<PallasA>,
+        verifier_leg_enc: LegEncryption<PallasA>,
+        leg_enc_rand: LegEncryptionRandomness<PallasFr>,
+        asset_id: AssetId,
+        pk_a: PallasA,
+        account_tree_params: &SelRerandProofParametersNew<
+            PallasParameters,
+            VestaParameters,
+            PallasParams,
+            VestaParams,
+        >,
+        enc_key_gen: PallasA,
+        enc_gen: PallasA,
+    ) -> Result<()> {
+        let mut rng = rand::thread_rng();
+        let g = enc_key_gen;
+        let nonce = b"leg_party_key_binding";
+        if reveal_asset_id {
+            let pc_gens = PedersenGens::<PallasA>::default();
+            let bp_gens = BulletproofGens::<PallasA>::new(NUM_GENS as u32, 1);
+            let leg_proof = PublicAssetLegCreationProof::<PallasParameters>::new(
+                &mut rng,
+                leg,
+                prover_leg_enc,
+                leg_enc_rand,
+                nonce,
+                &pc_gens,
+                &bp_gens,
+                g,
+                enc_gen,
+            )
+            .unwrap();
+            leg_proof.verify(
+                &mut rng,
+                verifier_leg_enc,
+                asset_id,
+                vec![pk_a],
+                vec![],
+                nonce,
+                &pc_gens,
+                &bp_gens,
+                g,
+                enc_gen,
+                None,
+            )
+        } else {
+            let asset_tree_params = SelRerandProofParametersNew::<
+                VestaParameters,
+                PallasParameters,
+                VestaParams,
+                PallasParams,
+            >::new(NUM_GENS as u32, NUM_GENS as u32)
+            .unwrap();
+            let asset_comm_params = AssetCommitmentParams::new(
+                b"asset-comm-params",
+                1,
+                0,
+                &account_tree_params.odd_parameters.bp_gens(),
+            );
+            let asset_data =
+                AssetData::new(asset_id, vec![pk_a], vec![], &asset_comm_params).unwrap();
+            let set = vec![asset_data.commitment];
+            let asset_tree = CurveTree::<L, 1, VestaParameters, PallasParameters>::from_leaves(
+                &set,
+                &asset_tree_params,
+                Some(ASSET_TREE_HEIGHT),
+            );
+            let asset_path = asset_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+            let asset_tree_root = asset_tree.root_node();
+            let leg_proof =
+                LegCreationProof::<L, PallasFr, VestaFr, PallasParameters, VestaParameters>::new::<
+                    _,
+                    PallasParams,
+                    VestaParams,
+                >(
+                    &mut rng,
+                    leg,
+                    prover_leg_enc,
+                    leg_enc_rand,
+                    asset_path,
+                    asset_data,
+                    &asset_tree_root,
+                    nonce,
+                    &asset_tree_params,
+                    &asset_comm_params,
+                    g,
+                    enc_gen,
+                )
+                .unwrap();
+            leg_proof.verify(
+                &mut rng,
+                verifier_leg_enc,
+                &asset_tree_root,
+                vec![],
+                nonce,
+                &asset_tree_params,
+                &asset_comm_params,
+                g,
+                enc_gen,
+                None,
+            )
+        }
+    }
+
+    /// Verification results of the leg creation proof and of the irreversible sender and receiver
+    /// affirmations.
+    struct Settlement {
+        creation: Result<()>,
+        sender: Result<()>,
+        receiver: Result<()>,
+    }
+
+    /// Creates and verifies the leg proof, then creates an irreversible sender affirmation and an
+    /// irreversible receiver affirmation as described by [`leg_view`] and verifies them. `tamper`
+    /// changes the leg before proving.
+    fn settle(
+        reveal_asset_id: bool,
+        crafted: Option<Party>,
+        tamper: impl Fn(&mut LegEncCoreAndEphKeys<PallasA>),
+    ) -> Settlement {
+        let mut rng = rand::thread_rng();
+        let (account_tree_params, account_comm_key, enc_gen) =
+            setup_gens_new::<NUM_GENS>(b"leg_party_key_binding");
+        let g = account_comm_key.sk_enc_gen();
+
+        let (
+            ((sk_s, pk_s), (sk_s_e, pk_s_e)),
+            ((sk_r, pk_r), (sk_r_e, pk_r_e)),
+            ((_, _), (_, pk_a_e)),
+        ) = setup_keys(&mut rng, account_comm_key.sk_gen(), g);
+        let (x, y) = (sk_s_e.0, sk_r_e.0);
+        let (k_s, k_r, pk_a) = (pk_s_e.0, pk_r_e.0, pk_a_e.0);
+        let view = leg_view(reveal_asset_id, crafted);
+
+        let (leg, mut leg_enc, leg_enc_rand) = match crafted {
+            Some(party) => {
+                let is_sender = party == Party::Sender;
+                let (sk_enc, other_point, opened_amount, opened_asset_id) = if is_sender {
+                    (x, k_r, view.sender_debit, view.sender_asset_id)
+                } else {
+                    (y, k_s, view.receiver_credit, view.receiver_asset_id)
+                };
+                crafted_party_point_leg(
+                    &mut rng,
+                    is_sender,
+                    sk_enc,
+                    other_point,
+                    vec![pk_a],
+                    view.leg_amount,
+                    view.leg_asset_id,
+                    opened_amount,
+                    opened_asset_id,
+                    reveal_asset_id,
+                    g,
+                    enc_gen,
+                )
+            }
+            None => {
+                let leg = Leg::new(
+                    k_s,
+                    k_r,
+                    view.leg_amount,
+                    view.leg_asset_id,
+                    vec![pk_a],
+                    vec![],
+                    vec![],
+                )
+                .unwrap();
+                let conf = LegEncConfig {
+                    visibility: PartyVisibility::FullVisibility,
+                    reveal_asset_id,
+                };
+                let (leg_enc, rand) = leg.encrypt(&mut rng, conf, g, enc_gen).unwrap();
+                (leg, leg_enc, rand)
+            }
+        };
+        tamper(&mut leg_enc.leg_enc_core_and_eph_keys);
+
+        // Each party's key recovers its own registered key and opens the leg as `view` says
+        let keys = &leg_enc.leg_enc_core_and_eph_keys;
+        let open = |ct: PallasA, eph: PallasA, sk: PallasFr| {
+            (ct - eph * sk.inverse().unwrap()).into_affine()
+        };
+        let h = |v: u64| (enc_gen * PallasFr::from(v)).into_affine();
+        assert_eq!(open(keys.core.ct_s, keys.eph_pk_s.r1, x), k_s);
+        assert_eq!(open(keys.core.ct_r, keys.eph_pk_r.r2, y), k_r);
+        assert_eq!(
+            open(keys.core.ct_amount, keys.eph_pk_s.r3, x),
+            h(view.sender_debit)
+        );
+        assert_eq!(
+            open(keys.core.ct_amount, keys.eph_pk_r.r3, y),
+            h(view.receiver_credit)
+        );
+        if let Some(ct_at) = keys.core.asset_id_ciphertext() {
+            assert_eq!(
+                open(ct_at, keys.eph_pk_s.r4.unwrap(), x),
+                h(view.sender_asset_id as u64)
+            );
+            assert_eq!(
+                open(ct_at, keys.eph_pk_r.r4.unwrap(), y),
+                h(view.receiver_asset_id as u64)
+            );
+        }
+
+        let creation = prove_and_verify_leg(
+            reveal_asset_id,
+            leg,
+            leg_enc.clone(),
+            leg_enc.clone(),
+            leg_enc_rand,
+            view.leg_asset_id,
+            pk_a,
+            &account_tree_params,
+            g,
+            enc_gen,
+        );
+
+        let nonce = b"leg_party_key_binding";
+
+        let sender_id = PallasFr::rand(&mut rng);
+        let (mut sender_account, _, _, _) =
+            new_account(&mut rng, view.sender_asset_id, pk_s, pk_s_e, sender_id);
+        sender_account.balance = view.sender_debit;
+        let sender_account_comm = sender_account.commit(account_comm_key.clone()).unwrap();
+
+        let receiver_id = PallasFr::rand(&mut rng);
+        let (mut receiver_account, _, _, _) =
+            new_account(&mut rng, view.receiver_asset_id, pk_r, pk_r_e, receiver_id);
+        receiver_account.balance = 0;
+        let receiver_account_comm = receiver_account.commit(account_comm_key.clone()).unwrap();
+
+        let account_comms = vec![sender_account_comm.0, receiver_account_comm.0];
+        let account_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
+            &account_comms,
+            &account_tree_params,
+            Some(ACCOUNT_TREE_HEIGHT),
+        );
+        let account_tree_root = account_tree.root_node();
+        let sender_path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+        let receiver_path = account_tree.get_path_to_leaf_for_proof(1, 0).unwrap();
+
+        let updated_sender_account = sender_account
+            .get_state_for_irreversible_send(view.sender_debit)
+            .unwrap();
+        let updated_sender_account_comm = updated_sender_account
+            .commit(account_comm_key.clone())
+            .unwrap();
+        let updated_receiver_account = receiver_account
+            .get_state_for_irreversible_receive(view.receiver_credit)
+            .unwrap();
+        let updated_receiver_account_comm = updated_receiver_account
+            .commit(account_comm_key.clone())
+            .unwrap();
+
+        // The provers accept the crafted point
+        let (sender_proof, sender_nullifier) =
+            IrreversibleAffirmAsSenderTxnProof::new::<_, PallasParams, VestaParams>(
+                &mut rng,
+                {
+                    let (c, e) = leg_enc.core_and_eph_keys_for_sender();
+                    (c, e, view.sender_debit)
+                },
+                AccountTxnWitness::new(
+                    sk_s.0,
+                    x,
+                    sender_account,
+                    updated_sender_account,
+                    updated_sender_account_comm,
+                ),
+                sender_path,
+                &account_tree_root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_gen,
+            )
+            .unwrap();
+        let sender = sender_proof.verify(
+            &mut rng,
+            leg_enc.core_and_eph_keys_for_sender(),
+            &account_tree_root,
+            updated_sender_account_comm,
+            sender_nullifier,
+            nonce,
+            &account_tree_params,
+            account_comm_key.clone(),
+            enc_gen,
+            None,
+        );
+
+        let (receiver_proof, receiver_nullifier) =
+            IrreversibleAffirmAsReceiverTxnProof::new::<_, PallasParams, VestaParams>(
+                &mut rng,
+                {
+                    let (c, e) = leg_enc.core_and_eph_keys_for_receiver();
+                    (c, e, view.receiver_credit)
+                },
+                AccountTxnWitness::new(
+                    sk_r.0,
+                    y,
+                    receiver_account,
+                    updated_receiver_account,
+                    updated_receiver_account_comm,
+                ),
+                receiver_path,
+                &account_tree_root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_gen,
+            )
+            .unwrap();
+        let receiver = receiver_proof.verify(
+            &mut rng,
+            leg_enc.core_and_eph_keys_for_receiver(),
+            &account_tree_root,
+            updated_receiver_account_comm,
+            receiver_nullifier,
+            nonce,
+            &account_tree_params,
+            account_comm_key,
+            enc_gen,
+            None,
+        );
+
+        Settlement {
+            creation,
+            sender,
+            receiver,
+        }
+    }
+
+    /// The crafted party's affirmation fails only on the second participant relation and the
+    /// other party's affirmation verifies.
+    fn assert_crafted_point_rejected(reveal_asset_id: bool, party: Party) {
+        let honest = settle(reveal_asset_id, None, |_| {});
+        honest.creation.unwrap();
+        honest.sender.unwrap();
+        honest.receiver.unwrap();
+
+        let Settlement {
+            creation,
+            sender,
+            receiver,
+        } = settle(reveal_asset_id, Some(party), |_| {});
+        // Leg creation accepts the crafted point
+        creation.unwrap();
+        let (crafted, other) = match party {
+            Party::Sender => (sender, receiver),
+            Party::Receiver => (receiver, sender),
+        };
+        other.unwrap();
+        assert_err!(
+            crafted,
+            Error::ProofVerificationError(_),
+            "Participant prime ciphertext verification failed"
+        );
+    }
+
+    #[test]
+    fn revealed_asset_leg_rejects_crafted_sender_point() {
+        assert_crafted_point_rejected(true, Party::Sender);
+    }
+
+    #[test]
+    fn hidden_asset_leg_rejects_crafted_sender_point() {
+        assert_crafted_point_rejected(false, Party::Sender);
+    }
+
+    #[test]
+    fn revealed_asset_leg_rejects_crafted_receiver_point() {
+        assert_crafted_point_rejected(true, Party::Receiver);
+    }
+
+    #[test]
+    fn hidden_asset_leg_rejects_crafted_receiver_point() {
+        assert_crafted_point_rejected(false, Party::Receiver);
+    }
+
+    /// Creates an honest leg, applies `tamper` to the encryption given to the verifier, and to the
+    /// one given to the prover when `tamper_prover`, and returns the leg creation verification
+    /// result.
+    fn verify_tampered_leg(
+        reveal_asset_id: bool,
+        tamper_prover: bool,
+        tamper: impl Fn(&mut LegEncCoreAndEphKeys<PallasA>),
+    ) -> Result<()> {
+        let mut rng = rand::thread_rng();
+        let (account_tree_params, account_comm_key, enc_gen) =
+            setup_gens_new::<NUM_GENS>(b"leg_party_key_binding");
+        let g = account_comm_key.sk_enc_gen();
+        let ((_, (_, pk_s_e)), (_, (_, pk_r_e)), (_, (_, pk_a_e))) =
+            setup_keys(&mut rng, account_comm_key.sk_gen(), g);
+        let leg = Leg::new(
+            pk_s_e.0,
+            pk_r_e.0,
+            CREDIT,
+            CREDITED_ASSET_ID,
+            vec![pk_a_e.0],
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        let conf = LegEncConfig {
+            visibility: PartyVisibility::FullVisibility,
+            reveal_asset_id,
+        };
+        let (leg_enc, rand) = leg.encrypt(&mut rng, conf, g, enc_gen).unwrap();
+        let mut tampered = leg_enc.clone();
+        tamper(&mut tampered.leg_enc_core_and_eph_keys);
+        let prover_leg_enc = if tamper_prover {
+            tampered.clone()
+        } else {
+            leg_enc
+        };
+        prove_and_verify_leg(
+            reveal_asset_id,
+            leg,
+            prover_leg_enc,
+            tampered,
+            rand,
+            CREDITED_ASSET_ID,
+            pk_a_e.0,
+            &account_tree_params,
+            g,
+            enc_gen,
+        )
+    }
+
+    #[test]
+    fn leg_creation_rejects_identity_participant_prime_ct() {
+        for reveal_asset_id in [true, false] {
+            assert_err!(
+                verify_tampered_leg(reveal_asset_id, false, |k| k.core.ct_s_prime =
+                    PallasA::zero()),
+                Error::ProofVerificationError(_),
+                "ct_s_prime is identity"
+            );
+            assert_err!(
+                verify_tampered_leg(reveal_asset_id, false, |k| k.core.ct_r_prime =
+                    PallasA::zero()),
+                Error::ProofVerificationError(_),
+                "ct_r_prime is identity"
+            );
+        }
+    }
+
+    #[test]
+    fn leg_creation_rejects_participant_prime_ct_not_under_enc_key_gen() {
+        for reveal_asset_id in [true, false] {
+            assert_err!(
+                verify_tampered_leg(reveal_asset_id, true, |k| k.core.ct_s_prime =
+                    PallasA::rand(&mut rand::thread_rng())),
+                Error::ProofVerificationError(_),
+                "resp_ct_s_prime verification failed"
+            );
+            assert_err!(
+                verify_tampered_leg(reveal_asset_id, true, |k| k.core.ct_r_prime =
+                    PallasA::rand(&mut rand::thread_rng())),
+                Error::ProofVerificationError(_),
+                "resp_ct_r_prime verification failed"
+            );
+        }
+    }
+
+    #[test]
+    fn leg_creation_rejects_participant_prime_eph_pk_not_scaled_eph_pk() {
+        for reveal_asset_id in [true, false] {
+            assert_err!(
+                verify_tampered_leg(reveal_asset_id, true, |k| k.eph_pk_s.r5 =
+                    PallasA::rand(&mut rand::thread_rng())),
+                Error::ProofVerificationError(_),
+                "resp_eph_pk_s_prime verification failed"
+            );
+            assert_err!(
+                verify_tampered_leg(reveal_asset_id, true, |k| k.eph_pk_r.r6 =
+                    PallasA::rand(&mut rand::thread_rng())),
+                Error::ProofVerificationError(_),
+                "resp_eph_pk_r_prime verification failed"
+            );
+        }
+    }
+
+    // Run these tests as cargo test --features=ignore_prover_input_sanitation input_sanitation_disabled
+    #[cfg(feature = "ignore_prover_input_sanitation")]
+    mod input_sanitation_disabled {
+        use super::*;
+
+        /// With `r_5 = 0` (resp. `r_6`) the crafted party's prime points are identity and the
+        /// second participant relation holds for the crafted point. The leg creation verifier and
+        /// the leg-link verifier each reject the leg, and the other party's affirmation verifies.
+        fn assert_identity_participant_prime_rejected(reveal_asset_id: bool, party: Party) {
+            let Settlement {
+                creation,
+                sender,
+                receiver,
+            } = settle(reveal_asset_id, Some(party), |k| match party {
+                Party::Sender => {
+                    k.core.ct_s_prime = PallasA::zero();
+                    k.eph_pk_s.r5 = PallasA::zero();
+                }
+                Party::Receiver => {
+                    k.core.ct_r_prime = PallasA::zero();
+                    k.eph_pk_r.r6 = PallasA::zero();
+                }
+            });
+            assert_err!(
+                creation,
+                Error::ProofVerificationError(_),
+                "eph_pk_s or eph_pk_r is identity"
+            );
+            let (crafted, other) = match party {
+                Party::Sender => (sender, receiver),
+                Party::Receiver => (receiver, sender),
+            };
+            other.unwrap();
+            assert_err!(
+                crafted,
+                Error::ProofVerificationError(_),
+                "Leg 0: ct_participant_prime is identity"
+            );
+        }
+
+        #[test]
+        fn revealed_asset_leg_rejects_identity_sender_prime_ct() {
+            assert_identity_participant_prime_rejected(true, Party::Sender);
+        }
+
+        #[test]
+        fn hidden_asset_leg_rejects_identity_sender_prime_ct() {
+            assert_identity_participant_prime_rejected(false, Party::Sender);
+        }
+
+        #[test]
+        fn revealed_asset_leg_rejects_identity_receiver_prime_ct() {
+            assert_identity_participant_prime_rejected(true, Party::Receiver);
+        }
+
+        #[test]
+        fn hidden_asset_leg_rejects_identity_receiver_prime_ct() {
+            assert_identity_participant_prime_rejected(false, Party::Receiver);
+        }
+    }
 }

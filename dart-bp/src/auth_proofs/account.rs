@@ -1,3 +1,4 @@
+use crate::account::common::leg_link::ensure_expected_leg_link_responses;
 use crate::account::{LegProverConfig, LegVerifierConfig};
 use crate::auth_proofs::helpers::{init_acc_comm_protocol, resp_acc_comm, verify_acc_comm};
 use crate::auth_proofs::{AUTH_TXN_LABEL, DeviceTxnType, NULLIFIER_LABEL};
@@ -20,7 +21,8 @@ use schnorr_pok::discrete_log::{
     PokDiscreteLogProtocol, PokPedersenCommitment, PokPedersenCommitmentProtocol,
 };
 use schnorr_pok::partial::{
-    Partial2PokPedersenCommitment, PartialPokDiscreteLog, PartialSchnorrResponse,
+    Partial2PokPedersenCommitment, PartialPokDiscreteLog, PartialPokPedersenCommitment,
+    PartialSchnorrResponse,
 };
 
 // Auth proof will prove a different relation for ct_amount and ct_asset_id.
@@ -36,6 +38,15 @@ use schnorr_pok::partial::{
 // Note that ct_amount_1 + ct_amount_2 = ct_amount and ct_asset_id_1 + ct_asset_id_2 = ct_asset_id
 //
 // Reason is challenge being different for auth proof and host so even if the blindings are same response will be different.
+//
+// The auth proof additionally proves the participant relations, with responses owned entirely by this proof:
+// ct_participant = S[0] * sk_enc^{-1} + enc_key_gen * sk_enc
+// ct_participant_prime = S[0]' * sk_enc^{-1}
+// where sk_enc^{-1} is `resp_enc_key_gen.response1` and sk_enc is
+// `resp_re_randomized_account_commitment.0[1]`
+// With the creation proofs' `ct_participant_prime = enc_key_gen * r_5` and `S[0]' = pk_s * r_5`, the
+// second relation pins the leg party point to the affirming account's registered encryption key
+// whenever `ct_participant_prime` is not identity.
 
 /// For non-fee account related transactions, affirmation, counter update, reverse
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
@@ -247,8 +258,40 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
         }
 
         for conf in legs_with_conf {
-            // ct_amount_1 = Eph_amt * sk_enc^-1 + comm_re_rand_gen * k. Built when the leg reveals
-            // its asset-id or user affirmation changes balance. sk_enc^-1 is shared (resp_enc_key_gen.response1),
+            // ct_participant = Eph_participant * sk_enc^-1 + enc_key_gen * sk_enc and
+            // ct_participant_prime = Eph_participant' * sk_enc^-1. Both responses are owned by this proof:
+            // sk_enc^-1 is `resp_enc_key_gen.response1` and sk_enc is
+            // `resp_re_randomized_account_commitment.0[1]`.
+            let is_sender = conf.party_eph_pk.is_sender();
+            let t_participant = PokPedersenCommitmentProtocol::init(
+                sk_enc_inv,
+                sk_enc_inv_blinding,
+                &conf.party_eph_pk.eph_pk_participant(),
+                sk_enc,
+                sk_enc_blinding,
+                &enc_key_gen,
+            );
+            t_participant.challenge_contribution(
+                &conf.party_eph_pk.eph_pk_participant(),
+                &enc_key_gen,
+                &conf.encryption.ct_participant(is_sender),
+                dst::AUTH_LEG_PARTICIPANT,
+                &mut transcript,
+            )?;
+            let t_participant_prime = PokDiscreteLogProtocol::init(
+                sk_enc_inv,
+                sk_enc_inv_blinding,
+                &conf.party_eph_pk.eph_pk_participant_prime(),
+            );
+            t_participant_prime.challenge_contribution(
+                &conf.party_eph_pk.eph_pk_participant_prime(),
+                &conf.encryption.ct_participant_prime(is_sender),
+                dst::AUTH_LEG_PARTICIPANT_PRIME,
+                &mut transcript,
+            )?;
+
+            // ct_amount_1 = Eph_amt * sk_enc^-1 + comm_re_rand_gen * k. Built only when the user
+            // affirmation changes the balance. sk_enc^-1 is shared (resp_enc_key_gen.response1),
             // k is internal (response2) and canceled by the host's ct_amount_2.
             let t_amount = if conf.needs_ct_amount() {
                 assert!(offset_amount < k_amounts.len());
@@ -332,7 +375,7 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
                 None
             };
 
-            t_leg_link.push((t_amount, t_asset_id));
+            t_leg_link.push((t_participant, t_participant_prime, t_amount, t_asset_id));
         }
 
         assert_eq!(offset_amount, k_amounts.len());
@@ -397,29 +440,18 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
             )?;
 
         let mut leg_links = Vec::with_capacity(t_leg_link.len());
-        for (t_amount, t_asset_id) in t_leg_link {
-            let resp_amount = t_amount.map(|t| t.gen_partial2_proof(&challenge));
-            let resp_asset_id = t_asset_id.map(|p| match p {
-                AssetIdProtocol::Elsewhere(d) => RespAssetId::Elsewhere(d.gen_partial_proof()),
-                AssetIdProtocol::Hidden(pc) => {
-                    RespAssetId::Hidden(pc.gen_partial2_proof(&challenge))
-                }
+        for (t_participant, t_participant_prime, t_amount, t_asset_id) in t_leg_link {
+            leg_links.push(LegAuthLink {
+                resp_participant: t_participant.gen_partial_proof(),
+                resp_participant_prime: t_participant_prime.gen_partial_proof(),
+                resp_amount: t_amount.map(|t| t.gen_partial2_proof(&challenge)),
+                resp_asset_id: t_asset_id.map(|p| match p {
+                    AssetIdProtocol::Elsewhere(d) => RespAssetId::Elsewhere(d.gen_partial_proof()),
+                    AssetIdProtocol::Hidden(pc) => {
+                        RespAssetId::Hidden(pc.gen_partial2_proof(&challenge))
+                    }
+                }),
             });
-            let link = match (resp_amount, resp_asset_id) {
-                (Some(resp_amount), None) => LegAuthLink::AmountOnly { resp_amount },
-                (None, Some(resp_asset_id)) => LegAuthLink::AssetIdOnly { resp_asset_id },
-                (Some(resp_amount), Some(resp_asset_id)) => LegAuthLink::AssetIdAndAmount {
-                    resp_asset_id,
-                    resp_amount,
-                },
-                _ => {
-                    return Err(Error::ProofGenerationError(
-                        "Leg has neither ct_amount nor ct_asset_id to tie it to the account"
-                            .to_string(),
-                    ));
-                }
-            };
-            leg_links.push(link);
         }
 
         let resp_D = t_D.gen_partial2_proof(&challenge);
@@ -565,7 +597,7 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
                     .filter_map(|(conf, link)| {
                         match (
                             conf.is_asset_id_revealed(),
-                            link.resp_asset_id(),
+                            link.resp_asset_id.as_ref(),
                             conf.encryption.asset_id_ciphertext(),
                         ) {
                             (false, Some(RespAssetId::Elsewhere(_)), Some(ct)) => {
@@ -584,8 +616,42 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
         let mut elsewhere_idx = 0usize;
 
         for (i, (conf, link)) in legs_conf.iter().zip(self.leg_links.iter()).enumerate() {
+            let is_sender = conf.party_eph_pk.is_sender();
+            let ct_participant = conf.encryption.ct_participant(is_sender);
+            let ct_participant_prime = conf.encryption.ct_participant_prime(is_sender);
+
+            // `ct_participant_prime = enc_key_gen * r_5` (resp. `r_6`) is identity iff `r_5 = 0`, which
+            // makes the second relation hold for any party point.
+            if ct_participant_prime.is_zero() {
+                return Err(Error::ProofVerificationError(format!(
+                    "Leg {i}: ct_participant_prime is identity"
+                )));
+            }
+
+            ensure_expected_leg_link_responses(
+                i,
+                link.resp_amount.is_some(),
+                link.resp_asset_id.is_some(),
+                conf.needs_ct_amount(),
+                conf.is_asset_id_revealed(),
+            )?;
+
+            link.resp_participant.challenge_contribution(
+                &conf.party_eph_pk.eph_pk_participant(),
+                &enc_key_gen,
+                &ct_participant,
+                dst::AUTH_LEG_PARTICIPANT,
+                &mut transcript,
+            )?;
+            link.resp_participant_prime.challenge_contribution(
+                &conf.party_eph_pk.eph_pk_participant_prime(),
+                &ct_participant_prime,
+                dst::AUTH_LEG_PARTICIPANT_PRIME,
+                &mut transcript,
+            )?;
+
             if conf.needs_ct_amount() {
-                let resp_amount = link.resp_amount().ok_or_else(|| {
+                let resp_amount = link.resp_amount.as_ref().ok_or_else(|| {
                     Error::ProofVerificationError(format!(
                         "Leg {i} required amount proof but auth proof is missing it"
                     ))
@@ -603,7 +669,7 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
 
             if !conf.is_asset_id_revealed() {
                 // If asset id is not revealed in this leg
-                let resp_asset_id = link.resp_asset_id().ok_or_else(|| {
+                let resp_asset_id = link.resp_asset_id.as_ref().ok_or_else(|| {
                     Error::ProofVerificationError(format!(
                         "Leg {i} required asset-id proof but auth proof is missing it"
                     ))
@@ -690,8 +756,32 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
         let mut elsewhere_idx = 0usize;
 
         for (i, (conf, link)) in legs_conf.iter().zip(self.leg_links.iter()).enumerate() {
+            // The participant relations share this proof's `sk_enc^-1`.
+            let is_sender = conf.party_eph_pk.is_sender();
+            verify_or_rmc_3!(
+                rmc,
+                link.resp_participant,
+                format!("Participant ciphertext verification failed for leg {i}"),
+                conf.encryption.ct_participant(is_sender),
+                conf.party_eph_pk.eph_pk_participant(),
+                enc_key_gen,
+                &challenge,
+                &self.resp_enc_key_gen.response1,
+                &self.resp_re_randomized_account_commitment.0[1],
+            );
+
+            verify_or_rmc_2!(
+                rmc,
+                link.resp_participant_prime,
+                format!("Participant prime ciphertext verification failed for leg {i}"),
+                conf.encryption.ct_participant_prime(is_sender),
+                conf.party_eph_pk.eph_pk_participant_prime(),
+                &challenge,
+                &self.resp_enc_key_gen.response1,
+            );
+
             if conf.needs_ct_amount() {
-                let resp_amount = link.resp_amount().ok_or_else(|| {
+                let resp_amount = link.resp_amount.as_ref().ok_or_else(|| {
                     Error::ProofVerificationError(format!(
                         "Leg {i} required amount proof but auth proof is missing it"
                     ))
@@ -712,7 +802,7 @@ impl<G: AffineRepr> AuthProofAffirmation<G> {
 
             if !conf.is_asset_id_revealed() {
                 // If asset id is not revealed in this leg
-                let resp_asset_id = link.resp_asset_id().ok_or_else(|| {
+                let resp_asset_id = link.resp_asset_id.as_ref().ok_or_else(|| {
                     Error::ProofVerificationError(format!(
                         "Leg {i} required asset-id proof but auth proof is missing it"
                     ))
@@ -795,54 +885,31 @@ pub enum RespAssetId<G: AffineRepr> {
     Hidden(Partial2PokPedersenCommitment<G>),
 }
 
-/// Device side per-leg response for the split proof. The variant depends on whether the leg
-/// reveals its asset-id and whether the balance changes, like `LegAccountLink` for the solo proof.
-#[derive(Clone, Debug)]
-pub enum LegAuthLink<G: AffineRepr> {
-    /// asset-id revealed in this leg
-    AmountOnly {
-        /// `ct_amount_1 = Eph_amt * sk_enc^-1 + comm_re_rand_gen * k_1`, `sk_enc^-1` shared, `k_1` owned
-        resp_amount: Partial2PokPedersenCommitment<G>,
-    },
-    /// asset-id encrypted, balance unchanged
-    AssetIdOnly {
-        /// Hidden: `ct_asset_id_1 = Eph_at * sk_enc^-1 + comm_re_rand_gen * k_2`, `sk_enc^-1` shared, `k_2` owned
-        /// Elsewhere: `ct_asset_id - enc_gen * at = Eph_at * sk_enc^-1`, `sk_enc^-1` shared
-        resp_asset_id: RespAssetId<G>,
-    },
-    /// asset-id encrypted, balance changed
-    AssetIdAndAmount {
-        /// Hidden: `ct_asset_id_1 = Eph_at * sk_enc^-1 + comm_re_rand_gen * k_2`, `sk_enc^-1` shared, `k_2` owned
-        /// Elsewhere: `ct_asset_id - enc_gen * at = Eph_at * sk_enc^-1`, `sk_enc^-1` shared
-        resp_asset_id: RespAssetId<G>,
-        /// `ct_amount_1 = Eph_amt * sk_enc^-1 + comm_re_rand_gen * k_1`, `sk_enc^-1` shared, `k_1` owned
-        resp_amount: Partial2PokPedersenCommitment<G>,
-    },
-}
-
-impl<G: AffineRepr> LegAuthLink<G> {
-    pub fn resp_amount(&self) -> Option<&Partial2PokPedersenCommitment<G>> {
-        match self {
-            Self::AmountOnly { resp_amount } => Some(resp_amount),
-            Self::AssetIdAndAmount { resp_amount, .. } => Some(resp_amount),
-            Self::AssetIdOnly { .. } => None,
-        }
-    }
-
-    pub fn resp_asset_id(&self) -> Option<&RespAssetId<G>> {
-        match self {
-            Self::AssetIdOnly { resp_asset_id } => Some(resp_asset_id),
-            Self::AssetIdAndAmount { resp_asset_id, .. } => Some(resp_asset_id),
-            Self::AmountOnly { .. } => None,
-        }
-    }
+/// Device side per-leg response for the split proof. The two participant relations
+/// (`ct_participant = eph_pk_participant * sk_enc^-1 + enc_key_gen * sk_enc` and
+/// `ct_participant_prime = eph_pk_participant_prime * sk_enc^-1`) are always present: `sk_enc^-1` is
+/// `resp_enc_key_gen.response1` and `sk_enc` is `resp_re_randomized_account_commitment.0[1]`, so
+/// both are owned by this proof. `ct_amount` is present if the balance changes and `ct_asset_id`
+/// if the asset-id is encrypted in the leg.
+#[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
+pub struct LegAuthLink<G: AffineRepr> {
+    /// `ct_participant = Eph_s * sk_enc^-1 + enc_key_gen * sk_enc`, `sk_enc^-1` and `sk_enc` shared
+    pub resp_participant: PartialPokPedersenCommitment<G>,
+    /// `ct_participant_prime = Eph_s' * sk_enc^-1`, `sk_enc^-1` shared
+    pub resp_participant_prime: PartialPokDiscreteLog<G>,
+    /// `ct_amount_1 = Eph_amt * sk_enc^-1 + comm_re_rand_gen * k_1`, `sk_enc^-1` shared, `k_1` owned
+    pub resp_amount: Option<Partial2PokPedersenCommitment<G>>,
+    /// Hidden: `ct_asset_id_1 = Eph_at * sk_enc^-1 + comm_re_rand_gen * k_2`, `sk_enc^-1` shared, `k_2` owned
+    /// Elsewhere: `ct_asset_id - enc_gen * at = Eph_at * sk_enc^-1`, `sk_enc^-1` shared
+    pub resp_asset_id: Option<RespAssetId<G>>,
 }
 
 mod serialization {
-    use crate::auth_proofs::account::{LegAuthLink, RespAssetId};
+    use crate::auth_proofs::account::RespAssetId;
     use crate::auth_proofs::*;
     use ark_serialize::{Compress, SerializationError, Valid, Validate};
     use ark_std::io::Read;
+    use schnorr_pok::partial::Partial2PokPedersenCommitment;
 
     impl<G: AffineRepr> CanonicalSerialize for RespAssetId<G> {
         fn serialize_with_mode<W: Write>(
@@ -900,102 +967,6 @@ mod serialization {
             }
         }
     }
-
-    impl<G: AffineRepr> CanonicalSerialize for LegAuthLink<G> {
-        fn serialize_with_mode<W: Write>(
-            &self,
-            mut writer: W,
-            compress: Compress,
-        ) -> Result<(), SerializationError> {
-            match self {
-                LegAuthLink::AmountOnly { resp_amount } => {
-                    0u8.serialize_with_mode(&mut writer, compress)?;
-                    resp_amount.serialize_with_mode(&mut writer, compress)
-                }
-                LegAuthLink::AssetIdOnly { resp_asset_id } => {
-                    1u8.serialize_with_mode(&mut writer, compress)?;
-                    resp_asset_id.serialize_with_mode(&mut writer, compress)
-                }
-                LegAuthLink::AssetIdAndAmount {
-                    resp_asset_id,
-                    resp_amount,
-                } => {
-                    2u8.serialize_with_mode(&mut writer, compress)?;
-                    resp_asset_id.serialize_with_mode(&mut writer, compress)?;
-                    resp_amount.serialize_with_mode(&mut writer, compress)
-                }
-            }
-        }
-
-        fn serialized_size(&self, compress: Compress) -> usize {
-            1 + match self {
-                LegAuthLink::AmountOnly { resp_amount } => resp_amount.serialized_size(compress),
-                LegAuthLink::AssetIdOnly { resp_asset_id } => {
-                    resp_asset_id.serialized_size(compress)
-                }
-                LegAuthLink::AssetIdAndAmount {
-                    resp_asset_id,
-                    resp_amount,
-                } => {
-                    resp_asset_id.serialized_size(compress) + resp_amount.serialized_size(compress)
-                }
-            }
-        }
-    }
-
-    impl<G: AffineRepr> CanonicalDeserialize for LegAuthLink<G> {
-        fn deserialize_with_mode<R: Read>(
-            mut reader: R,
-            compress: Compress,
-            validate: Validate,
-        ) -> Result<Self, SerializationError> {
-            match u8::deserialize_with_mode(&mut reader, compress, validate)? {
-                0 => Ok(LegAuthLink::AmountOnly {
-                    resp_amount: Partial2PokPedersenCommitment::deserialize_with_mode(
-                        &mut reader,
-                        compress,
-                        validate,
-                    )?,
-                }),
-                1 => Ok(LegAuthLink::AssetIdOnly {
-                    resp_asset_id: RespAssetId::deserialize_with_mode(
-                        &mut reader,
-                        compress,
-                        validate,
-                    )?,
-                }),
-                2 => Ok(LegAuthLink::AssetIdAndAmount {
-                    resp_asset_id: RespAssetId::deserialize_with_mode(
-                        &mut reader,
-                        compress,
-                        validate,
-                    )?,
-                    resp_amount: Partial2PokPedersenCommitment::deserialize_with_mode(
-                        &mut reader,
-                        compress,
-                        validate,
-                    )?,
-                }),
-                _ => Err(SerializationError::InvalidData),
-            }
-        }
-    }
-
-    impl<G: AffineRepr> Valid for LegAuthLink<G> {
-        fn check(&self) -> ark_std::result::Result<(), SerializationError> {
-            match self {
-                LegAuthLink::AmountOnly { resp_amount } => resp_amount.check(),
-                LegAuthLink::AssetIdOnly { resp_asset_id } => resp_asset_id.check(),
-                LegAuthLink::AssetIdAndAmount {
-                    resp_asset_id,
-                    resp_amount,
-                } => {
-                    resp_asset_id.check()?;
-                    resp_amount.check()
-                }
-            }
-        }
-    }
 }
 
 #[cfg(test)]
@@ -1004,10 +975,12 @@ mod tests {
     use crate::account::PartyEphemeralPublicKey;
     use crate::auth_proofs::DeviceAffirmationType;
     use crate::keys::keygen_enc;
-    use crate::leg::{Leg, LegEncConfig, PartyVisibility};
+    use crate::leg::{Leg, LegEncConfig, LegEncCoreAndEphKeys, PartyVisibility};
+    use crate::test_utils::crafted_party_point_leg;
     use ark_ec::short_weierstrass::Affine;
     use ark_pallas::{Fr, PallasConfig};
     use ark_std::UniformRand;
+    use polymesh_dart_common::{AssetId, Balance};
     use rand::thread_rng;
 
     #[test]
@@ -1189,5 +1162,194 @@ mod tests {
         verify(Some(false)).unwrap();
         assert!(verify(Some(true)).is_err());
         assert!(verify(None).is_err());
+    }
+
+    const LEG_AMOUNT: Balance = 100;
+    const LEG_ASSET_ID: AssetId = 7;
+
+    /// Leg amount and asset-id of a leg made by `crafted_party_point_leg`, which the affirming
+    /// party's key opens to `LEG_AMOUNT` of `LEG_ASSET_ID`.
+    const CRAFTED_LEG_AMOUNT: Balance = 1000;
+    const CRAFTED_LEG_ASSET_ID: AssetId = 8;
+
+    /// Proves and verifies an affirmation of `LEG_AMOUNT` of `LEG_ASSET_ID` by the chosen party of a
+    /// leg, made by `crafted_party_point_leg` when `crafted` and honestly otherwise. `tamper` changes
+    /// the leg before proving.
+    fn affirm_party_point_leg(
+        is_sender: bool,
+        reveal_asset_id: bool,
+        crafted: bool,
+        tamper: impl Fn(&mut LegEncCoreAndEphKeys<Affine<PallasConfig>>),
+    ) -> error::Result<()> {
+        let mut rng = thread_rng();
+        let sk_gen = Affine::<PallasConfig>::rand(&mut rng);
+        let enc_key_gen = Affine::<PallasConfig>::rand(&mut rng);
+        let comm_re_rand_gen = Affine::<PallasConfig>::rand(&mut rng);
+        let enc_gen = Affine::<PallasConfig>::rand(&mut rng);
+
+        let sk = Fr::rand(&mut rng);
+        let (sk_enc, ek) = keygen_enc(&mut rng, enc_key_gen);
+        let (_, other_ek) = keygen_enc(&mut rng, enc_key_gen);
+        let mut leg_enc = if crafted {
+            let leg_asset_id = if reveal_asset_id {
+                LEG_ASSET_ID
+            } else {
+                CRAFTED_LEG_ASSET_ID
+            };
+            crafted_party_point_leg(
+                &mut rng,
+                is_sender,
+                sk_enc.0,
+                other_ek.0,
+                vec![],
+                CRAFTED_LEG_AMOUNT,
+                leg_asset_id,
+                LEG_AMOUNT,
+                LEG_ASSET_ID,
+                reveal_asset_id,
+                enc_key_gen,
+                enc_gen,
+            )
+            .1
+        } else {
+            let (sender_pk, receiver_pk) = if is_sender {
+                (ek.0, other_ek.0)
+            } else {
+                (other_ek.0, ek.0)
+            };
+            let leg = Leg::new(
+                sender_pk,
+                receiver_pk,
+                LEG_AMOUNT,
+                LEG_ASSET_ID,
+                vec![],
+                vec![],
+                vec![],
+            )
+            .unwrap();
+            let cfg = LegEncConfig {
+                visibility: PartyVisibility::FullVisibility,
+                reveal_asset_id,
+            };
+            leg.encrypt(&mut rng, cfg, enc_key_gen, enc_gen).unwrap().0
+        };
+        tamper(&mut leg_enc.leg_enc_core_and_eph_keys);
+        let (leg_core, party_eph_pk) = if is_sender {
+            let (core, eph_pk) = leg_enc.core_and_eph_keys_for_sender();
+            (core, PartyEphemeralPublicKey::Sender(eph_pk))
+        } else {
+            let (core, eph_pk) = leg_enc.core_and_eph_keys_for_receiver();
+            (core, PartyEphemeralPublicKey::Receiver(eph_pk))
+        };
+
+        let pk = (sk_gen * sk + enc_key_gen * sk_enc.0).into_affine();
+        let rand_old = Fr::rand(&mut rng);
+        let rand_new = Fr::rand(&mut rng);
+        let re_rand_leaf = (pk + comm_re_rand_gen * rand_old).into_affine();
+        let updated_comm = (pk + comm_re_rand_gen * rand_new).into_affine();
+        let k_amounts = if is_sender {
+            vec![Fr::rand(&mut rng)]
+        } else {
+            vec![]
+        };
+        let k_asset_ids = if reveal_asset_id {
+            vec![]
+        } else {
+            vec![Fr::rand(&mut rng)]
+        };
+        let nullifier = Affine::<PallasConfig>::rand(&mut rng);
+        let nonce = b"party_point_binding";
+        let txn_type = DeviceTxnType::DeviceAffirmation {
+            typ: if is_sender {
+                DeviceAffirmationType::SenderAffirmation
+            } else {
+                DeviceAffirmationType::ReceiverAffirmation
+            },
+        };
+
+        // The prover accepts the crafted point
+        let proof = AuthProofAffirmation::new(
+            &mut rng,
+            sk,
+            sk_enc.0,
+            rand_old,
+            rand_new,
+            k_amounts,
+            k_asset_ids,
+            vec![LegProverConfig {
+                encryption: leg_core.clone(),
+                party_eph_pk: party_eph_pk.clone(),
+                amount: LEG_AMOUNT,
+                has_balance_changed: is_sender,
+                has_counter_decreased: Some(false),
+            }],
+            &re_rand_leaf,
+            &updated_comm,
+            nullifier,
+            nonce,
+            &txn_type,
+            sk_gen,
+            enc_key_gen,
+            comm_re_rand_gen,
+            enc_gen,
+        )
+        .unwrap();
+
+        proof.verify(
+            vec![LegVerifierConfig {
+                encryption: leg_core,
+                party_eph_pk,
+                has_balance_decreased: is_sender.then_some(true),
+                has_counter_decreased: Some(false),
+            }],
+            &re_rand_leaf,
+            &updated_comm,
+            nullifier,
+            nonce,
+            &txn_type,
+            sk_gen,
+            enc_key_gen,
+            comm_re_rand_gen,
+            enc_gen,
+            None,
+        )
+    }
+
+    #[test]
+    fn rejects_crafted_party_point() {
+        // Only the second participant relation rejects the crafted point
+        for is_sender in [true, false] {
+            for reveal_asset_id in [true, false] {
+                affirm_party_point_leg(is_sender, reveal_asset_id, false, |_| {}).unwrap();
+                assert_err!(
+                    affirm_party_point_leg(is_sender, reveal_asset_id, true, |_| {}),
+                    Error::ProofVerificationError(_),
+                    "Participant prime ciphertext verification failed"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn rejects_identity_participant_prime_ct() {
+        // With `r_5 = 0` (resp. `r_6`) both prime points are identity and the second participant
+        // relation holds for the crafted point
+        for is_sender in [true, false] {
+            for reveal_asset_id in [true, false] {
+                assert_err!(
+                    affirm_party_point_leg(is_sender, reveal_asset_id, true, |k| {
+                        if is_sender {
+                            k.core.ct_s_prime = Affine::zero();
+                            k.eph_pk_s.r5 = Affine::zero();
+                        } else {
+                            k.core.ct_r_prime = Affine::zero();
+                            k.eph_pk_r.r6 = Affine::zero();
+                        }
+                    }),
+                    Error::ProofVerificationError(_),
+                    "ct_participant_prime is identity"
+                );
+            }
+        }
     }
 }

@@ -1,6 +1,9 @@
 use crate::dst;
 use crate::error::Result;
-use crate::leg::leg_proof::{ensure_eph_key_not_identity, ensure_sender_receiver_not_same};
+use crate::leg::leg_proof::{
+    ensure_eph_key_not_identity, ensure_participant_prime_cts_not_identity,
+    ensure_sender_receiver_not_same,
+};
 use crate::leg::{Leg, LegEncryption, LegEncryptionRandomness};
 use crate::util::{bp_gens_for_vec_commitment, handle_verification_tuple};
 use crate::{Error, LEG_ENC_LABEL, NONCE_LABEL, TXN_CHALLENGE_LABEL, add_to_transcript};
@@ -40,7 +43,15 @@ pub struct PublicAssetLegCreationProof<G: SWCurveConfig> {
     /// Using Schnorr protocol (step 1 and 3 of Schnorr).
     pub resp_amount_enc: PartialPokPedersenCommitment<Affine<G>>,
     pub resp_ct_s: PartialPokPedersenCommitment<Affine<G>>,
+    /// Response for proving `ct_s' = enc_key_gen * r_5`
+    pub resp_ct_s_prime: PartialPokDiscreteLog<Affine<G>>,
+    /// Response for proving `S[0]' = S[0] * r_5/r_1`
+    pub resp_eph_pk_s_prime: PartialPokDiscreteLog<Affine<G>>,
     pub resp_ct_r: PartialPokPedersenCommitment<Affine<G>>,
+    /// Response for proving `ct_r' = enc_key_gen * r_6`
+    pub resp_ct_r_prime: PartialPokDiscreteLog<Affine<G>>,
+    /// Response for proving `R[1]' = R[1] * r_6/r_2`
+    pub resp_eph_pk_r_prime: PartialPokDiscreteLog<Affine<G>>,
     pub resp_eph_pk_s_v: PartialPokDiscreteLog<Affine<G>>,
     pub resp_eph_pk_r_v: PartialPokDiscreteLog<Affine<G>>,
     pub resp_eph_pk_s_r: Option<PartialPokDiscreteLog<Affine<G>>>,
@@ -57,7 +68,7 @@ pub struct PublicAssetLegCreationProof<G: SWCurveConfig> {
         PartialPokDiscreteLog<Affine<G>>,
         PartialPokDiscreteLog<Affine<G>>,
     )>,
-    /// Bulletproof vector commitment to `[amount, r_1, r_2, r_3, 1/r_1, 1/r_2, r_3/r_1, r_3/r_2]`.
+    /// Bulletproof vector commitment to `[amount, r_1, r_2, r_3, 1/r_1, 1/r_2, r_3/r_1, r_3/r_2, r_5, r_5/r_1, r_6, r_6/r_2]`.
     /// And this list might additionally have `r_2/r_1, r_1/r_2` as well if senders and receivers are allowed
     /// to see each other
     pub comm_r_i_amount: Affine<G>,
@@ -158,6 +169,8 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
         let mut r_1 = leg_enc_rand.r1;
         let mut r_2 = leg_enc_rand.r2;
         let mut r_3 = leg_enc_rand.r3;
+        let mut r_5 = leg_enc_rand.r5;
+        let mut r_6 = leg_enc_rand.r6;
 
         let visibility = leg_enc.party_visibility();
         let sender_sees_receiver = visibility.sender_sees_receiver();
@@ -167,6 +180,8 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
         let mut r_2_inv = r_2.inverse().ok_or_else(|| Error::InvertingZero)?;
         let mut r_3_r_1_inv = r_3 * r_1_inv;
         let mut r_3_r_2_inv = r_3 * r_2_inv;
+        let mut r_5_r_1_inv = r_5 * r_1_inv;
+        let mut r_6_r_2_inv = r_6 * r_2_inv;
         let r_2_r_1_inv = sender_sees_receiver.then(|| r_2 * r_1_inv);
         let r_1_r_2_inv = receiver_sees_sender.then(|| r_1 * r_2_inv);
 
@@ -178,6 +193,10 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
         let mut r_2_inv_blinding = G::ScalarField::rand(rng);
         let mut r_3_r_1_inv_blinding = G::ScalarField::rand(rng);
         let mut r_3_r_2_inv_blinding = G::ScalarField::rand(rng);
+        let mut r_5_blinding = G::ScalarField::rand(rng);
+        let mut r_5_r_1_inv_blinding = G::ScalarField::rand(rng);
+        let mut r_6_blinding = G::ScalarField::rand(rng);
+        let mut r_6_r_2_inv_blinding = G::ScalarField::rand(rng);
         let mut r_2_r_1_inv_blinding = sender_sees_receiver.then(|| G::ScalarField::rand(rng));
         let mut r_1_r_2_inv_blinding = receiver_sees_sender.then(|| G::ScalarField::rand(rng));
 
@@ -197,6 +216,9 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
         );
 
+        // For proving ct_s' = enc_key_gen * r_5
+        let ct_s_prime_proto = PokDiscreteLogProtocol::init(r_5, r_5_blinding, &enc_key_gen);
+
         // For proving ct_r = enc_key_gen * r_2 + R[1] * r_2^{-1}
         let ct_r_proto = PokPedersenCommitmentProtocol::init(
             r_2,
@@ -206,6 +228,9 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             r_2_inv_blinding,
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
         );
+
+        // For proving ct_r' = enc_key_gen * r_6
+        let ct_r_prime_proto = PokDiscreteLogProtocol::init(r_6, r_6_blinding, &enc_key_gen);
 
         // For proving ct_amount = enc_key_gen * r_3 + enc_gen * amount
         let ct_amount_proto = Self::amount_ciphertext_proto(
@@ -224,10 +249,24 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
         );
 
+        // For proving S[0]' = S[0] * r_5/r_1 — the same sender point behind the second encryption.
+        let eph_pk_s_prime_proto = PokDiscreteLogProtocol::init(
+            r_5_r_1_inv,
+            r_5_r_1_inv_blinding,
+            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
+        );
+
         // For proving R[2] = R[1] * r_3/r_2
         let eph_pk_r_v_proto = PokDiscreteLogProtocol::init(
             r_3_r_2_inv,
             r_3_r_2_inv_blinding,
+            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
+        );
+
+        // For proving R[1]' = R[1] * r_6/r_2 — the same receiver point behind the second encryption.
+        let eph_pk_r_prime_proto = PokDiscreteLogProtocol::init(
+            r_6_r_2_inv,
+            r_6_r_2_inv_blinding,
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
         );
 
@@ -288,6 +327,10 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             r_2_inv,
             r_3_r_1_inv,
             r_3_r_2_inv,
+            r_5,
+            r_5_r_1_inv,
+            r_6,
+            r_6_r_2_inv,
             r_2_r_1_inv,
             r_1_r_2_inv,
             r_1_blinding,
@@ -297,6 +340,10 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             r_2_inv_blinding,
             r_3_r_1_inv_blinding,
             r_3_r_2_inv_blinding,
+            r_5_blinding,
+            r_5_r_1_inv_blinding,
+            r_6_blinding,
+            r_6_r_2_inv_blinding,
             r_2_r_1_inv_blinding,
             r_1_r_2_inv_blinding,
             comm_r_i_blinding,
@@ -317,6 +364,10 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             r_2_inv,
             r_3_r_1_inv,
             r_3_r_2_inv,
+            r_5,
+            r_5_r_1_inv,
+            r_6,
+            r_6_r_2_inv,
         ];
         if sender_sees_receiver {
             wits.push(r_2_r_1_inv.unwrap());
@@ -329,10 +380,14 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
         Zeroize::zeroize(&mut r_1);
         Zeroize::zeroize(&mut r_2);
         Zeroize::zeroize(&mut r_3);
+        Zeroize::zeroize(&mut r_5);
+        Zeroize::zeroize(&mut r_6);
         Zeroize::zeroize(&mut r_1_inv);
         Zeroize::zeroize(&mut r_2_inv);
         Zeroize::zeroize(&mut r_3_r_1_inv);
         Zeroize::zeroize(&mut r_3_r_2_inv);
+        Zeroize::zeroize(&mut r_5_r_1_inv);
+        Zeroize::zeroize(&mut r_6_r_2_inv);
         Zeroize::zeroize(&mut amount_blinding);
         Zeroize::zeroize(&mut r_1_blinding);
         Zeroize::zeroize(&mut r_2_blinding);
@@ -341,6 +396,10 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
         Zeroize::zeroize(&mut r_2_inv_blinding);
         Zeroize::zeroize(&mut r_3_r_1_inv_blinding);
         Zeroize::zeroize(&mut r_3_r_2_inv_blinding);
+        Zeroize::zeroize(&mut r_5_blinding);
+        Zeroize::zeroize(&mut r_5_r_1_inv_blinding);
+        Zeroize::zeroize(&mut r_6_blinding);
+        Zeroize::zeroize(&mut r_6_r_2_inv_blinding);
         Zeroize::zeroize(&mut t_comm_r_i_amount_blinding);
         Zeroize::zeroize(&mut r_2_r_1_inv_blinding);
         Zeroize::zeroize(&mut r_1_r_2_inv_blinding);
@@ -356,11 +415,25 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
                 &mut transcript_ref,
             )?;
 
+            ct_s_prime_proto.challenge_contribution(
+                &enc_key_gen,
+                &leg_enc.ct_s_prime(),
+                dst::PUBLIC_ASSET_LEG_CREATE_CT_S_PRIME,
+                &mut transcript_ref,
+            )?;
+
             ct_r_proto.challenge_contribution(
                 &enc_key_gen,
                 &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
                 &leg_enc.ct_r(),
                 dst::PUBLIC_ASSET_LEG_CREATE_CT_R,
+                &mut transcript_ref,
+            )?;
+
+            ct_r_prime_proto.challenge_contribution(
+                &enc_key_gen,
+                &leg_enc.ct_r_prime(),
+                dst::PUBLIC_ASSET_LEG_CREATE_CT_R_PRIME,
                 &mut transcript_ref,
             )?;
 
@@ -379,10 +452,24 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
                 &mut transcript_ref,
             )?;
 
+            eph_pk_s_prime_proto.challenge_contribution(
+                &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
+                &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r5,
+                dst::PUBLIC_ASSET_LEG_CREATE_EPH_PK_S_PRIME,
+                &mut transcript_ref,
+            )?;
+
             eph_pk_r_v_proto.challenge_contribution(
                 &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
                 &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r3,
                 dst::PUBLIC_ASSET_LEG_CREATE_EPH_PK_R_V,
+                &mut transcript_ref,
+            )?;
+
+            eph_pk_r_prime_proto.challenge_contribution(
+                &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
+                &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r6,
+                dst::PUBLIC_ASSET_LEG_CREATE_EPH_PK_R_PRIME,
                 &mut transcript_ref,
             )?;
 
@@ -482,7 +569,11 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
 
         // Responses for various r_i and its variations and amount are present in response for t_comm_r_i_amount
         let resp_ct_s = ct_s_proto.gen_partial_proof();
+        let resp_ct_s_prime = ct_s_prime_proto.gen_partial_proof();
+        let resp_eph_pk_s_prime = eph_pk_s_prime_proto.gen_partial_proof();
         let resp_ct_r = ct_r_proto.gen_partial_proof();
+        let resp_ct_r_prime = ct_r_prime_proto.gen_partial_proof();
+        let resp_eph_pk_r_prime = eph_pk_r_prime_proto.gen_partial_proof();
         let resp_ct_amount = ct_amount_proto.gen_partial_proof();
         let resp_eph_pk_s_v = eph_pk_s_v_proto.gen_partial_proof();
         let resp_eph_pk_r_v = eph_pk_r_v_proto.gen_partial_proof();
@@ -521,7 +612,11 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             r1cs_proof: None,
             resp_amount_enc: resp_ct_amount,
             resp_ct_s,
+            resp_ct_s_prime,
+            resp_eph_pk_s_prime,
             resp_ct_r,
+            resp_ct_r_prime,
+            resp_eph_pk_r_prime,
             resp_eph_pk_s_v,
             resp_eph_pk_r_v,
             resp_eph_pk_s_r,
@@ -748,7 +843,7 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
         }
 
         let num_vis_resps = sender_sees_receiver as usize + receiver_sees_sender as usize;
-        let required_resp_comm_len = 9 + num_vis_resps;
+        let required_resp_comm_len = 13 + num_vis_resps;
         if self.resp_comm_r_i_amount.0.len() != required_resp_comm_len {
             return Err(Error::ProofVerificationError(format!(
                 "resp_comm_r_i_amount response length is {} but expected {}",
@@ -757,11 +852,13 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             )));
         }
 
-        ensure_sender_receiver_not_same(&leg_enc)?;
+        ensure_sender_receiver_not_same(&leg_enc, Error::ProofVerificationError)?;
 
-        ensure_eph_key_not_identity(&leg_enc)?;
+        ensure_eph_key_not_identity(&leg_enc, Error::ProofVerificationError)?;
 
-        let vars = verifier.commit_vec(8 + num_vis_resps, self.comm_r_i_amount);
+        ensure_participant_prime_cts_not_identity(&leg_enc, Error::ProofVerificationError)?;
+
+        let vars = verifier.commit_vec(12 + num_vis_resps, self.comm_r_i_amount);
         Self::enforce_constraints(
             &mut *verifier,
             None,
@@ -780,11 +877,25 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             &mut transcript_ref,
         )?;
 
+        self.resp_ct_s_prime.challenge_contribution(
+            &enc_key_gen,
+            &leg_enc.ct_s_prime(),
+            dst::PUBLIC_ASSET_LEG_CREATE_CT_S_PRIME,
+            &mut transcript_ref,
+        )?;
+
         self.resp_ct_r.challenge_contribution(
             &enc_key_gen,
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
             &leg_enc.ct_r(),
             dst::PUBLIC_ASSET_LEG_CREATE_CT_R,
+            &mut transcript_ref,
+        )?;
+
+        self.resp_ct_r_prime.challenge_contribution(
+            &enc_key_gen,
+            &leg_enc.ct_r_prime(),
+            dst::PUBLIC_ASSET_LEG_CREATE_CT_R_PRIME,
             &mut transcript_ref,
         )?;
 
@@ -803,10 +914,24 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             &mut transcript_ref,
         )?;
 
+        self.resp_eph_pk_s_prime.challenge_contribution(
+            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
+            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r5,
+            dst::PUBLIC_ASSET_LEG_CREATE_EPH_PK_S_PRIME,
+            &mut transcript_ref,
+        )?;
+
         self.resp_eph_pk_r_v.challenge_contribution(
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
             &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r3,
             dst::PUBLIC_ASSET_LEG_CREATE_EPH_PK_R_V,
+            &mut transcript_ref,
+        )?;
+
+        self.resp_eph_pk_r_prime.challenge_contribution(
+            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
+            &leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r6,
+            dst::PUBLIC_ASSET_LEG_CREATE_EPH_PK_R_PRIME,
             &mut transcript_ref,
         )?;
 
@@ -930,6 +1055,17 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             &self.resp_comm_r_i_amount.0[5],
         );
 
+        // Verify ct_s' = enc_key_gen * r_5
+        verify_or_rmc_2!(
+            rmc,
+            self.resp_ct_s_prime,
+            "resp_ct_s_prime verification failed",
+            leg_enc.ct_s_prime(),
+            enc_key_gen,
+            &challenge,
+            &self.resp_comm_r_i_amount.0[9],
+        );
+
         // Verify ct_r = enc_key_gen * r_2 + R[1] * r_2^{-1}
         verify_or_rmc_3!(
             rmc,
@@ -941,6 +1077,17 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             &challenge,
             &self.resp_comm_r_i_amount.0[3],
             &self.resp_comm_r_i_amount.0[6],
+        );
+
+        // Verify ct_r' = enc_key_gen * r_6
+        verify_or_rmc_2!(
+            rmc,
+            self.resp_ct_r_prime,
+            "resp_ct_r_prime verification failed",
+            leg_enc.ct_r_prime(),
+            enc_key_gen,
+            &challenge,
+            &self.resp_comm_r_i_amount.0[11],
         );
 
         // Verify ct_amount = enc_key_gen * r_3 + enc_gen * amount
@@ -967,6 +1114,17 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             &self.resp_comm_r_i_amount.0[7],
         );
 
+        // Verify S[0]' = S[0] * r_5/r_1
+        verify_or_rmc_2!(
+            rmc,
+            self.resp_eph_pk_s_prime,
+            "resp_eph_pk_s_prime verification failed",
+            leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r5,
+            leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
+            &challenge,
+            &self.resp_comm_r_i_amount.0[10],
+        );
+
         // Verify R[2] = R[1] * r_3/r_2
         verify_or_rmc_2!(
             rmc,
@@ -976,6 +1134,17 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
             &challenge,
             &self.resp_comm_r_i_amount.0[8],
+        );
+
+        // Verify R[1]' = R[1] * r_6/r_2
+        verify_or_rmc_2!(
+            rmc,
+            self.resp_eph_pk_r_prime,
+            "resp_eph_pk_r_prime verification failed",
+            leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r6,
+            leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
+            &challenge,
+            &self.resp_comm_r_i_amount.0[12],
         );
 
         if sender_sees_receiver {
@@ -1000,7 +1169,7 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
                 eph_pk_s_r,
                 leg_enc.leg_enc_core_and_eph_keys.eph_pk_s.r1,
                 &challenge,
-                &self.resp_comm_r_i_amount.0[9],
+                &self.resp_comm_r_i_amount.0[13],
             );
         }
 
@@ -1026,7 +1195,7 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
                 eph_pk_r_s,
                 leg_enc.leg_enc_core_and_eph_keys.eph_pk_r.r2,
                 &challenge,
-                &self.resp_comm_r_i_amount.0[9 + sender_sees_receiver as usize],
+                &self.resp_comm_r_i_amount.0[13 + sender_sees_receiver as usize],
             );
         }
 
@@ -1133,6 +1302,10 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
         let var_r1_r2_inv = receiver_sees_sender.then(|| committed_variables.pop().unwrap());
         let var_r2_r1_inv = sender_sees_receiver.then(|| committed_variables.pop().unwrap());
 
+        let var_r6_r2_inv = committed_variables.pop().unwrap();
+        let var_r6 = committed_variables.pop().unwrap();
+        let var_r5_r1_inv = committed_variables.pop().unwrap();
+        let var_r5 = committed_variables.pop().unwrap();
         let var_r3_r2_inv = committed_variables.pop().unwrap();
         let var_r3_r1_inv = committed_variables.pop().unwrap();
         let var_r2_inv = committed_variables.pop().unwrap();
@@ -1166,6 +1339,18 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
         let (_, _, r3) = cs.multiply(lc_r2.clone(), var_r3_r2_inv.into());
         cs.constrain(lc_r3.clone() - r3);
 
+        let lc_r5 = LinearCombination::from(var_r5);
+
+        // r_1 * r_5/r_1 = r_5.
+        let (_, _, r5) = cs.multiply(lc_r1.clone(), var_r5_r1_inv.into());
+        cs.constrain(lc_r5.clone() - r5);
+
+        let lc_r6 = LinearCombination::from(var_r6);
+
+        // r_2 * r_6/r_2 = r_6.
+        let (_, _, r6) = cs.multiply(lc_r2.clone(), var_r6_r2_inv.into());
+        cs.constrain(lc_r6 - r6);
+
         if sender_sees_receiver {
             // r_1 * r_2/r_1 = r_2
             let (_, _, r2) = cs.multiply(lc_r1.clone(), var_r2_r1_inv.unwrap().into());
@@ -1195,7 +1380,7 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
     ) -> Vec<Affine<G>> {
         let num_vis_resps = sender_sees_receiver as u32 + receiver_sees_sender as u32;
         let mut gens = vec![leaf_level_pc_gens.B_blinding];
-        for g in bp_gens_for_vec_commitment(8 + num_vis_resps, leaf_level_bp_gens) {
+        for g in bp_gens_for_vec_commitment(12 + num_vis_resps, leaf_level_bp_gens) {
             gens.push(g);
         }
         gens
@@ -1230,6 +1415,10 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
         r_2_inv: G::ScalarField,
         r_3_r_1_inv: G::ScalarField,
         r_3_r_2_inv: G::ScalarField,
+        r_5: G::ScalarField,
+        r_5_r_1_inv: G::ScalarField,
+        r_6: G::ScalarField,
+        r_6_r_2_inv: G::ScalarField,
         r_2_r_1_inv: Option<G::ScalarField>,
         r_1_r_2_inv: Option<G::ScalarField>,
         r_1_blinding: G::ScalarField,
@@ -1239,6 +1428,10 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
         r_2_inv_blinding: G::ScalarField,
         r_3_r_1_inv_blinding: G::ScalarField,
         r_3_r_2_inv_blinding: G::ScalarField,
+        r_5_blinding: G::ScalarField,
+        r_5_r_1_inv_blinding: G::ScalarField,
+        r_6_blinding: G::ScalarField,
+        r_6_r_2_inv_blinding: G::ScalarField,
         r_2_r_1_inv_blinding: Option<G::ScalarField>,
         r_1_r_2_inv_blinding: Option<G::ScalarField>,
         comm_r_i_blinding: G::ScalarField,
@@ -1258,6 +1451,10 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             r_2_inv,
             r_3_r_1_inv,
             r_3_r_2_inv,
+            r_5,
+            r_5_r_1_inv,
+            r_6,
+            r_6_r_2_inv,
         ];
         // Knowledge of r_2 / r_1 is proven when the sender can see the receiver, and r_1 / r_2 when the receiver can see the sender
         if sender_sees_receiver {
@@ -1267,7 +1464,7 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             wits.push(r_1_r_2_inv.unwrap());
         }
 
-        // Commitment to `[amount, r_1, r_2, r_3, 1/r_1, 1/r_2, r_3/r_1, r_3/r_2]`. And this list might additionally
+        // Commitment to `[amount, r_1, r_2, r_3, 1/r_1, 1/r_2, r_3/r_1, r_3/r_2, r_5, r_5/r_1, r_6, r_6/r_2]`. And this list might additionally
         // have `r_2/r_1` and/or `r_1/r_2` depending on which party is allowed to see the other
         let (comm_r_i_amount, vars) =
             prover.commit_vec(&wits, comm_r_i_blinding, leaf_level_bp_gens);
@@ -1291,6 +1488,10 @@ impl<G: SWCurveConfig> PublicAssetLegCreationProof<G> {
             r_2_inv_blinding,
             r_3_r_1_inv_blinding,
             r_3_r_2_inv_blinding,
+            r_5_blinding,
+            r_5_r_1_inv_blinding,
+            r_6_blinding,
+            r_6_r_2_inv_blinding,
         ];
         if sender_sees_receiver {
             blindings.push(r_2_r_1_inv_blinding.unwrap());
@@ -1349,8 +1550,9 @@ pub(crate) fn ensure_public_leg_encryption_consistent<G0: SWCurveConfig>(
             ));
         }
 
-        ensure_sender_receiver_not_same(leg_enc)?;
-        ensure_eph_key_not_identity(leg_enc)?;
+        ensure_sender_receiver_not_same(leg_enc, Error::ProofGenerationError)?;
+        ensure_eph_key_not_identity(leg_enc, Error::ProofGenerationError)?;
+        ensure_participant_prime_cts_not_identity(leg_enc, Error::ProofGenerationError)?;
         Ok(())
     }
 }
@@ -2188,6 +2390,10 @@ mod tests {
                           r_2_inv,
                           r_3_r_1_inv,
                           r_3_r_2_inv,
+                          r_5,
+                          r_5_r_1_inv,
+                          r_6,
+                          r_6_r_2_inv,
                           r_2_r_1_inv,
                           r_1_r_2_inv,
                           r_1_blinding,
@@ -2197,6 +2403,10 @@ mod tests {
                           r_2_inv_blinding,
                           r_3_r_1_inv_blinding,
                           r_3_r_2_inv_blinding,
+                          r_5_blinding,
+                          r_5_r_1_inv_blinding,
+                          r_6_blinding,
+                          r_6_r_2_inv_blinding,
                           r_2_r_1_inv_blinding,
                           r_1_r_2_inv_blinding,
                           comm_r_i_blinding,
@@ -2215,6 +2425,10 @@ mod tests {
                             r_2_inv,
                             r_3_r_1_inv,
                             r_3_r_2_inv,
+                            r_5,
+                            r_5_r_1_inv,
+                            r_6,
+                            r_6_r_2_inv,
                         ];
                         if sender_sees_receiver {
                             wits.push(r_2_r_1_inv.unwrap());
@@ -2248,6 +2462,10 @@ mod tests {
                             r_2_inv_blinding,
                             r_3_r_1_inv_blinding,
                             r_3_r_2_inv_blinding,
+                            r_5_blinding,
+                            r_5_r_1_inv_blinding,
+                            r_6_blinding,
+                            r_6_r_2_inv_blinding,
                         ];
                         if sender_sees_receiver {
                             blindings.push(r_2_r_1_inv_blinding.unwrap());

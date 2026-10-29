@@ -371,22 +371,13 @@ impl<
             (b, b)
         };
 
-        // One amount blinding per ct_amount leg (revealed or balance-changed), owned by the leg-link.
-        // The balance-changed subset is shared with the balance BP in the same commit order.
-        let num_ct_amounts = (0..legs.len())
-            .filter(|&i| legs[i].0.is_asset_id_revealed() || legs_balance_changed[i])
+        // One amount blinding per balance-changed leg, owned by the leg-link's `ct_amount` relation and
+        // shared with the balance BP in the same commit order.
+        let num_ct_amounts = legs_balance_changed
+            .iter()
+            .filter(|changed| **changed)
             .count();
         let amount_blindings: Vec<F0> = (0..num_ct_amounts).map(|_| F0::rand(rng)).collect();
-        let mut balance_amount_blindings = Vec::with_capacity(amount_blindings.len());
-        let mut amount_idx = 0;
-        for i in 0..legs.len() {
-            if legs[i].0.is_asset_id_revealed() || legs_balance_changed[i] {
-                if legs_balance_changed[i] {
-                    balance_amount_blindings.push(amount_blindings[amount_idx]);
-                }
-                amount_idx += 1;
-            }
-        }
 
         let (
             nullifier,
@@ -420,7 +411,7 @@ impl<
             asset_id_blinding,
             sk_enc_blinding,
             sk_enc_inv_blinding,
-            amount_blindings,
+            &amount_blindings,
             even_prover,
             &account_comm_key,
             account_tree_params.even_parameters.pc_gens(),
@@ -458,7 +449,7 @@ impl<
             sk_enc_inv: Some(sk_enc_inv),
             old_balance_blinding,
             new_balance_blinding,
-            balance_amount_blindings,
+            balance_amount_blindings: amount_blindings,
             is_asset_id_revealed,
         })
     }
@@ -1265,9 +1256,9 @@ impl<
             }
         }
 
-        // ct_amount_2 = enc_gen * amount + B_blinding * (-k), one per needs_ct_amount leg. The
-        // witness-1 (amount) blindings of the balance-changed legs are handed to the balance BP so
-        // its amount slots use the same amount as these ct_amount_2, which equals the amount in ct_amount.
+        // ct_amount_2 = enc_gen * amount + B_blinding * (-k), one per balance-changed leg. Every amount
+        // in ct_amount_2 belongs to the balance BP, whose amount slots use the same amount (and blinding)
+        // as these ct_amount_2, which equals the amount in ct_amount.
         let amount_blindings: Vec<F0> = (0..k_amounts.len()).map(|_| F0::rand(rng)).collect();
         let ct_amount_2_protos = Self::amount_proto(
             rng,
@@ -1287,16 +1278,6 @@ impl<
                     dst::HOST_CT_AMOUNT_2,
                     &mut transcript,
                 )?;
-            }
-        }
-        let mut balance_amount_blindings = Vec::new();
-        let mut amount_idx = 0;
-        for conf in legs_with_conf {
-            if conf.needs_ct_amount() {
-                if conf.has_balance_changed {
-                    balance_amount_blindings.push(amount_blindings[amount_idx]);
-                }
-                amount_idx += 1;
             }
         }
 
@@ -1389,7 +1370,7 @@ impl<
             updated_account: updated_account.clone(),
             ct_asset_id: ct_asset_id_2_protos,
             ct_amount: ct_amount_2_protos,
-            balance_amount_blindings,
+            balance_amount_blindings: amount_blindings,
             host_rerandomization,
             auth_rerandomization,
         })

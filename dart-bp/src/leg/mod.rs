@@ -367,6 +367,7 @@ pub struct SenderEphemeralPublicKey<G: AffineRepr> {
     pub r2: Option<G>,
     pub r3: G,
     pub r4: Option<G>,
+    pub r5: G,
 }
 
 /// Receiver's ephemeral public keys. Index 0 is None when the receiver cannot decrypt the sender's pk.
@@ -377,6 +378,7 @@ pub struct ReceiverEphemeralPublicKey<G: AffineRepr> {
     pub r2: G,
     pub r3: G,
     pub r4: Option<G>,
+    pub r6: G,
 }
 
 /// The party's ephemeral public key — either sender or receiver.
@@ -415,9 +417,18 @@ impl<G: AffineRepr> PartyEphemeralPublicKey<G> {
             Self::Receiver(r) => r.r2,
         }
     }
+
+    /// Ephemeral key identifying the party under its second randomness (`r5` for sender, `r6` for
+    /// receiver), tied to the first by `S[0]' = S[0] * (r5 / r1)` (similar for receiver).
+    pub fn eph_pk_participant_prime(&self) -> G {
+        match self {
+            Self::Sender(s) => s.r5,
+            Self::Receiver(r) => r.r6,
+        }
+    }
 }
 
-/// (r_1, r_2, r_3, r_4) — r_4 is `None` when asset-id is revealed
+/// (r_1, r_2, r_3, r_4, r_5, r_6) — r_4 is `None` when asset-id is revealed
 #[derive(
     Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize, Zeroize, ZeroizeOnDrop,
 )]
@@ -426,6 +437,8 @@ pub struct LegEncryptionRandomness<F: PrimeField> {
     pub r2: F,
     pub r3: F,
     pub r4: Option<F>,
+    pub r5: F,
+    pub r6: F,
     /// Randomness used for creating ephemeral public keys for encryption keys corresponding to mediators.
     /// This is None when asset-id is revealed as mediator affirmation keys don't need to be hidden.
     /// When no mediators (asset-id hidden), its an empty vec.
@@ -438,12 +451,27 @@ pub struct LegEncryptionCore<G: AffineRepr> {
     pub ct_r: G,
     pub ct_amount: G,
     pub ct_asset_id: AssetIdEncryption<G>,
+    /// `enc_key_gen * r5`, with ephemeral share `eph_pk_s.r5 = pk_s * r5`. Binds the sender point to
+    /// the registered key.
+    pub ct_s_prime: G,
+    /// `enc_key_gen * r6`, with ephemeral share `eph_pk_r.r6 = pk_r * r6`. Binds the receiver point to
+    /// the registered key.
+    pub ct_r_prime: G,
 }
 
 impl<G: AffineRepr> LegEncryptionCore<G> {
     /// Returns the ciphertext for the participant, `ct_s` for sender, `ct_r` for receiver
     pub fn ct_participant(&self, is_sender: bool) -> G {
         if is_sender { self.ct_s } else { self.ct_r }
+    }
+
+    /// Returns the second participant ciphertext, `ct_s_prime` for sender, `ct_r_prime` for receiver
+    pub fn ct_participant_prime(&self, is_sender: bool) -> G {
+        if is_sender {
+            self.ct_s_prime
+        } else {
+            self.ct_r_prime
+        }
     }
 
     pub fn is_asset_id_revealed(&self) -> bool {
@@ -591,6 +619,8 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> Leg<G> {
         let r2 = F::rand(rng);
         let r3 = F::rand(rng);
         let r4 = (!config.reveal_asset_id).then(|| F::rand(rng));
+        let r5 = F::rand(rng);
+        let r6 = F::rand(rng);
 
         let mut amount = F::from(self.core.amount);
         let mut asset_id = F::from(self.core.asset_id);
@@ -611,11 +641,14 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> Leg<G> {
         if !config.reveal_asset_id {
             proj.push(enc_key_gen * r4.unwrap() + enc_gen * asset_id); // ct_asset_id
         }
+        proj.push(enc_key_gen * r5); // ct_s_prime
+        proj.push(enc_key_gen * r6); // ct_r_prime
         proj.push(pk_s_enc * r1); // eph_pk_s.r1
         proj.push(pk_s_enc * r3); // eph_pk_s.r3
         if let Some(r) = r4 {
             proj.push(pk_s_enc * r); // eph_pk_s.r4
         }
+        proj.push(pk_s_enc * r5); // eph_pk_s.r5
         if config.visibility.sender_sees_receiver() {
             proj.push(pk_s_enc * r2); // eph_pk_s.r2 (cross)
         }
@@ -624,6 +657,7 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> Leg<G> {
         if let Some(r) = r4 {
             proj.push(pk_r_enc * r); // eph_pk_r.r4
         }
+        proj.push(pk_r_enc * r6); // eph_pk_r.r6
         if config.visibility.receiver_sees_sender() {
             proj.push(pk_r_enc * r1); // eph_pk_r.r1 (cross)
         }
@@ -674,12 +708,15 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> Leg<G> {
         } else {
             AssetIdEncryption::Ciphertext(next!())
         };
+        let ct_s_prime = next!();
+        let ct_r_prime = next!();
 
         let mut eph_pk_s = SenderEphemeralPublicKey::<G> {
             r1: next!(),
             r2: None,
             r3: next!(),
             r4: (!config.reveal_asset_id).then(|| next!()),
+            r5: next!(),
         };
         eph_pk_s.r2 = config.visibility.sender_sees_receiver().then(|| next!());
 
@@ -688,6 +725,7 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> Leg<G> {
             r2: next!(),
             r3: next!(),
             r4: (!config.reveal_asset_id).then(|| next!()),
+            r6: next!(),
         };
         eph_pk_r.r1 = config.visibility.receiver_sees_sender().then(|| next!());
 
@@ -738,6 +776,8 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> Leg<G> {
                         ct_r,
                         ct_amount,
                         ct_asset_id,
+                        ct_s_prime,
+                        ct_r_prime,
                     },
                     eph_pk_s,
                     eph_pk_r,
@@ -751,6 +791,8 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> Leg<G> {
                 r2,
                 r3,
                 r4,
+                r5,
+                r6,
                 r_meds,
             },
         ))
@@ -781,8 +823,16 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
         self.leg_enc_core_and_eph_keys.core.ct_s
     }
 
+    pub fn ct_s_prime(&self) -> G {
+        self.leg_enc_core_and_eph_keys.core.ct_s_prime
+    }
+
     pub fn ct_r(&self) -> G {
         self.leg_enc_core_and_eph_keys.core.ct_r
+    }
+
+    pub fn ct_r_prime(&self) -> G {
+        self.leg_enc_core_and_eph_keys.core.ct_r_prime
     }
 
     pub fn ct_amount(&self) -> G {
@@ -794,6 +844,13 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
         self.leg_enc_core_and_eph_keys
             .core
             .ct_participant(is_sender)
+    }
+
+    /// Returns the second participant ciphertext, `ct_s_prime` for sender, `ct_r_prime` for receiver
+    pub fn ct_participant_prime(&self, is_sender: bool) -> G {
+        self.leg_enc_core_and_eph_keys
+            .core
+            .ct_participant_prime(is_sender)
     }
 
     /// Number of mediator entries. Zero when asset-id is revealed as no entries are created then;
@@ -818,6 +875,15 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
         }
     }
 
+    /// Second ephemeral share of the participant's point, `S[0]'` for sender, `R[1]'` for receiver.
+    pub fn eph_pk_participant_prime(&self, is_sender: bool) -> G {
+        if is_sender {
+            self.leg_enc_core_and_eph_keys.eph_pk_s.r5
+        } else {
+            self.leg_enc_core_and_eph_keys.eph_pk_r.r6
+        }
+    }
+
     pub fn eph_pk_and_ct_participant(&self, is_sender: bool) -> (G, G) {
         if is_sender {
             (
@@ -828,6 +894,21 @@ impl<F: PrimeField, G: AffineRepr<ScalarField = F>> LegEncryption<G> {
             (
                 self.leg_enc_core_and_eph_keys.eph_pk_r.r2,
                 self.leg_enc_core_and_eph_keys.core.ct_r,
+            )
+        }
+    }
+
+    /// Same as [`Self::eph_pk_and_ct_participant`] for `ct_participant_prime`.
+    pub fn eph_pk_and_ct_participant_prime(&self, is_sender: bool) -> (G, G) {
+        if is_sender {
+            (
+                self.leg_enc_core_and_eph_keys.eph_pk_s.r5,
+                self.leg_enc_core_and_eph_keys.core.ct_s_prime,
+            )
+        } else {
+            (
+                self.leg_enc_core_and_eph_keys.eph_pk_r.r6,
+                self.leg_enc_core_and_eph_keys.core.ct_r_prime,
             )
         }
     }

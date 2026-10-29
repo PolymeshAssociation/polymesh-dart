@@ -478,7 +478,7 @@ impl<
                     .zip(self.legs_with_conf.iter())
                     .filter(|(_, leg)| leg.has_balance_decreased.is_some())
                     .map(|(lk, _)| {
-                        lk.resp_amount().cloned().ok_or_else(|| {
+                        lk.resp_amount.clone().ok_or_else(|| {
                             Error::ProofVerificationError(
                                 "Balance-changed leg is missing its ct_amount response".to_string(),
                             )

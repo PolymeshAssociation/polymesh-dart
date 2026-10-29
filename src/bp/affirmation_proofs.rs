@@ -496,7 +496,6 @@ macro_rules! no_balance {
                 let leg_enc_inner = leg_enc.decode()?;
                 let (leg_enc_core, eph_pk) = leg_enc_inner.$EphPkExtractor();
 
-                let k_amount = PallasScalar::rand(rng);
                 let is_asset_id_revealed = leg_enc_core.is_asset_id_revealed();
                 // k_asset_id is needed only when asset-id is hidden in the leg.
                 let k_asset_id = if is_asset_id_revealed {
@@ -519,7 +518,6 @@ macro_rules! no_balance {
                         dart_gens().account_comm_key(),
                         dart_gens().leg_asset_value_gen(),
                         k_asset_id,
-                        k_amount,
                     )?;
 
                 let challenge_h = even_prover
@@ -546,12 +544,8 @@ macro_rules! no_balance {
                     rerandomized_leaf: CompressedAffine::try_from(protocol.rerandomized_leaf())?,
                     updated_account_commitment: updated_commitment.into(),
                     nullifier: CompressedAffine::try_from(nullifier)?,
-                    // ct_amount (hence k_amount) is needed only when this leg reveals its asset-id.
-                    k_amounts: if is_asset_id_revealed {
-                        vec![WrappedCanonical::wrap(&k_amount)?]
-                    } else {
-                        vec![]
-                    },
+                    // No balance change: no ct_amount relation, so no k_amount is needed.
+                    k_amounts: vec![],
                     k_asset_ids: match k_asset_id {
                         Some(k) => vec![WrappedCanonical::wrap(&k)?],
                         None => vec![],

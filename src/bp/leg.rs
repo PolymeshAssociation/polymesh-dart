@@ -1436,7 +1436,9 @@ impl LegEncrypted {
         Ok(Self(WrappedLegEncryption::wrap(&leg_enc)?))
     }
 
-    /// Convert from the old LegEncryptionV0 format to the new LegEncryption format.
+    /// Convert from the old LegEncryptionV0 format to the new LegEncryption format. The converted
+    /// leg has identity `ct_s_prime` and `ct_r_prime`, so it decrypts but every affirmation proof
+    /// for it is rejected.
     pub fn from_v0(&self) -> Result<(LegEncrypted, Option<AssetId>, usize), Error> {
         let (leg_enc_v0, leg_enc_v1) = self
             .0
