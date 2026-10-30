@@ -362,12 +362,13 @@ pub const FEE_ACCOUNT_RANDOMNESS_DST: &[u8] = b"POLYMESH-DART-V1-FEE-ACCOUNT-RAN
 /// `N` nonzero field elements. The `i`-th is KeyGen of
 /// [draft-irtf-cfrg-bls-signature-05](https://datatracker.ietf.org/doc/html/draft-irtf-cfrg-bls-signature-05#section-2.3)
 /// Section 2.3 with `H = SHA-256`, `IKM = ikm`, `salt = dst`, `key_info = info || I2OSP(i, 1)` and
-/// `r = p`.
+/// `r = p`. `N` is at most 256.
 pub fn hkdf_to_field<F: PrimeField, const N: usize>(
     dst: &[u8],
     ikm: &[u8],
     info: &[u8],
 ) -> Result<[F; N]> {
+    const { assert!(N <= 256) };
     let mut elems = [F::zero(); N];
     for (i, elem) in elems.iter_mut().enumerate() {
         *elem = ietf_keygen::<F, Sha256, Hmac<Sha256>>(dst, ikm, &[info, &[i as u8]])?;
@@ -416,7 +417,7 @@ fn ietf_keygen<F: PrimeField, H: Digest, I: HmacImpl<H>>(
 }
 
 /// Appends `bytes` with a `u32` little-endian length prefix.
-fn extend_with_len(buf: &mut Vec<u8>, bytes: &[u8]) {
+pub fn extend_with_len(buf: &mut Vec<u8>, bytes: &[u8]) {
     buf.extend((bytes.len() as u32).to_le_bytes());
     buf.extend_from_slice(bytes);
 }
@@ -439,18 +440,28 @@ impl MasterSeed {
         j: G,
         g: G,
     ) -> Result<((SigKey<G>, VerKey<G>), (DecKey<G>, EncKey<G>))> {
-        // For creating secret keys, use info `len(path) || path || counter`
-        let mut info = Vec::new();
-        extend_with_len(&mut info, path);
-        info.extend(counter.to_le_bytes());
-
-        let [sig_sk] = hkdf_to_field::<G::ScalarField, 1>(SIG_KEY_DST, &self.0, &info)?;
-        let [enc_sk] = hkdf_to_field::<G::ScalarField, 1>(ENC_KEY_DST, &self.0, &info)?;
+        let (sig_sk, enc_sk) = self.derive_secret_keys::<G::ScalarField>(path, counter)?;
 
         let (sk, vk) = keygen_sig_given_sk(sig_sk, j);
         let (dk, ek) = keygen_enc_given_sk(enc_sk, g);
 
         Ok(((sk, vk), (dk, ek)))
+    }
+
+    /// Returns `(sig_sk, enc_sk)` of `derive_keys` without the public keys.
+    pub fn derive_secret_keys<F: PrimeField>(
+        &self,
+        path: &[u8],
+        counter: SkGenCounter,
+    ) -> Result<(F, F)> {
+        // For creating secret keys, use info `len(path) || path || counter`
+        let mut info = Vec::new();
+        extend_with_len(&mut info, path);
+        info.extend(counter.to_le_bytes());
+
+        let [sig_sk] = hkdf_to_field::<F, 1>(SIG_KEY_DST, &self.0, &info)?;
+        let [enc_sk] = hkdf_to_field::<F, 1>(ENC_KEY_DST, &self.0, &info)?;
+        Ok((sig_sk, enc_sk))
     }
 
     /// Returns `(randomness, rho_randomness)` where `randomness` is for the account commitment

@@ -264,8 +264,7 @@ impl Device {
 
     /// Stores `seed` and the keys derived from it.
     fn set_seed(&mut self, seed: BPMasterSeed) -> Result<&AuthSigningKeys, Error> {
-        let g = self.gens()?;
-        let keys = AuthSigningKeys::from_master_seed(&seed, SEED_PATH, SEED_COUNTER, &g)?;
+        let keys = AuthSigningKeys::from_master_seed(&seed, SEED_PATH, SEED_COUNTER)?;
         self.seed = Some(seed);
         Ok(self.keys.insert(keys))
     }

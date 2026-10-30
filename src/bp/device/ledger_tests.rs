@@ -65,13 +65,8 @@ pub(super) fn path_bytes() -> Vec<u8> {
 /// Stand-in device keypair for the in-process fallback. See the module doc: this does NOT match
 /// what a real Ledger derives for `ACCOUNT_PATH`.
 fn device_keys() -> AuthSigningKeys {
-    AuthSigningKeys::from_master_seed(
-        &BPMasterSeed::new(b"ledger-test-seed".repeat(2)),
-        b"",
-        0,
-        &DeviceGenerators::new().unwrap(),
-    )
-    .unwrap()
+    AuthSigningKeys::from_master_seed(&BPMasterSeed::new(b"ledger-test-seed".repeat(2)), b"", 0)
+        .unwrap()
 }
 
 fn account_pubkeys(keys: &AuthSigningKeys) -> (PallasA, PallasA) {

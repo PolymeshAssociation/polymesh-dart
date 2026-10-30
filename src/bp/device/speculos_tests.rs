@@ -15,7 +15,10 @@ use super::ledger_tests::{
     INS_FEE_REG, INS_FEE_TOPUP, INS_GET_RESPONSE_CHUNK, INS_KEY_REG, INS_MINT, affirm_apdus,
     affirm_leg_and_tree, apdu_data, chunked_apdus, full_apdu, full_apdu_with_p1, getpubkey_apdu,
 };
-use super::{account_state_from_pubkeys, fee_account_state_from_pubkey_given_randomness};
+use super::{
+    account_state_from_pubkeys, account_state_from_pubkeys_given_randomness,
+    fee_account_state_from_pubkey_given_randomness,
+};
 use crate::AssetPkTLookup;
 use crate::account_reg_split::AccountRegHostProtocol;
 use crate::affirmation_proofs::{
@@ -281,8 +284,20 @@ fn speculos_account_asset_registration() {
     let mut rng = StdRng::seed_from_u64(0);
     let (pk_aff, pk_enc) = get_pubkeys(&mut dev);
 
-    let (account_state, rho) =
-        account_state_from_pubkeys(&mut rng, pk_aff, pk_enc, ASSET_ID, COUNTER, IDENTITY).unwrap();
+    // Account randomness derived on the device.
+    let randomness = AccountRandomnessDeviceResponse::decode(
+        &mut &account_randomness_bytes(&mut dev, false, ASSET_ID, COUNTER)[..],
+    )
+    .unwrap();
+    let (account_state, rho) = account_state_from_pubkeys_given_randomness(
+        pk_aff,
+        pk_enc,
+        ASSET_ID,
+        COUNTER,
+        IDENTITY,
+        &randomness,
+    )
+    .unwrap();
     let (protocol, request) =
         AccountRegHostProtocol::init(&mut rng, &account_state, rho, COUNTER, IDENTITY, None)
             .unwrap();

@@ -50,14 +50,9 @@ impl AuthSigningKeys {
         seed: &BPMasterSeed,
         path: &[u8],
         counter: SkGenCounter,
-        gens: &DeviceGenerators,
     ) -> Result<Self, Error> {
-        let ((sk_aff, _), (sk_enc, _)) =
-            seed.derive_keys::<PallasA>(path, counter, gens.sig_key_gen(), gens.enc_key_gen())?;
-        Ok(Self {
-            sk_aff: sk_aff.0,
-            sk_enc: sk_enc.0,
-        })
+        let (sk_aff, sk_enc) = seed.derive_secret_keys::<PallasScalar>(path, counter)?;
+        Ok(Self { sk_aff, sk_enc })
     }
 }
 
@@ -403,8 +398,7 @@ mod tests {
     #[test]
     fn from_master_seed_known_answer() {
         let seed = BPMasterSeed::new(vec![7u8; 32]);
-        let gens = DeviceGenerators::new().unwrap();
-        let keys = AuthSigningKeys::from_master_seed(&seed, b"", 0, &gens).unwrap();
+        let keys = AuthSigningKeys::from_master_seed(&seed, b"", 0).unwrap();
         let mut bytes = Vec::new();
         keys.sk_aff.serialize_compressed(&mut bytes).unwrap();
         keys.sk_enc.serialize_compressed(&mut bytes).unwrap();
@@ -438,14 +432,13 @@ mod tests {
     #[cfg(feature = "host_proofs")]
     #[test]
     fn from_master_seed_matches_host() {
-        let gens = DeviceGenerators::new().unwrap();
         let seed_hex = "0x0707070707070707070707070707070707070707070707070707070707070707";
         let host = MasterSeed::from_seed(seed_hex)
             .unwrap()
             .derive_account_keys("m/0")
             .unwrap();
         let seed = BPMasterSeed::new(vec![7u8; 32]);
-        let device = AuthSigningKeys::from_master_seed(&seed, b"m/0", 0, &gens).unwrap();
+        let device = AuthSigningKeys::from_master_seed(&seed, b"m/0", 0).unwrap();
         assert_eq!(device.sk_aff, host.acct.secret.0.0);
         assert_eq!(device.sk_enc, host.enc.secret.0.0);
     }
@@ -454,13 +447,9 @@ mod tests {
     fn two_sks_proofs_reject_wrong_txn_type() {
         let mut rng = rng_from_seed([0u8; 32]);
         let g = DeviceGenerators::new().unwrap();
-        let keys = AuthSigningKeys::from_master_seed(
-            &BPMasterSeed::new(b"txn-type".repeat(4)),
-            b"",
-            0,
-            &g,
-        )
-        .unwrap();
+        let keys =
+            AuthSigningKeys::from_master_seed(&BPMasterSeed::new(b"txn-type".repeat(4)), b"", 0)
+                .unwrap();
         let pk = CompressedAffine::try_from(g.sig_key_gen()).unwrap();
 
         let registration = RegistrationDeviceRequest {

@@ -225,15 +225,7 @@ pub fn run_fee_register_topup_pay<D: AuthDevice>(device: &mut D) {
             .unwrap();
     let (protocol, request) =
         FeeRegHostProtocol::init(&mut rng, &pk, &fee_state, identity).unwrap();
-    println!(
-        "FEE_REGISTRATION_REQUEST = {} bytes",
-        request.encode().len()
-    );
     let response = device.fee_registration_proof(request).unwrap();
-    println!(
-        "FEE_REGISTRATION_RESPONSE = {} bytes",
-        response.encode().len()
-    );
     let reg_proof = protocol.finish::<()>(&response).unwrap();
     reg_proof.verify(identity).unwrap();
 
@@ -257,9 +249,7 @@ pub fn run_fee_register_topup_pay<D: AuthDevice>(device: &mut D) {
         &fee_tree,
     )
     .unwrap();
-    println!("FEE_TOPUP_REQUEST = {} bytes", request.encode().len());
     let response = device.fee_topup_proof(request).unwrap();
-    println!("FEE_TOPUP_RESPONSE = {} bytes", response.encode().len());
     let topup_proof = protocol
         .finish::<_, ()>(&mut rng, &response, tree_params)
         .unwrap();
@@ -285,9 +275,7 @@ pub fn run_fee_register_topup_pay<D: AuthDevice>(device: &mut D) {
         &fee_tree,
     )
     .unwrap();
-    println!("FEE_PAYMENT_REQUEST = {} bytes", request.encode().len());
     let response = device.fee_payment_proof(request).unwrap();
-    println!("FEE_PAYMENT_RESPONSE = {} bytes", response.encode().len());
     let root_block = fee_tree.get_block_number().unwrap();
     let payment_proof = protocol
         .finish::<_, ()>(&mut rng, &response, root_block, tree_params)

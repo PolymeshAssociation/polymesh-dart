@@ -11,8 +11,9 @@ use bounded_collections::BoundedVec;
 use rand_core::{CryptoRng, RngCore};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
-use polymesh_dart_bp::auth_proofs::keys::{FEE_ACCOUNT_RANDOMNESS_DST, hkdf_to_field};
-use polymesh_dart_bp::keys::ACCOUNT_RANDOMNESS_DST;
+use polymesh_dart_bp::auth_proofs::keys::{
+    ACCOUNT_RANDOMNESS_DST, FEE_ACCOUNT_RANDOMNESS_DST, MIN_IKM_LEN, extend_with_len, hkdf_to_field,
+};
 use polymesh_dart_bp::{account_registration::MasterSeed as BPMasterSeed, keys as bp_keys};
 use polymesh_dart_common::NullifierSkGenCounter;
 
@@ -276,8 +277,7 @@ impl AccountKeyPair {
         // For creating randomness, use key `secret_key` and info `len(identity) || identity || asset_id || counter_n`
         let mut secret_key = self.secret.encode();
         let mut info = Vec::new();
-        info.extend((identity.len() as u32).to_le_bytes());
-        info.extend(identity);
+        extend_with_len(&mut info, identity);
         info.extend(asset_id.to_le_bytes());
         info.extend(counter.to_le_bytes());
         // Need two independent field elements, `randomness`, `rho_randomness`
@@ -341,12 +341,18 @@ pub struct MasterSeed(BPMasterSeed);
 
 impl MasterSeed {
     /// From a `0x`-prefixed hex string, or else the string's raw bytes. Not a BIP-39 mnemonic.
+    /// Rejects a seed shorter than `MIN_IKM_LEN` bytes.
     pub fn from_seed(seed: &str) -> Result<Self, Error> {
         // If the seed is a hex string, use it directly; otherwise, use its raw bytes.
         let seed_bytes = match seed.strip_prefix("0x") {
             Some(hex_seed) => hex::decode(hex_seed).map_err(|_| Error::HexDecodeError)?,
             None => seed.as_bytes().to_vec(),
         };
+        if seed_bytes.len() < MIN_IKM_LEN {
+            return Err(
+                polymesh_dart_bp::Error::SeedTooShort(seed_bytes.len(), MIN_IKM_LEN).into(),
+            );
+        }
         Ok(Self(BPMasterSeed::new(seed_bytes)))
     }
 
