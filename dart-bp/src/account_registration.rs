@@ -2154,7 +2154,6 @@ pub fn powers_of_base<F: PrimeField, const BASE_BITS: usize, const NUM_DIGITS: u
     powers
 }
 
-/// `MasterSeed` lives in `auth_proofs::keys` (always compiled).
 pub use crate::auth_proofs::keys::MasterSeed;
 
 #[cfg(test)]

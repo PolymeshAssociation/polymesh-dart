@@ -61,6 +61,25 @@ make pdf
 
 ```
 
+## ⚙️ Feature Flags
+
+The crate's default features are `std`, `asm`, `parallel` and `host_proofs`.
+
+- `host_proofs` — Build the Bulletproofs/curve-tree backed host protocols: account registration, legs, fees, key management and the device auth-proof API. 
+   Pulls in the `bulletproofs`, `curve_tree_relations`, `ark-ec-divisors`, `ark-dlog-gadget` and `ark-pallas` dependencies. Without this feature only the `bp` wire 
+   types (`encode`, `split_types`) are compiled, which is the HSM/TEE/Ledger device build.
+
+- `large_baby_steps` — Use a larger precomputed baby-step table for discrete-log (BSGS) solving (`MAX_NUM_BABY_STEPS = 2^21` instead of `2^17`). This speeds up balance/amount 
+   discrete logs at the cost of more memory and precomputation time; it is the deployed setting.
+
+- `build-tables` — Benchmark-only: precompute fixed-base MSM tables for the verifier's final multi-scalar multiplication. Enables `verify_tuples_with_tables` / `batch_verify_tuples_with_tables`, 
+   which verify Bulletproofs tuples against the tables plus a batch-affine MSM over the proof-dependent points. Implies `host_proofs`. Not intended for production builds.
+
+- `parallel` — Enable general-purpose parallel computation (Rayon) across proving and verification. Used to reseed RNGs per thread and to parallelize independent MSM/verification work.
+
+- `verifier_parallel` — Turn on this feature for faster proof verification. Implies `parallel` and additionally enables verification-targeted parallelism knobs (`ark-ec/parallel`, `bulletproofs/parallel_full`, `curve_tree_relations/parallel_full`, `ark-ec-divisors/parallel`, `ark-dlog-gadget/parallel`).
+
+
 ## ⚠️ Testing-only Feature Flags
 
 This crate includes a feature flag intended solely for negative testing of verifier robustness.

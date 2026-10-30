@@ -22,6 +22,7 @@ use crate::auth_proofs::{
     create_fee_account_auth_proof, create_fee_account_registration_auth_proof,
     create_fee_payment_auth_proof,
 };
+use crate::device::DeviceGenerators;
 use crate::fee_split::{FeeRegHostProtocol, FeeTopupHostProtocol};
 use crate::*;
 use dock_crypto_utils::randomized_mult_checker::{
@@ -319,7 +320,6 @@ impl<T: DartLimits> FeeAccountRegistrationProof<T> {
         balance: Balance,
         identity: &[u8],
     ) -> Result<(Self, FeeAccountAssetState), Error> {
-        let gens = dart_gens();
         let account_state = FeeAccountAssetState::new(rng, &key.public, asset_id, balance)?;
 
         let (protocol, device_request) =
@@ -329,7 +329,7 @@ impl<T: DartLimits> FeeAccountRegistrationProof<T> {
             rng,
             &key.into(),
             &device_request,
-            &gens.account_comm_key(),
+            &DeviceGenerators::from_host(),
         )?;
 
         let proof = protocol.finish(&device_response)?;
@@ -511,7 +511,7 @@ impl<
             rng,
             &key.into(),
             &device_request,
-            dart_gens().account_comm_key().sk_gen(),
+            &DeviceGenerators::from_host(),
         )?;
 
         let proof = protocol.finish(rng, &device_response, tree_lookup.params())?;
@@ -959,16 +959,14 @@ impl<
         let (protocol, device_request) =
             FeePaymentHostProtocol::<C>::init(rng, account_state, amount, ctx, &tree_lookup)?;
 
-        let gens = dart_gens();
         let tree_params = tree_lookup.params();
-        let comm_re_rand_gen = tree_params.even_parameters.sl_params.pc_gens().B_blinding;
         let device_response = create_fee_payment_auth_proof(
             rng,
             &key.into(),
             &device_request,
-            gens.account_comm_key().sk_gen(),
-            comm_re_rand_gen,
-            tree_params.even_parameters.sl_params.pc_gens().B,
+            &DeviceGenerators::from_host_given_pc_gens(
+                tree_params.even_parameters.sl_params.pc_gens(),
+            ),
         )?;
 
         let proof = protocol.finish(rng, &device_response, root_block, tree_params)?;

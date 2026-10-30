@@ -40,9 +40,7 @@ impl<R: CryptoRngCore> AuthDevice for InMemoryDevice<R> {
 }
 
 fn bind_local_listener() -> TcpListener {
-    (7000u16..8000)
-        .find_map(|port| TcpListener::bind(("127.0.0.1", port)).ok())
-        .expect("no free local port")
+    TcpListener::bind(("127.0.0.1", 0)).expect("no free local port")
 }
 
 #[test]

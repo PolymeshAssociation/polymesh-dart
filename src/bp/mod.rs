@@ -98,21 +98,18 @@ pub use fee::*;
 use polymesh_dart_bp::account::state::AccountCommitmentKeyTrait;
 
 /// Creates a ChaCha20Rng seeded directly from a 32-byte array.
+#[cfg(any(test, feature = "host_proofs"))]
 pub(crate) fn rng_from_seed(seed: [u8; 32]) -> rand_chacha::ChaCha20Rng {
     use rand_core::SeedableRng as _;
     rand_chacha::ChaCha20Rng::from_seed(seed)
 }
 
 /// Creates a ChaCha20Rng from a string seed by hashing it with Blake2s256.
+#[cfg(feature = "host_proofs")]
 pub(crate) fn rng_from_seed_str(seed: &str) -> rand_chacha::ChaCha20Rng {
-    rng_from_seed_bytes(seed.as_bytes())
-}
-
-/// Creates a ChaCha20Rng from raw seed bytes by hashing them with Blake2s256.
-pub(crate) fn rng_from_seed_bytes(seed: &[u8]) -> rand_chacha::ChaCha20Rng {
     use blake2::Blake2s256;
     use digest::Digest as _;
-    rng_from_seed(Blake2s256::digest(seed).into())
+    rng_from_seed(Blake2s256::digest(seed.as_bytes()).into())
 }
 
 /// Use `GetExtra` as the trait bounds for pallet `Config` parameters
@@ -552,7 +549,7 @@ mod tests {
         SenderCounterUpdateHostProtocol, SenderRevertAffirmationHostProtocol,
     };
     use crate::auth_proofs::{
-        AuthSigningKeys, create_affirmation_auth_proof, create_fee_account_auth_proof,
+        create_affirmation_auth_proof, create_fee_account_auth_proof,
         create_fee_account_registration_auth_proof, create_fee_payment_auth_proof,
         create_mint_auth_proof, create_registration_auth_proof,
     };
@@ -1028,7 +1025,7 @@ mod tests {
             &mut rng,
             &(&keys.acct).into(),
             &device_request,
-            &dart_gens().account_comm_key(),
+            &crate::device::DeviceGenerators::from_host(),
         )
         .unwrap();
 
@@ -1078,7 +1075,7 @@ mod tests {
             &mut rng,
             &(&keys.acct).into(),
             &device_request,
-            dart_gens().account_comm_key().sk_gen(),
+            &crate::device::DeviceGenerators::from_host(),
         )
         .unwrap();
 
@@ -1189,22 +1186,15 @@ mod tests {
         )
         .unwrap();
 
-        let gens = dart_gens();
-        let tree_params_for_gens = FeeAccountTreeConfig::parameters();
-        let comm_re_rand_gen = tree_params_for_gens
-            .even_parameters
-            .sl_params
-            .pc_gens()
-            .B_blinding;
-        let device_response = create_fee_payment_auth_proof(
-            &mut rng,
-            &(&keys.acct).into(),
-            &device_request,
-            gens.account_comm_key().sk_gen(),
-            comm_re_rand_gen,
-            tree_params_for_gens.even_parameters.sl_params.pc_gens().B,
-        )
-        .unwrap();
+        let gens = crate::device::DeviceGenerators::from_host_given_pc_gens(
+            FeeAccountTreeConfig::parameters()
+                .even_parameters
+                .sl_params
+                .pc_gens(),
+        );
+        let device_response =
+            create_fee_payment_auth_proof(&mut rng, &(&keys.acct).into(), &device_request, &gens)
+                .unwrap();
 
         let root = fee_tree.root().unwrap();
         let root_block = fee_tree.get_block_number().unwrap();
@@ -1240,15 +1230,10 @@ mod tests {
         )
         .unwrap();
 
-        let gens = dart_gens();
-        let device_response = create_registration_auth_proof(
-            &mut rng,
-            &(&keys).into(),
-            &device_request,
-            gens.account_comm_key().sk_gen(),
-            gens.account_comm_key().sk_enc_gen(),
-        )
-        .unwrap();
+        let gens = crate::device::DeviceGenerators::from_host();
+        let device_response =
+            create_registration_auth_proof(&mut rng, &(&keys).into(), &device_request, &gens)
+                .unwrap();
 
         let proof: AccountAssetRegistrationProof<()> = protocol
             .finish(&mut rng, &device_response, counter, tree_params)
@@ -1295,23 +1280,13 @@ mod tests {
         )
         .unwrap();
 
-        let gens = dart_gens();
-        let device_response1 = create_registration_auth_proof(
-            &mut rng,
-            &(&keys1).into(),
-            &device_request1,
-            gens.account_comm_key().sk_gen(),
-            gens.account_comm_key().sk_enc_gen(),
-        )
-        .unwrap();
-        let device_response2 = create_registration_auth_proof(
-            &mut rng,
-            &(&keys2).into(),
-            &device_request2,
-            gens.account_comm_key().sk_gen(),
-            gens.account_comm_key().sk_enc_gen(),
-        )
-        .unwrap();
+        let gens = crate::device::DeviceGenerators::from_host();
+        let device_response1 =
+            create_registration_auth_proof(&mut rng, &(&keys1).into(), &device_request1, &gens)
+                .unwrap();
+        let device_response2 =
+            create_registration_auth_proof(&mut rng, &(&keys2).into(), &device_request2, &gens)
+                .unwrap();
 
         let proof1 = protocol1
             .finish(&mut rng, &device_response1, counter, tree_params)
@@ -1550,15 +1525,9 @@ mod tests {
         )
         .unwrap();
 
-        let gens = dart_gens();
-        let device_response = create_mint_auth_proof(
-            &mut rng,
-            &(&keys).into(),
-            &device_request,
-            gens.account_comm_key().sk_gen(),
-            gens.account_comm_key().sk_enc_gen(),
-        )
-        .unwrap();
+        let gens = crate::device::DeviceGenerators::from_host();
+        let device_response =
+            create_mint_auth_proof(&mut rng, &(&keys).into(), &device_request, &gens).unwrap();
 
         let root = account_tree.root().unwrap();
         let root_block = account_tree.get_block_number().unwrap();
@@ -1578,16 +1547,13 @@ mod tests {
         anchor_gen: Affine<PallasParameters>,
     ) -> AffirmationDeviceResponse {
         let gens = dart_gens();
-        create_affirmation_auth_proof(
-            rng,
-            &keys.into(),
-            request,
+        let device_gens = crate::device::DeviceGenerators {
+            account_comm_key: gens.account_comm_key().as_gens(),
             comm_re_rand_gen,
             anchor_gen,
-            gens.leg_asset_value_gen(),
-            &gens.account_comm_key(),
-        )
-        .unwrap()
+            leg_asset_value_gen: gens.leg_asset_value_gen(),
+        };
+        create_affirmation_auth_proof(rng, &keys.into(), request, &device_gens).unwrap()
     }
 
     fn make_leg_and_tree_with_config<R: rand_core::RngCore + rand_core::CryptoRng>(
@@ -2331,33 +2297,6 @@ mod tests {
 
         let root = account_tree.root().unwrap();
         proof.verify(&leg_enc, &root, &mut rng).unwrap();
-    }
-
-    #[test]
-    fn from_seed_matches_host() {
-        for seed in ["abc", "0xabc"] {
-            let device = AuthSigningKeys::from_seed(seed).unwrap();
-            let host: AuthSigningKeys = (&AccountKeys::from_seed(seed).unwrap()).into();
-            assert_eq!(device.sk_aff, host.sk_aff);
-            assert_eq!(device.sk_enc, host.sk_enc);
-        }
-    }
-
-    #[test]
-    fn print_generator_hex() {
-        let g = dart_gens();
-        let tree_params = AccountTreeConfig::parameters();
-        let comm_re_rand = tree_params.even_parameters.pc_gens().B_blinding;
-
-        let sig = CompressedAffine::try_from(g.sig_key_gen()).unwrap();
-        let enc = CompressedAffine::try_from(g.enc_key_gen()).unwrap();
-        let lav = CompressedAffine::try_from(g.leg_asset_value_gen()).unwrap();
-        let crr = CompressedAffine::try_from(comm_re_rand).unwrap();
-
-        println!("sig_key_gen         = {}", sig.to_string());
-        println!("enc_key_gen         = {}", enc.to_string());
-        println!("leg_asset_value_gen = {}", lav.to_string());
-        println!("comm_re_rand_gen    = {}", crr.to_string());
     }
 
     #[test]

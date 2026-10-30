@@ -4,13 +4,13 @@
 //! The device response comes from a captured fixture when the matching env var is set, else it is
 //! computed in-process with a local stand-in keypair (`device_keys`, below), so the test runs green
 //! without a device. This in-process keypair is NOT what a real Ledger derives for `PATH` — the
-//! app's `signing_keys` roots the account keys in the device's on-chip master seed (via a
-//! `Secp256k1::derive_from` node, expanded in software into Pallas scalars), a secret this test has
-//! no access to. It only needs SOME valid keypair to exercise the host protocol's accept logic.
+//! app's `signing_keys` derives the account keys with `AuthSigningKeys::from_master_seed` from a
+//! `Secp256k1::derive_from` node of the device's on-chip master seed, a secret this test has no
+//! access to. It only needs SOME valid keypair to exercise the host protocol's accept logic.
 //!
 //! To validate against a real device or emulator:
 //! - Paste each printed `*_APDU_FULL` into `ledgercomm-send`. Affirmation is chunked: send each
-//!   `AFFIRM_APDU_FULL[i]` in order (chunk 3 returns response slice 0), then send
+//!   `AFFIRM_APDU_FULL[i]` in order (the last chunk returns response slice 0), then send
 //!   `GET_RESPONSE_CHUNK_APDU` repeatedly until a slice has len < 255.
 //! - Set the matching `LEDGER_*_RESPONSE_HEX` to the raw response(s) `ledgercomm-send` prints
 //!   (`[len][payload]` with an optional trailing `9000`; comma-separate a chunked affirmation's
@@ -19,7 +19,7 @@
 //! `(pk_aff, pk_enc)` via `GetPubkey` (INS 5) and pass `LEDGER_PUBKEYS_HEX`. Key registration is
 //! self-contained (it verifies against the pubkeys in its own response) and needs neither.
 
-use super::account_state_from_pubkeys;
+use super::{DeviceGenerators, account_state_from_pubkeys};
 use crate::AssetPkTLookup;
 use crate::account_reg_split::AccountRegHostProtocol;
 use crate::affirmation_proofs::{
@@ -34,8 +34,8 @@ use crate::curve_tree::{AccountTreeConfig, CurveTreeConfig, CurveTreeLookup, Pro
 use crate::key_reg_split::{KeyRegistrationDeviceRequest, KeyRegistrationDeviceResponse};
 use crate::mint_split::MintHostProtocol;
 use crate::split_types::{
-    AffirmationDeviceRequest, AffirmationDeviceResponse, AssetMintingDeviceResponse,
-    TwoSksDeviceResponse,
+    AccountRegistrationDeviceResponse, AffirmationDeviceRequest, AffirmationDeviceResponse,
+    AssetMintingDeviceResponse,
 };
 use crate::{
     ACCOUNT_TREE_HEIGHT, ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountKeys, AccountPublicKey,
@@ -46,6 +46,7 @@ use ark_ec::CurveGroup;
 use ark_std::vec::Vec;
 use codec::{Decode, Encode};
 use core::ops::Mul;
+use polymesh_dart_bp::auth_proofs::keys::MasterSeed as BPMasterSeed;
 use polymesh_dart_common::{AssetId, NullifierSkGenCounter};
 use rand::rngs::StdRng;
 use rand_core::SeedableRng;
@@ -76,7 +77,12 @@ pub(super) fn path_bytes() -> Vec<u8> {
 /// Stand-in device keypair for the in-process fallback. See the module doc: this does NOT match
 /// what a real Ledger derives for `PATH_COMPONENTS`.
 fn device_keys() -> AuthSigningKeys {
-    AuthSigningKeys::from_seed("ledger-test-seed").unwrap()
+    AuthSigningKeys::from_master_seed(
+        &BPMasterSeed::new(b"ledger-test-seed".to_vec()),
+        b"",
+        0,
+        &DeviceGenerators::new().unwrap(),
+    )
 }
 
 fn account_pubkeys(keys: &AuthSigningKeys) -> (PallasA, PallasA) {
@@ -89,8 +95,8 @@ fn account_pubkeys(keys: &AuthSigningKeys) -> (PallasA, PallasA) {
 /// The `(pk_aff, pk_enc)` the host builds its request around: the real device's pubkeys when
 /// `LEDGER_PUBKEYS_HEX` is set (64 bytes = `pk_aff.as_bytes() || pk_enc.as_bytes()`, exactly what
 /// `GetPubkey`/INS 5 returns for `PATH_COMPONENTS` — send `getpubkey_apdu()`), else the in-process
-/// fallback keypair. Required post-fix: the device's real keys are no longer predictable from the
-/// path alone, so testing against a real device/emulator needs its real pubkeys queried first.
+/// fallback keypair. A real device's keys are not derivable from the path alone, so testing against
+/// a real device or emulator needs its pubkeys queried first.
 fn device_pubkeys(keys: &AuthSigningKeys) -> (PallasA, PallasA) {
     match std::env::var("LEDGER_PUBKEYS_HEX") {
         Ok(h) => {
@@ -219,8 +225,7 @@ fn ledger_key_registration_roundtrip() {
                 &mut dev_rng,
                 &keys,
                 IDENTITY,
-                g.sig_key_gen(),
-                g.enc_key_gen(),
+                &DeviceGenerators::new().unwrap(),
             )
             .unwrap()
         }
@@ -255,7 +260,6 @@ fn ledger_account_asset_registration_roundtrip() {
         AccountRegHostProtocol::init(&mut rng, &account_state, rho, COUNTER, IDENTITY, None)
             .unwrap();
 
-    let g = dart_gens();
     let data = apdu_data(&request.encode());
     println!("GETPUBKEY_APDU_FULL = {}", getpubkey_apdu());
     println!("ASSET_REG_APDU_HEX  = {}", hex::encode(&data));
@@ -269,16 +273,15 @@ fn ledger_account_asset_registration_roundtrip() {
 
     // Device produces the response: captured fixture if provided, else in-process.
     let response = match std::env::var("LEDGER_ASSET_REG_RESPONSE_HEX") {
-        Ok(h) => TwoSksDeviceResponse::decode(&mut &device_response_bytes(&h)[..])
-            .expect("decodes as TwoSksDeviceResponse"),
+        Ok(h) => AccountRegistrationDeviceResponse::decode(&mut &device_response_bytes(&h)[..])
+            .expect("decodes as AccountRegistrationDeviceResponse"),
         Err(_) => {
             let mut dev_rng = StdRng::seed_from_u64(1);
             create_registration_auth_proof(
                 &mut dev_rng,
                 &keys,
                 &request,
-                g.sig_key_gen(),
-                g.enc_key_gen(),
+                &DeviceGenerators::new().unwrap(),
             )
             .unwrap()
         }
@@ -348,7 +351,6 @@ fn ledger_mint_roundtrip() {
     )
     .unwrap();
 
-    let g = dart_gens();
     let data = apdu_data(&request.encode());
     println!("GETPUBKEY_APDU_FULL = {}", getpubkey_apdu());
     println!("MINT_APDU_HEX  = {}", hex::encode(&data));
@@ -369,8 +371,7 @@ fn ledger_mint_roundtrip() {
                 &mut dev_rng,
                 &keys,
                 &request,
-                g.sig_key_gen(),
-                g.enc_key_gen(),
+                &DeviceGenerators::new().unwrap(),
             )
             .unwrap()
         }
@@ -434,28 +435,18 @@ fn affirm_device_response(
     );
     if apdu_capture_mode(env) {
         println!(
-            "APDU-capture mode: send the AFFIRM_APDU_FULL chunks (chunk 3 returns slice 0), then send GET_RESPONSE_CHUNK_APDU until a slice has len < 255; comma-join all slices into {env}"
+            "APDU-capture mode: send the AFFIRM_APDU_FULL chunks (the last chunk returns slice 0), then send GET_RESPONSE_CHUNK_APDU until a slice has len < 255; comma-join all slices into {env}"
         );
         return None;
     }
 
-    let g = dart_gens();
-    let pc_gens = AccountTreeConfig::parameters().even_parameters.pc_gens();
     let response = match std::env::var(env) {
         Ok(h) => AffirmationDeviceResponse::decode(&mut &device_response_bytes(&h)[..])
             .expect("decodes as AffirmationDeviceResponse"),
         Err(_) => {
             let mut dev_rng = StdRng::seed_from_u64(1);
-            create_affirmation_auth_proof(
-                &mut dev_rng,
-                keys,
-                request,
-                pc_gens.B_blinding,
-                pc_gens.B,
-                g.leg_asset_value_gen(),
-                &g.account_comm_key(),
-            )
-            .unwrap()
+            let g = DeviceGenerators::new().unwrap();
+            create_affirmation_auth_proof(&mut dev_rng, keys, request, &g).unwrap()
         }
     };
     println!("AFFIRM_RESPONSE_HEX = {}", hex::encode(response.encode()));

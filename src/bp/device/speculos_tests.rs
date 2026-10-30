@@ -25,8 +25,8 @@ use crate::curve_tree::{AccountTreeConfig, CurveTreeConfig, CurveTreeLookup, Pro
 use crate::key_reg_split::{KeyRegistrationDeviceRequest, KeyRegistrationDeviceResponse};
 use crate::mint_split::MintHostProtocol;
 use crate::split_types::{
-    AffirmationDeviceRequest, AffirmationDeviceResponse, AssetMintingDeviceResponse,
-    TwoSksDeviceResponse,
+    AccountRegistrationDeviceResponse, AffirmationDeviceRequest, AffirmationDeviceResponse,
+    AssetMintingDeviceResponse,
 };
 use crate::{
     ACCOUNT_TREE_HEIGHT, ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountKeys, AccountPublicKey,
@@ -94,7 +94,7 @@ fn get_pubkeys(dev: &mut Speculos) -> (PallasA, PallasA) {
     (pk_aff, pk_enc)
 }
 
-/// Send the chunked affirmation request; chunk 3's reply is response slice 0. Pull the rest via
+/// Send the chunked affirmation request; the last chunk's reply is response slice 0. Pull the rest via
 /// `GetResponseChunk` (INS 12) until a slice has len < 255, then decode.
 fn affirm_exchange(
     dev: &mut Speculos,
@@ -156,7 +156,7 @@ fn speculos_account_asset_registration() {
             .unwrap();
 
     let data = dev.send(&full_apdu(INS_ASSET_REG, &apdu_data(&request.encode())));
-    let response = TwoSksDeviceResponse::decode(&mut &payload(&data)[..]).unwrap();
+    let response = AccountRegistrationDeviceResponse::decode(&mut &payload(&data)[..]).unwrap();
 
     let proof = protocol
         .finish::<_, ()>(

@@ -15,6 +15,7 @@ use dock_crypto_utils::randomized_mult_checker::PairRandomizedMultCheckerGuard;
 use rand_core::{CryptoRng, RngCore};
 
 use super::*;
+use crate::device::DeviceGenerators;
 use crate::{
     BoundedCanonical, auth_proofs::create_mint_auth_proof, mint_split::MintHostProtocol, *,
 };
@@ -326,13 +327,11 @@ impl<
             &tree_lookup,
         )?;
 
-        let gens = dart_gens();
         let device_response = create_mint_auth_proof(
             rng,
             &keys.into(),
             &device_request,
-            gens.account_comm_key().sk_gen(),
-            gens.account_comm_key().sk_enc_gen(),
+            &DeviceGenerators::from_host(),
         )?;
 
         let proof = protocol.finish(rng, &device_response, root_block, tree_lookup.params())?;

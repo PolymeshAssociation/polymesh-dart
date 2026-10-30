@@ -295,7 +295,7 @@ pub struct AccountPublicKeys {
 }
 
 /// MasterSeed for generating account keys
-#[derive(Clone, Debug, Zeroize, ZeroizeOnDrop)]
+#[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub struct MasterSeed(BPMasterSeed);
 
 impl MasterSeed {
@@ -431,7 +431,7 @@ impl<T: DartLimits> AccountRegistrationProof<T> {
     }
 
     /// Assemble the proof from a device response. The host holds no secret key.
-    /// Produces a value identical to [`Self::new`].
+    /// Carries the same public keys as [`Self::new`].
     pub fn assemble(
         response: super::key_reg_split::KeyRegistrationDeviceResponse,
     ) -> Result<Self, Error> {
@@ -514,7 +514,7 @@ impl<T: DartLimits> EncryptionKeyRegistrationProof<T> {
     }
 
     /// Assemble the proof from a device response. The host holds no secret key.
-    /// Produces a value identical to [`Self::new`]
+    /// Carries the same public keys as [`Self::new`].
     pub fn assemble(
         response: key_reg_split::EncryptionKeyRegistrationDeviceResponse,
     ) -> Result<Self, Error> {

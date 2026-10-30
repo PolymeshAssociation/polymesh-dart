@@ -51,6 +51,7 @@ use schnorr_pok::partial::{
 };
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
 use zeroize::{Zeroize, ZeroizeOnDrop};
+
 // Aiming for 3 possible workflows:
 // W1 - Solo. Single prover has all witnesses including secret key(s)
 //

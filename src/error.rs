@@ -150,6 +150,7 @@ pub enum Error {
     /// Device protocol error.
     #[error("Device error: {0}")]
     Device(String),
+
     /// Unsupported number of legs
     #[error("Unsupported number of legs: {0}")]
     UnsupportedNumberOfLegs(usize),

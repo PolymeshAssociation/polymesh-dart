@@ -328,7 +328,7 @@ impl<G: AffineRepr> EncryptedPublicKey<G> {
     }
 }
 
-pub fn init_pk_enc_protocol<R: CryptoRngCore, G: AffineRepr>(
+pub(crate) fn init_pk_enc_protocol<R: CryptoRngCore, G: AffineRepr>(
     rng: &mut R,
     sk: G::ScalarField,
     sk_blinding: G::ScalarField,
@@ -377,7 +377,7 @@ pub fn init_pk_enc_protocol<R: CryptoRngCore, G: AffineRepr>(
     Ok((t_eph_pk, t_enc, encrypted_pubkey))
 }
 
-pub fn reps_pk_enc<G: AffineRepr>(
+pub(crate) fn reps_pk_enc<G: AffineRepr>(
     t_eph_pk: Vec<PokDiscreteLogProtocol<G>>,
     t_enc: PokPedersenCommitmentProtocol<G>,
     challenge: &G::ScalarField,
@@ -393,7 +393,7 @@ pub fn reps_pk_enc<G: AffineRepr>(
     (resp_eph_pk, resp_enc)
 }
 
-pub fn chal_contrib_pk_enc<G: AffineRepr>(
+pub(crate) fn chal_contrib_pk_enc<G: AffineRepr>(
     resp_eph_pk: &[PartialPokDiscreteLog<G>],
     resp_enc: &Partial1PokPedersenCommitment<G>,
     encrypted_pubkey: &EncryptedPublicKey<G>,
@@ -435,7 +435,7 @@ pub fn chal_contrib_pk_enc<G: AffineRepr>(
     Ok(())
 }
 
-pub fn verify_pk_enc<G: AffineRepr>(
+pub(crate) fn verify_pk_enc<G: AffineRepr>(
     resp_eph_pk: &[PartialPokDiscreteLog<G>],
     resp_enc: &Partial1PokPedersenCommitment<G>,
     encrypted_pubkey: &EncryptedPublicKey<G>,

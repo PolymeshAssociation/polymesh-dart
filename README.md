@@ -42,6 +42,7 @@ The library provides several feature flags:
 
 - `std` - Use Rust standard library (default)
 - `backend_bp` - Enable Bulletproofs backend
+- `host_proofs` - Enable the Bulletproofs/curve-tree backed host protocols (account, leg, fee proofs). Without it only the wire types are built
 - `serde` - Enable serialization/deserialization with serde
 - `sqlx` - Enable SQL database integration
 - `parallel` - Enable parallel computation for improved performance

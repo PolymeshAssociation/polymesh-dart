@@ -26,7 +26,7 @@ ark-std = { workspace = true, default-features = false }
 dock_crypto_utils = { workspace = true, default-features = false }
 schnorr_pok = { workspace = true, default-features = false }
 
-# Curve tree dependencies. Optional: kept out of the light auth-proof build (HSM/TEE/Ledger).
+# Curve tree dependencies. Optional as its kept out of the auth-proof build (HSM/TEE/Ledger).
 bulletproofs = { workspace = true, default-features = false, optional = true }
 curve_tree_relations = { workspace = true, default-features = false, optional = true }
 ark-ec-divisors = { workspace = true, default-features = false, features = ["pallas", "vesta"], optional = true }
@@ -73,7 +73,7 @@ harness = false
 [features]
 default = ["std", "asm", "parallel", "host_proofs"]
 
-# Bulletproofs backed host protocols. Without these, build just the sigma-only auth proofs. For the HSM/TEE/Ledger device build.
+# Bulletproofs backed host protocols. Without these, build just the "sigma protcol only" auth proofs.
 host_proofs = [
 	"dep:bulletproofs",
 	"dep:curve_tree_relations",

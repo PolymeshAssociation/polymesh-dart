@@ -264,7 +264,6 @@ default = [
     "utoipa",
     "sqlx",
     "large_baby_steps",
-    "hardcoded-key",
 ]
 
 serde = ["dep:serde", "serde_json", "serde_arrays"]

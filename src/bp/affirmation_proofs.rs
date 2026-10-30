@@ -271,9 +271,9 @@ macro_rules! with_balance {
                 account_asset: &mut AccountAssetState,
                 tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
             ) -> Result<Self, Error> {
-                let gens = dart_gens();
-                let comm_re_rand_gen = tree_lookup.params().even_parameters.pc_gens().B_blinding;
-                let anchor_gen = tree_lookup.params().even_parameters.pc_gens().B;
+                let gens = $crate::bp::device::DeviceGenerators::from_host_given_pc_gens(
+                    tree_lookup.params().even_parameters.pc_gens(),
+                );
 
                 let (protocol, device_request) =
                     $HostProto::init(rng, account_asset, leg_ref, leg_enc, amount, &tree_lookup)?;
@@ -282,10 +282,7 @@ macro_rules! with_balance {
                     rng,
                     &keys.into(),
                     &device_request,
-                    comm_re_rand_gen,
-                    anchor_gen,
-                    gens.leg_asset_value_gen(),
-                    &gens.account_comm_key(),
+                    &gens,
                 )?;
 
                 protocol.finish(rng, &device_response)
@@ -657,9 +654,9 @@ macro_rules! no_balance {
                 account_asset: &mut AccountAssetState,
                 tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
             ) -> Result<Self, Error> {
-                let gens = dart_gens();
-                let comm_re_rand_gen = tree_lookup.params().even_parameters.pc_gens().B_blinding;
-                let anchor_gen = tree_lookup.params().even_parameters.pc_gens().B;
+                let gens = $crate::bp::device::DeviceGenerators::from_host_given_pc_gens(
+                    tree_lookup.params().even_parameters.pc_gens(),
+                );
 
                 let (protocol, device_request) =
                     $HostProto::init(rng, account_asset, leg_ref, leg_enc, amount, &tree_lookup)?;
@@ -668,10 +665,7 @@ macro_rules! no_balance {
                     rng,
                     &keys.into(),
                     &device_request,
-                    comm_re_rand_gen,
-                    anchor_gen,
-                    gens.leg_asset_value_gen(),
-                    &gens.account_comm_key(),
+                    &gens,
                 )?;
 
                 protocol.finish(rng, &device_response)

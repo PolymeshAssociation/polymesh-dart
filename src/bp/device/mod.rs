@@ -10,8 +10,8 @@ use super::auth_proofs::{
 };
 use super::key_reg_split::{KeyRegistrationDeviceRequest, KeyRegistrationDeviceResponse};
 use super::split_types::{
-    AffirmationDeviceRequest, AffirmationDeviceResponse, AssetMintingDeviceResponse,
-    MintDeviceRequest, RegistrationDeviceRequest, TwoSksDeviceResponse,
+    AccountRegistrationDeviceResponse, AffirmationDeviceRequest, AffirmationDeviceResponse,
+    AssetMintingDeviceResponse, MintDeviceRequest, RegistrationDeviceRequest,
 };
 use crate::Error;
 use ark_std::string::String;
@@ -33,11 +33,11 @@ mod ledger_tests;
 mod sealing;
 #[cfg(all(test, feature = "host_proofs"))]
 mod speculos_tests;
-#[cfg(all(test, feature = "host_proofs"))]
+#[cfg(all(test, feature = "host_proofs", feature = "hardcoded-key"))]
 mod tests;
 #[cfg(feature = "std")]
 mod transport;
-#[cfg(feature = "host_proofs")]
+#[cfg(all(feature = "std", feature = "host_proofs"))]
 mod workflow;
 
 pub use generators::DeviceGenerators;
@@ -46,8 +46,8 @@ pub use sealing::HardcodedKeyProvider;
 #[cfg(feature = "std")]
 pub use sealing::{DataKey, DataKeyProvider};
 #[cfg(feature = "std")]
-pub use transport::{StreamDevice, read_frame, serve, write_frame};
-#[cfg(feature = "host_proofs")]
+pub use transport::{MAX_FRAME_LEN, StreamDevice, read_frame, serve, write_frame};
+#[cfg(all(feature = "std", feature = "host_proofs"))]
 pub use workflow::run_register_mint_affirm;
 
 #[derive(Clone, Debug, Encode, Decode)]
@@ -75,7 +75,7 @@ pub enum DeviceResponse {
         sealed: Vec<u8>,
     },
     KeyRegistration(KeyRegistrationDeviceResponse),
-    Registration(TwoSksDeviceResponse),
+    Registration(AccountRegistrationDeviceResponse),
     Mint(AssetMintingDeviceResponse),
     Affirmation(AffirmationDeviceResponse),
     Err(String),
@@ -83,6 +83,7 @@ pub enum DeviceResponse {
 
 /// Holds the secret keys. This is what runs inside the enclave.
 pub struct Device {
+    generators: Option<DeviceGenerators>,
     keys: Option<AuthSigningKeys>,
     #[cfg(feature = "std")]
     provider: Box<dyn DataKeyProvider>,
@@ -93,6 +94,7 @@ impl Device {
     #[cfg(feature = "std")]
     pub fn with_provider(provider: Box<dyn DataKeyProvider>) -> Self {
         Self {
+            generators: None,
             keys: None,
             provider,
         }
@@ -106,7 +108,19 @@ impl Device {
 
     #[cfg(not(feature = "std"))]
     pub fn new() -> Self {
-        Self { keys: None }
+        Self {
+            generators: None,
+            keys: None,
+        }
+    }
+
+    /// Builds a device holding `keys`, loaded by the caller from the target's own key storage.
+    #[cfg(not(feature = "std"))]
+    pub fn with_keys(keys: AuthSigningKeys) -> Self {
+        Self {
+            generators: None,
+            keys: Some(keys),
+        }
     }
 
     pub fn handle<R: CryptoRngCore>(
@@ -141,55 +155,38 @@ impl Device {
             DeviceRequest::KeyRegistration(request) => {
                 let g = self.gens()?;
                 let keys = self.signing_keys()?;
-                let response = create_key_registration_auth_proof(
-                    rng,
-                    keys,
-                    &request.identity,
-                    g.sig_key_gen(),
-                    g.enc_key_gen(),
-                )?;
+                let response =
+                    create_key_registration_auth_proof(rng, keys, &request.identity, &g)?;
                 Ok(DeviceResponse::KeyRegistration(response))
             }
             DeviceRequest::RegistrationProof(request) => {
                 let g = self.gens()?;
                 let keys = self.signing_keys()?;
-                let response = create_registration_auth_proof(
-                    rng,
-                    keys,
-                    &request,
-                    g.sig_key_gen(),
-                    g.enc_key_gen(),
-                )?;
+                let response = create_registration_auth_proof(rng, keys, &request, &g)?;
                 Ok(DeviceResponse::Registration(response))
             }
             DeviceRequest::MintProof(request) => {
                 let g = self.gens()?;
                 let keys = self.signing_keys()?;
-                let response =
-                    create_mint_auth_proof(rng, keys, &request, g.sig_key_gen(), g.enc_key_gen())?;
+                let response = create_mint_auth_proof(rng, keys, &request, &g)?;
                 Ok(DeviceResponse::Mint(response))
             }
             DeviceRequest::Affirm(request) => {
                 let g = self.gens()?;
                 let keys = self.signing_keys()?;
-                let response = create_affirmation_auth_proof(
-                    rng,
-                    keys,
-                    &request,
-                    g.comm_re_rand_gen,
-                    g.anchor_gen,
-                    g.leg_asset_value_gen,
-                    &g.account_comm_key,
-                )?;
+                let response = create_affirmation_auth_proof(rng, keys, &request, &g)?;
                 Ok(DeviceResponse::Affirmation(response))
             }
         }
-
-        // TODO: Add check if device initialized with params and keys or not
     }
 
-    fn gens(&self) -> Result<DeviceGenerators, Error> {
-        DeviceGenerators::new()
+    fn gens(&mut self) -> Result<DeviceGenerators, Error> {
+        if let Some(g) = self.generators {
+            return Ok(g);
+        }
+        let g = DeviceGenerators::new()?;
+        self.generators = Some(g);
+        Ok(g)
     }
 
     fn signing_keys(&self) -> Result<&AuthSigningKeys, Error> {
@@ -272,7 +269,7 @@ pub trait AuthDevice {
     fn registration_proof(
         &mut self,
         request: RegistrationDeviceRequest,
-    ) -> Result<TwoSksDeviceResponse, Error> {
+    ) -> Result<AccountRegistrationDeviceResponse, Error> {
         match self.send(DeviceRequest::RegistrationProof(request))? {
             DeviceResponse::Registration(response) => Ok(response),
             DeviceResponse::Err(message) => Err(Error::Device(message)),

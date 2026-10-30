@@ -30,6 +30,7 @@ use schnorr_pok::partial::{
     Partial2PokPedersenCommitment, PartialPokDiscreteLog, PartialPokPedersenCommitment,
     PartialSchnorrResponse,
 };
+
 // Auth proof will prove a different relation for ct_amount and ct_asset_id.
 // ct_amount_1 = S[2] * sk_enc^{-1} + B * k_1
 // ct_asset_id_1 = S[3] * sk_enc^{-1} + B * k_2

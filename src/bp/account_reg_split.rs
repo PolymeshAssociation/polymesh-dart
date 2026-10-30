@@ -82,11 +82,11 @@ impl AccountRegHostProtocol {
     pub fn finish<R: RngCore + CryptoRng, T: DartLimits>(
         mut self,
         rng: &mut R,
-        device_response: &TwoSksDeviceResponse,
+        device_response: &AccountRegistrationDeviceResponse,
         counter: NullifierSkGenCounter,
         tree_params: &CurveTreeParameters<AccountTreeConfig>,
     ) -> Result<AccountAssetRegistrationProof<T>, Error> {
-        let auth_proof = device_response.0.decode()?;
+        let auth_proof = device_response.0.0.decode()?;
 
         let challenge_h_final =
             append_auth_proof_and_get_challenge(&auth_proof, self.prover.transcript())?;

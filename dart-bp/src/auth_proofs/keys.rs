@@ -351,7 +351,7 @@ const SEPARATOR: &[u8; 2] = b"//";
 
 /// Seed a Ledger-class device derives account keys and per-account randomness from, so the device
 /// never has to persist secret keys.
-#[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize, Zeroize, ZeroizeOnDrop)]
+#[derive(Clone, CanonicalSerialize, CanonicalDeserialize, Zeroize, ZeroizeOnDrop)]
 pub struct MasterSeed(Vec<u8>);
 
 impl MasterSeed {

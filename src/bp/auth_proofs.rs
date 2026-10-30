@@ -3,17 +3,20 @@ use ark_std::{format, vec::Vec};
 use rand_core::{CryptoRng, RngCore};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
-use polymesh_dart_bp::auth_proofs::account_comm_key::{AccountCommitmentKeyTrait, NUM_GENERATORS};
+use polymesh_dart_bp::auth_proofs::account_comm_key::NUM_GENERATORS;
 use polymesh_dart_bp::auth_proofs::fee_account::{
     FeeAccountStateCommitment, PALLAS_FR_SMOOTH_ORDER, ensure_valid_fee_registration_opening,
 };
-use polymesh_dart_bp::auth_proofs::keys::{keygen_enc_given_sk, keygen_sig_given_sk};
+use polymesh_dart_bp::auth_proofs::keys::{
+    MasterSeed as BPMasterSeed, keygen_enc_given_sk, keygen_sig_given_sk,
+};
 use polymesh_dart_bp::auth_proofs::{
     account::AuthProofAffirmation as BPAuthProofAffirmation,
     fee_account::AuthProofFeePayment as BPAuthProofFeePayment,
 };
-use polymesh_dart_bp::keys::rand_non_zero;
+use polymesh_dart_common::SkGenCounter;
 
+use super::device::DeviceGenerators;
 use super::key_reg_split::{KeyRegistrationDeviceResponse, create_key_registration_proof};
 use super::split_types::*;
 use super::*;
@@ -41,19 +44,24 @@ pub struct AuthSigningKey {
 }
 
 impl AuthSigningKeys {
-    pub fn from_seed(seed: &str) -> Result<Self, Error> {
-        Self::from_rng(rng_from_seed_str(seed))
-    }
-
-    /// Same derivation as `from_seed`, from raw bytes instead of a string.
-    pub fn from_seed_bytes(seed: &[u8]) -> Result<Self, Error> {
-        Self::from_rng(rng_from_seed_bytes(seed))
-    }
-
-    fn from_rng(mut rng: rand_chacha::ChaCha20Rng) -> Result<Self, Error> {
-        let sk_enc = rand_non_zero::<PallasScalar, _>(&mut rng);
-        let sk_aff = rand_non_zero::<PallasScalar, _>(&mut rng);
-        Ok(Self { sk_aff, sk_enc })
+    /// Keys `MasterSeed::derive_keys` derives from `seed`, `path` and `counter` with `Blake2b512`.
+    /// Equal to the host's `MasterSeed::derive_account_keys(path)` at `counter = 0`.
+    pub fn from_master_seed(
+        seed: &BPMasterSeed,
+        path: &[u8],
+        counter: SkGenCounter,
+        gens: &DeviceGenerators,
+    ) -> Self {
+        let ((sk_aff, _), (sk_enc, _)) = seed.derive_keys::<PallasA, blake2::Blake2b512>(
+            path,
+            counter,
+            gens.sig_key_gen(),
+            gens.enc_key_gen(),
+        );
+        Self {
+            sk_aff: sk_aff.0,
+            sk_enc: sk_enc.0,
+        }
     }
 }
 
@@ -79,12 +87,19 @@ pub fn create_fee_account_auth_proof<R: RngCore + CryptoRng>(
     rng: &mut R,
     key: &AuthSigningKey,
     request: &FeeAccountDeviceRequest,
-    sk_gen: PallasA,
+    gens: &DeviceGenerators,
 ) -> Result<SingleSkDeviceResponse, Error> {
     let nonce = ledger_nonce(&request.challenge_h_bytes, &request.nonce);
     let pk = PallasA::try_from(&request.pk)?;
 
-    let proof = BPAuthProofOnlySk::new(rng, key.sk, pk, &nonce, &request.txn_type.into(), &sk_gen)?;
+    let proof = BPAuthProofOnlySk::new(
+        rng,
+        key.sk,
+        pk,
+        &nonce,
+        &request.txn_type.into(),
+        &gens.sig_key_gen(),
+    )?;
 
     Ok(SingleSkDeviceResponse(WrappedCanonical::wrap(&proof)?))
 }
@@ -95,7 +110,7 @@ pub fn create_fee_account_registration_auth_proof<R: RngCore + CryptoRng>(
     rng: &mut R,
     key: &AuthSigningKey,
     request: &FeeAccountRegistrationDeviceRequest,
-    account_comm_key: &impl AccountCommitmentKeyTrait<PallasA>,
+    gens: &DeviceGenerators,
 ) -> Result<SingleSkDeviceResponse, Error> {
     let DeviceTxnType::FeeAccountRegistration { asset_id, balance } = request.txn_type else {
         return Err(Error::ProofGenerationError(
@@ -116,7 +131,7 @@ pub fn create_fee_account_registration_auth_proof<R: RngCore + CryptoRng>(
         initial_rho,
         initial_randomness,
         &PALLAS_FR_SMOOTH_ORDER,
-        account_comm_key,
+        &gens.account_comm_key,
     )?;
 
     let proof = BPAuthProofOnlySk::new_with_account_commitment(
@@ -126,7 +141,7 @@ pub fn create_fee_account_registration_auth_proof<R: RngCore + CryptoRng>(
         &account_commitment,
         &nonce,
         &request.txn_type.into(),
-        &account_comm_key.sk_gen(),
+        &gens.sig_key_gen(),
     )?;
 
     Ok(SingleSkDeviceResponse(WrappedCanonical::wrap(&proof)?))
@@ -141,8 +156,7 @@ fn two_sks_proof<R: RngCore + CryptoRng>(
     pk_aff: &CompressedAffine,
     pk_enc: &CompressedAffine,
     txn_type: DeviceTxnType,
-    sk_gen: PallasA,
-    sk_enc_gen: PallasA,
+    gens: &DeviceGenerators,
 ) -> Result<TwoSksDeviceResponse, Error> {
     let nonce = ledger_nonce(challenge_h_bytes, nonce);
     let pk_aff = PallasA::try_from(pk_aff)?;
@@ -156,8 +170,8 @@ fn two_sks_proof<R: RngCore + CryptoRng>(
         pk_enc,
         &nonce,
         &txn_type.into(),
-        &sk_gen,
-        &sk_enc_gen,
+        &gens.sig_key_gen(),
+        &gens.enc_key_gen(),
     )?;
 
     Ok(TwoSksDeviceResponse(WrappedCanonical::wrap(&proof)?))
@@ -168,10 +182,14 @@ pub fn create_registration_auth_proof<R: RngCore + CryptoRng>(
     rng: &mut R,
     keys: &AuthSigningKeys,
     request: &RegistrationDeviceRequest,
-    sk_gen: PallasA,
-    sk_enc_gen: PallasA,
-) -> Result<TwoSksDeviceResponse, Error> {
-    two_sks_proof(
+    gens: &DeviceGenerators,
+) -> Result<AccountRegistrationDeviceResponse, Error> {
+    if !matches!(request.txn_type, DeviceTxnType::AccountRegistration { .. }) {
+        return Err(Error::ProofGenerationError(
+            "Expected an account registration txn type".to_string(),
+        ));
+    }
+    let response = two_sks_proof(
         rng,
         keys,
         &request.challenge_h_bytes,
@@ -179,9 +197,9 @@ pub fn create_registration_auth_proof<R: RngCore + CryptoRng>(
         &request.pk_aff,
         &request.pk_enc,
         request.txn_type,
-        sk_gen,
-        sk_enc_gen,
-    )
+        gens,
+    )?;
+    Ok(AccountRegistrationDeviceResponse(response))
 }
 
 /// Device side of account key registration for a single account. Derives the account's key material
@@ -191,9 +209,9 @@ pub fn create_key_registration_auth_proof<R: RngCore + CryptoRng>(
     rng: &mut R,
     keys: &AuthSigningKeys,
     identity: &[u8],
-    sig_key_gen: PallasA,
-    enc_key_gen: PallasA,
+    gens: &DeviceGenerators,
 ) -> Result<KeyRegistrationDeviceResponse, Error> {
+    let (sig_key_gen, enc_key_gen) = (gens.sig_key_gen(), gens.enc_key_gen());
     let sig = keygen_sig_given_sk(keys.sk_aff, sig_key_gen);
     let enc = keygen_enc_given_sk(keys.sk_enc, enc_key_gen);
     create_key_registration_proof(rng, &[(sig, enc)], identity, sig_key_gen, enc_key_gen)
@@ -204,9 +222,13 @@ pub fn create_mint_auth_proof<R: RngCore + CryptoRng>(
     rng: &mut R,
     keys: &AuthSigningKeys,
     request: &MintDeviceRequest,
-    sk_gen: PallasA,
-    sk_enc_gen: PallasA,
+    gens: &DeviceGenerators,
 ) -> Result<AssetMintingDeviceResponse, Error> {
+    if !matches!(request.txn_type, DeviceTxnType::Mint { .. }) {
+        return Err(Error::ProofGenerationError(
+            "Expected a mint txn type".to_string(),
+        ));
+    }
     let response = two_sks_proof(
         rng,
         keys,
@@ -215,8 +237,7 @@ pub fn create_mint_auth_proof<R: RngCore + CryptoRng>(
         &request.pk_aff,
         &request.pk_enc,
         request.txn_type,
-        sk_gen,
-        sk_enc_gen,
+        gens,
     )?;
     Ok(AssetMintingDeviceResponse(response))
 }
@@ -226,9 +247,7 @@ pub fn create_fee_payment_auth_proof<R: RngCore + CryptoRng>(
     rng: &mut R,
     key: &AuthSigningKey,
     request: &FeePaymentDeviceRequest,
-    sk_gen: PallasA,
-    comm_re_rand_gen: PallasA,
-    anchor_gen: PallasA,
+    gens: &DeviceGenerators,
 ) -> Result<FeePaymentDeviceResponse, Error> {
     let nonce = ledger_nonce(&request.challenge_h_bytes, &request.nonce);
     let rerandomized_leaf = PallasA::try_from(&request.rerandomized_leaf)?;
@@ -247,9 +266,9 @@ pub fn create_fee_payment_auth_proof<R: RngCore + CryptoRng>(
         nullifier,
         &nonce,
         &request.txn_type.into(),
-        sk_gen,
-        comm_re_rand_gen,
-        anchor_gen,
+        gens.sig_key_gen(),
+        gens.comm_re_rand_gen,
+        gens.anchor_gen,
     )?;
 
     Ok(FeePaymentDeviceResponse(WrappedCanonical::wrap(&proof)?))
@@ -260,10 +279,7 @@ pub fn create_affirmation_auth_proof<R: RngCore + CryptoRng>(
     rng: &mut R,
     keys: &AuthSigningKeys,
     request: &AffirmationDeviceRequest,
-    comm_re_rand_gen: PallasA,
-    anchor_gen: PallasA,
-    enc_gen: PallasA,
-    account_comm_key: &impl AccountCommitmentKeyTrait<PallasA>,
+    gens: &DeviceGenerators,
 ) -> Result<AffirmationDeviceResponse, Error> {
     let nonce = ledger_nonce(&request.challenge_h_bytes, &request.nonce);
     let rerandomized_leaf = PallasA::try_from(&request.rerandomized_leaf)?;
@@ -318,11 +334,76 @@ pub fn create_affirmation_auth_proof<R: RngCore + CryptoRng>(
         nullifier,
         &nonce,
         &request.txn_type.into(),
-        comm_re_rand_gen,
-        anchor_gen,
-        enc_gen,
-        account_comm_key,
+        gens.comm_re_rand_gen,
+        gens.anchor_gen,
+        gens.leg_asset_value_gen,
+        &gens.account_comm_key,
     )?;
 
     Ok(AffirmationDeviceResponse(WrappedCanonical::wrap(&proof)?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ark_serialize::CanonicalSerialize;
+
+    /// Pins the seed-to-key derivation the Ledger app uses for its account keys.
+    #[test]
+    fn from_master_seed_known_answer() {
+        let seed = BPMasterSeed::new(vec![7u8; 32]);
+        let gens = DeviceGenerators::new().unwrap();
+        let keys = AuthSigningKeys::from_master_seed(&seed, b"", 0, &gens);
+        let mut bytes = Vec::new();
+        keys.sk_aff.serialize_compressed(&mut bytes).unwrap();
+        keys.sk_enc.serialize_compressed(&mut bytes).unwrap();
+        assert_eq!(
+            hex::encode(bytes),
+            "1790d5f31a11c8f55d73fbb2b2243126ae71f073ee6a63ee95ab5adb336c3f34b1026b6b7e456588fbd5e184df6b6164c0d89020a2a5526cd439df93eb44b423"
+        );
+    }
+
+    #[cfg(feature = "host_proofs")]
+    #[test]
+    fn from_master_seed_matches_host() {
+        let gens = DeviceGenerators::new().unwrap();
+        let seed_hex = "0x0707070707070707070707070707070707070707070707070707070707070707";
+        let host = MasterSeed::from_seed(seed_hex)
+            .derive_account_keys("m/0")
+            .unwrap();
+        let seed = BPMasterSeed::new(vec![7u8; 32]);
+        let device = AuthSigningKeys::from_master_seed(&seed, b"m/0", 0, &gens);
+        assert_eq!(device.sk_aff, host.acct.secret.0.0);
+        assert_eq!(device.sk_enc, host.enc.secret.0.0);
+    }
+
+    #[test]
+    fn two_sks_proofs_reject_wrong_txn_type() {
+        let mut rng = rng_from_seed([0u8; 32]);
+        let g = DeviceGenerators::new().unwrap();
+        let keys =
+            AuthSigningKeys::from_master_seed(&BPMasterSeed::new(b"txn-type".to_vec()), b"", 0, &g);
+        let pk = CompressedAffine::try_from(g.sig_key_gen()).unwrap();
+
+        let registration = RegistrationDeviceRequest {
+            challenge_h_bytes: Vec::new(),
+            nonce: Vec::new(),
+            pk_aff: pk.clone(),
+            pk_enc: pk.clone(),
+            txn_type: DeviceTxnType::Mint {
+                asset_id: 1,
+                amount: 1,
+            },
+        };
+        assert!(create_registration_auth_proof(&mut rng, &keys, &registration, &g).is_err());
+
+        let mint = MintDeviceRequest {
+            challenge_h_bytes: Vec::new(),
+            nonce: Vec::new(),
+            pk_aff: pk.clone(),
+            pk_enc: pk,
+            txn_type: DeviceTxnType::AccountRegistration { asset_id: 1 },
+        };
+        assert!(create_mint_auth_proof(&mut rng, &keys, &mint, &g).is_err());
+    }
 }
