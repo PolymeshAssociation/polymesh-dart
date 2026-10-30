@@ -5,7 +5,9 @@ use crate::account::{AccountCommitmentKeyTrait, AccountState, AccountStateCommit
 use crate::auth_proofs::transparent::AuthProofTransparent;
 use crate::util::{
     BPProof, bp_gens_for_vec_commitment, enforce_constraints_for_randomness_relations,
-    get_verification_tuples_with_rng, handle_verification_tuples, prove_with_rng,
+    get_verification_tuples_with_rng, handle_verification_tuples,
+    host_rand_new_comm_anchor_challenge_contribution, init_host_rand_new_comm_anchor_protocol,
+    prove_with_rng, verify_host_rand_new_comm_anchor,
 };
 use crate::{
     ASSET_ID_LABEL, Error, NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL, ROOT_LABEL, TXN_CHALLENGE_LABEL,
@@ -738,18 +740,24 @@ pub struct AccountCommitmentsWithoutSkProof<G: SWCurveConfig + Clone + Copy> {
     pub resp_acc_old: SchnorrResponse<Affine<G>>,
     /// Partial response for new account: 3 unique indices (current_rho, current_randomness, B_blinding)
     pub resp_acc_new: PartialSchnorrResponse<Affine<G>>,
+    /// For `-rand_new_comm_anchor = anchor_gen * (-rand_new_comm)`. The response for
+    /// `-rand_new_comm` is in `resp_acc_new`.
+    pub resp_rand_new_comm_anchor: PartialPokDiscreteLog<Affine<G>>,
 }
 
 impl<G: SWCurveConfig + Clone + Copy> AccountCommitmentsWithoutSkProof<G> {
-    /// Verify account commitment Schnorr proofs (without sk/sk_enc).
+    /// Verify account commitment Schnorr proofs (without sk/sk_enc). `rand_new_comm_anchor` is the
+    /// auth proof's `anchor_gen * rand_new_comm`.
     pub fn verify_with_given_challenge(
         &self,
         y_old: Affine<G>,
         y_new: Affine<G>,
+        rand_new_comm_anchor: Affine<G>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G>>,
         blinding_gen: Affine<G>,
+        anchor_gen: Affine<G>,
         challenge: &G::ScalarField,
-        rmc: Option<&mut RandomizedMultChecker<Affine<G>>>,
+        mut rmc: Option<&mut RandomizedMultChecker<Affine<G>>>,
     ) -> Result<()> {
         verify_transparent_acc_comm(
             &self.resp_acc_old,
@@ -760,6 +768,14 @@ impl<G: SWCurveConfig + Clone + Copy> AccountCommitmentsWithoutSkProof<G> {
             blinding_gen,
             false,
             challenge,
+            rmc.as_deref_mut(),
+        )?;
+        verify_host_rand_new_comm_anchor(
+            &self.resp_rand_new_comm_anchor,
+            rand_new_comm_anchor,
+            anchor_gen,
+            challenge,
+            self.resp_acc_new.get_response(HOST_NEW_B_BLINDING_IDX)?,
             rmc,
         )
     }
@@ -912,6 +928,11 @@ pub struct AccountCommitmentsWithoutSkProtocol<G: SWCurveConfig + Clone + Copy> 
     /// Host proves `B_blinding * (rerand - rand_part_old_comm)` in old and `B_blinding * (-rand_new_comm)` in new.
     pub rand_part_old_comm: G::ScalarField,
     pub rand_new_comm: G::ScalarField,
+    /// For `-rand_new_comm_anchor = anchor_gen * (-rand_new_comm)`, sharing the blinding of
+    /// `-rand_new_comm` in `t_acc_new`.
+    pub t_rand_new_comm_anchor: PokDiscreteLogProtocol<Affine<G>>,
+    /// `anchor_gen * rand_new_comm`
+    pub rand_new_comm_anchor: Affine<G>,
 }
 
 impl<G: SWCurveConfig + Clone + Copy> AccountCommitmentsWithoutSkProtocol<G> {
@@ -922,6 +943,7 @@ impl<G: SWCurveConfig + Clone + Copy> AccountCommitmentsWithoutSkProtocol<G> {
         rng: &mut R,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G>>,
         b_blinding: Affine<G>,
+        anchor_gen: Affine<G>,
     ) -> Self {
         let (
             t_acc_old,
@@ -939,6 +961,12 @@ impl<G: SWCurveConfig + Clone + Copy> AccountCommitmentsWithoutSkProtocol<G> {
 
         let rand_part_old_comm = G::ScalarField::rand(rng);
         let rand_new_comm = G::ScalarField::rand(rng);
+        let (t_rand_new_comm_anchor, rand_new_comm_anchor) =
+            init_host_rand_new_comm_anchor_protocol(
+                rand_new_comm,
+                t_acc_new.blindings[HOST_NEW_B_BLINDING_IDX],
+                anchor_gen,
+            );
 
         Self {
             t_acc_old,
@@ -954,6 +982,8 @@ impl<G: SWCurveConfig + Clone + Copy> AccountCommitmentsWithoutSkProtocol<G> {
             id_blinding,
             rand_part_old_comm,
             rand_new_comm,
+            t_rand_new_comm_anchor,
+            rand_new_comm_anchor,
         }
     }
 
@@ -995,6 +1025,7 @@ impl<G: SWCurveConfig + Clone + Copy> AccountCommitmentsWithoutSkProtocol<G> {
         Ok(AccountCommitmentsWithoutSkProof {
             resp_acc_old,
             resp_acc_new,
+            resp_rand_new_comm_anchor: self.t_rand_new_comm_anchor.gen_partial_proof(),
         })
     }
 }
@@ -1360,15 +1391,17 @@ impl<
             odd_transcript,
         );
 
-        let b_blinding = account_tree_params
-            .even_parameters
-            .sl_params
-            .pc_gens()
-            .B_blinding;
+        let pc_gens = account_tree_params.even_parameters.sl_params.pc_gens();
+        let b_blinding = pc_gens.B_blinding;
+        let anchor_gen = pc_gens.B;
 
         // Create host account commitment protocol (creates all blindings internally)
-        let acc_host_proto =
-            AccountCommitmentsWithoutSkProtocol::init(rng, account_comm_key.clone(), b_blinding);
+        let acc_host_proto = AccountCommitmentsWithoutSkProtocol::init(
+            rng,
+            account_comm_key.clone(),
+            b_blinding,
+            anchor_gen,
+        );
 
         // Create partial protocol, passing the shared blindings from acc_host_proto
         let (partial_proto, nullifier) =
@@ -1410,6 +1443,13 @@ impl<
             )?;
             acc_host_proto.t_acc_new.challenge_contribution(
                 dst::TRANSPARENT_ACCOUNT_COMM_NEW_WITHOUT_SK,
+                &mut transcript,
+            )?;
+            host_rand_new_comm_anchor_challenge_contribution(
+                &acc_host_proto.t_rand_new_comm_anchor.t,
+                acc_host_proto.rand_new_comm_anchor,
+                &anchor_gen,
+                dst::TRANSPARENT_HOST_ACC_COMM_NEW_ANCHOR,
                 &mut transcript,
             )?;
 
@@ -1617,6 +1657,13 @@ impl<
                 dst::TRANSPARENT_ACCOUNT_COMM_NEW_WITHOUT_SK,
                 &mut transcript,
             )?;
+        host_rand_new_comm_anchor_challenge_contribution(
+            &self.commitment_proof.host_proof.resp_rand_new_comm_anchor.t,
+            self.commitment_proof.auth_proof.rand_new_comm_anchor,
+            &account_tree_params.even_parameters.sl_params.pc_gens().B,
+            dst::TRANSPARENT_HOST_ACC_COMM_NEW_ANCHOR,
+            &mut transcript,
+        )?;
 
         let (y_old, y_new) = self.old_and_new_host_commitments(
             asset_id,
@@ -1664,11 +1711,8 @@ impl<
         }
 
         // Compute verification points for host account commitments
-        let b_blinding = account_tree_params
-            .even_parameters
-            .sl_params
-            .pc_gens()
-            .B_blinding;
+        let pc_gens = account_tree_params.even_parameters.sl_params.pc_gens();
+        let b_blinding = pc_gens.B_blinding;
 
         let (y_old_affine, y_new_affine) = self.old_and_new_host_commitments(
             asset_id,
@@ -1697,8 +1741,10 @@ impl<
             .verify_with_given_challenge(
                 y_old_affine,
                 y_new_affine,
+                self.commitment_proof.auth_proof.rand_new_comm_anchor,
                 account_comm_key,
                 b_blinding,
+                pc_gens.B,
                 challenge,
                 rmc,
             )?;
@@ -2822,6 +2868,9 @@ fn init_transparent_acc_comm<R: CryptoRngCore, G: SWCurveConfig + Clone + Copy>(
     )
 }
 
+/// Index of the B_blinding witness (`-rand_new_comm`) in the host (split) mode new commitment.
+const HOST_NEW_B_BLINDING_IDX: usize = 7;
+
 /// Responses for transparent account commitment Schnorr proofs.
 /// `new_b_blinding_witness`: in host (split) mode, the witness for B_blinding in the new
 /// commitment (i.e., `-rand_new_comm`). Pass `None` for solo mode.
@@ -2876,8 +2925,7 @@ fn resp_transparent_acc_comm<G: SWCurveConfig + Clone + Copy>(
     new_wits.insert(current_randomness_idx, new_acc_randomness);
     // In host mode, B_blinding witness (-rand_new_comm) is unique to the new commitment
     if let Some(b_w) = new_b_blinding_witness {
-        let b_blinding_idx = 7;
-        new_wits.insert(b_blinding_idx, b_w);
+        new_wits.insert(HOST_NEW_B_BLINDING_IDX, b_w);
     }
     let resp_acc_new = t_acc_new.partial_response(new_wits, challenge)?;
 
@@ -4357,15 +4405,16 @@ mod tests {
             sk_enc.0,
             rand_part_old_comm,
             rand_new_comm,
+            updated_account.openings(),
             &rerandomized_leaf,
             &updated_account_comm.0,
             nullifier,
             auditor_pubkeys.clone(),
             nonce,
             &txn_type,
-            sk_gen,
-            enc_key_gen,
             b_blinding,
+            pc_gens.B,
+            &account_comm_key,
         )
         .unwrap();
 
@@ -4413,6 +4462,7 @@ mod tests {
                 sk_gen,
                 enc_key_gen,
                 b_blinding,
+                pc_gens.B,
                 None,
             )
             .unwrap();
@@ -4523,15 +4573,16 @@ mod tests {
             sk_enc.0,
             protocol.rand_part_old_comm(),
             protocol.rand_new_comm(),
+            updated_account.openings(),
             &rerandomized_leaf,
             &updated_account_comm.0,
             nullifier,
             auditor_pubkeys.clone(),
             &ledger_nonce,
             &txn_type,
-            sk_gen,
-            enc_key_gen,
             b_blinding,
+            pc_gens.B,
+            &account_comm_key,
         )
         .unwrap();
 
@@ -4609,6 +4660,7 @@ mod tests {
                 sk_gen,
                 enc_key_gen,
                 b_blinding,
+                pc_gens.B,
                 None,
             )
             .unwrap();
@@ -4737,15 +4789,16 @@ mod tests {
             sk_enc.0,
             rand_part_old_comm,
             rand_new_comm,
+            updated_account.openings(),
             &rerandomized_leaf,
             &updated_account_comm.0,
             nullifier,
             auditor_pubkeys.clone(),
             nonce,
             &txn_type,
-            sk_gen,
-            enc_key_gen,
             b_blinding,
+            pc_gens.B,
+            &account_comm_key,
         )
         .unwrap();
 
@@ -4793,6 +4846,7 @@ mod tests {
                 sk_gen,
                 enc_key_gen,
                 b_blinding,
+                pc_gens.B,
                 None,
             )
             .unwrap();
@@ -4903,15 +4957,16 @@ mod tests {
             sk_enc.0,
             protocol.rand_part_old_comm(),
             protocol.rand_new_comm(),
+            updated_account.openings(),
             &rerandomized_leaf,
             &updated_account_comm.0,
             nullifier,
             auditor_pubkeys.clone(),
             &ledger_nonce,
             &txn_type,
-            sk_gen,
-            enc_key_gen,
             b_blinding,
+            pc_gens.B,
+            &account_comm_key,
         )
         .unwrap();
 
@@ -4989,6 +5044,7 @@ mod tests {
                 sk_gen,
                 enc_key_gen,
                 b_blinding,
+                pc_gens.B,
                 None,
             )
             .unwrap();
@@ -5041,129 +5097,474 @@ mod tests {
         }
     }
 
-    #[cfg(all(
-        feature = "ignore_prover_input_sanitation",
-        feature = "nightly_mocking_tests"
-    ))]
-    mod mocking_tests {
+    #[cfg(feature = "ignore_prover_input_sanitation")]
+    mod input_sanitation_disabled {
         use super::*;
-        use ark_pallas::Affine as PallasA;
-        use mocktopus::mocking::{MockResult, Mockable};
 
-        const NUM_GENS: usize = 1 << 12;
-        const L: usize = 64;
-
-        fn mock_nullifier_for_ck<CK: AccountCommitmentKeyTrait<PallasA>>(
-            _: &CK,
-            expected_nullifier: PallasA,
-        ) {
-            AccountState::<PallasA>::nullifier::<CK>
-                .mock_safe(move |_, _| MockResult::Return(expected_nullifier));
-        }
-
-        fn clear_mocks<CK: AccountCommitmentKeyTrait<PallasA>>(_: &CK) {
-            AccountState::<PallasA>::nullifier::<CK>.clear_mock();
-            CommonTransparentWithoutCommitmentsProtocol::<
-                L,
-                PallasFr,
-                VestaFr,
-                PallasConfig,
-                VestaConfig,
-            >::nullifier_proto
-                .clear_mock();
-            CommonTransparentWithoutCommitmentsProtocol::<
-                L,
-                PallasFr,
-                VestaFr,
-                PallasConfig,
-                VestaConfig,
-            >::enforce_constraints_and_init_proto::<ThreadRng, PallasParams, VestaParams>
-                .clear_mock();
-        }
-
-        #[test]
-        fn withdraw_proof_with_mocked_wrong_rho_for_nullifier_fails_verification() {
-            // Prover mocks the nullifier to use rho+1 (wrong rho), so the published nullifier no longer
-            // matches the committed account's rho; verification (plain and RMC) must reject.
+        /// Builds a split withdraw where the host gives the device `rand_new_comm + delta` and submits
+        /// `C_new + B_blinding * delta`. Returns whether the host part verifies without and with
+        /// `RandomizedMultChecker`, after asserting the auth proof does.
+        fn withdraw_split_with_new_blinding_offset(delta: PallasFr) -> (bool, bool) {
             let mut rng = rand::thread_rng();
+
+            const NUM_GENS: usize = 1 << 12;
+            const L: usize = 64;
             let (account_tree_params, account_comm_key, _) = setup_gens_new::<NUM_GENS>(b"testing");
+            let b_blinding = account_tree_params.even_parameters.pc_gens().B_blinding;
 
             let enc_key_gen = account_comm_key.sk_enc_gen();
             let asset_id = 1;
-            let num_auditor_keys = 2;
-            let auditor_keys = (0..num_auditor_keys)
-                .map(|_| keygen_enc(&mut rng, enc_key_gen))
-                .collect::<Vec<_>>();
-            let auditor_pubkeys = auditor_keys.iter().map(|k| k.1.0).collect::<Vec<_>>();
+            let auditor_pubkeys = vec![keygen_enc(&mut rng, enc_key_gen).1.0];
 
             let (sk, account_pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
             let (sk_enc, pk_enc) = keygen_enc(&mut rng, enc_key_gen);
             let id = PallasFr::rand(&mut rng);
             let (mut account, _, _, _) = new_account(&mut rng, asset_id, account_pk, pk_enc, id);
             account.balance = 100;
-
-            let account_tree = get_tree_with_account_comm::<L, _>(
-                &account,
-                account_comm_key.clone(),
-                &account_tree_params,
-                6,
-            )
-            .unwrap();
-
-            let withdraw_amount = 30;
-            let nonce = b"test-nonce";
-
-            let updated_account = account.get_state_for_withdraw(withdraw_amount).unwrap();
-            let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
+            let account_comm = account.commit(account_comm_key.clone()).unwrap();
+            let account_tree =
+                get_tree_with_commitment::<L, _>(account_comm, &account_tree_params, 6);
             let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
             let root = account_tree.root_node();
 
-            let honest_nullifier =
-                (account_comm_key.current_rho_gen() * account.current_rho()).into_affine();
-            let mocked_current_rho = account.current_rho() + PallasFr::from(1u64);
-            let expected_mocked_nullifier =
-                (account_comm_key.current_rho_gen() * mocked_current_rho).into_affine();
+            let withdraw_amount = 30;
+            let nonce = b"test-nonce";
+            let txn_type = DeviceTxnType::Withdraw {
+                asset_id,
+                amount: withdraw_amount,
+            };
 
-            mock_nullifier_for_ck(&account_comm_key, expected_mocked_nullifier);
+            let updated_account = account.get_state_for_withdraw(withdraw_amount).unwrap();
+            let canonical_comm = updated_account.commit(account_comm_key.clone()).unwrap();
+            let updated_account_comm =
+                AccountStateCommitment((canonical_comm.0 + b_blinding * delta).into_affine());
 
-            CommonTransparentWithoutCommitmentsProtocol::<
-                L,
-                PallasFr,
-                VestaFr,
-                PallasConfig,
-                VestaConfig,
-            >::nullifier_proto
-                .mock_safe(move |_current_rho, old_rho_blinding, nullifier_gen| {
-                    MockResult::Return(PokDiscreteLogProtocol::init(
-                        mocked_current_rho,
-                        old_rho_blinding,
-                        nullifier_gen,
-                    ))
-                });
+            let (protocol, mut even_prover, odd_prover, nullifier) =
+                WithdrawSplitProtocol::<L, PallasFr, VestaFr, PallasConfig, VestaConfig>::init::<
+                    _,
+                    PallasParams,
+                    VestaParams,
+                >(
+                    &mut rng,
+                    withdraw_amount,
+                    &account,
+                    &updated_account,
+                    updated_account_comm,
+                    path,
+                    &root,
+                    nonce,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                )
+                .unwrap();
+            let challenge_h = even_prover
+                .transcript()
+                .challenge_scalar::<PallasFr>(TXN_CHALLENGE_LABEL);
+            let rerandomized_leaf = protocol.rerandomized_leaf();
 
-            let (proof, nullifier) = WithdrawProof::new::<_, PallasParams, VestaParams>(
+            let auth_proof = AuthProofTransparent::new(
                 &mut rng,
-                withdraw_amount,
                 sk.0,
                 sk_enc.0,
-                &account,
-                &updated_account,
-                updated_account_comm,
-                path,
+                protocol.rand_part_old_comm(),
+                protocol.rand_new_comm() + delta,
+                updated_account.openings(),
+                &rerandomized_leaf,
+                &updated_account_comm.0,
+                nullifier,
                 auditor_pubkeys.clone(),
-                &root,
                 nonce,
-                &account_tree_params,
-                account_comm_key.clone(),
-                enc_key_gen,
+                &txn_type,
+                b_blinding,
+                account_tree_params.even_parameters.pc_gens().B,
+                &account_comm_key,
             )
             .unwrap();
 
-            assert_eq!(nullifier, expected_mocked_nullifier);
-            assert_ne!(nullifier, honest_nullifier);
+            let (partial, host_proof) = protocol
+                .gen_proof::<_, PallasParams, VestaParams>(
+                    &challenge_h,
+                    even_prover,
+                    odd_prover,
+                    &account_tree_params,
+                    &mut rng,
+                )
+                .unwrap();
+            let proof = WithdrawSplitProof(CommonTransparentSplitProof {
+                partial,
+                commitment_proof: TransparentCommitmentsSplitProof {
+                    auth_proof,
+                    host_proof,
+                },
+            });
+
+            proof
+                .0
+                .commitment_proof
+                .auth_proof
+                .verify(
+                    &rerandomized_leaf,
+                    &updated_account_comm.0,
+                    nullifier,
+                    &auditor_pubkeys,
+                    nonce,
+                    &txn_type,
+                    account_comm_key.sk_gen(),
+                    enc_key_gen,
+                    b_blinding,
+                    account_tree_params.even_parameters.pc_gens().B,
+                    None,
+                )
+                .unwrap();
+
+            let verified = proof
+                .0
+                .verify_host::<_, PallasParams, VestaParams>(
+                    asset_id,
+                    withdraw_amount,
+                    updated_account_comm,
+                    nullifier,
+                    true,
+                    &root,
+                    nonce,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    &mut rng,
+                    None,
+                )
+                .is_ok();
+
+            let mut rmc_0 = RandomizedMultChecker::new(PallasFr::rand(&mut rng));
+            let mut rmc_1 = RandomizedMultChecker::new(VestaFr::rand(&mut rng));
+            let verified_with_rmc = proof
+                .0
+                .verify_host::<_, PallasParams, VestaParams>(
+                    asset_id,
+                    withdraw_amount,
+                    updated_account_comm,
+                    nullifier,
+                    true,
+                    &root,
+                    nonce,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    &mut rng,
+                    Some((&mut rmc_0, &mut rmc_1)),
+                )
+                .and_then(|_| verify_rmc(rmc_0, rmc_1))
+                .is_ok();
+            (verified, verified_with_rmc)
+        }
+
+        #[test]
+        fn withdraw_split_rejects_blinding_offset_in_new_commitment() {
+            // The host gives the device `rand_new_comm + delta` and submits `C_new + B_blinding * delta`.
+            // The device skips its canonicality check, so only the verifier can reject the proof.
+            let (verified, _) =
+                withdraw_split_with_new_blinding_offset(PallasFr::rand(&mut rand::thread_rng()));
             assert!(
-                proof
-                    .verify::<_, PallasParams, VestaParams>(
+                !verified,
+                "verifier accepted a new commitment with a B_blinding offset"
+            );
+        }
+
+        #[cfg(feature = "nightly_mocking_tests")]
+        mod mocking_tests {
+            use super::*;
+            use ark_pallas::Affine as PallasA;
+            use mocktopus::mocking::{MockResult, Mockable};
+
+            const NUM_GENS: usize = 1 << 12;
+            const L: usize = 64;
+
+            fn mock_nullifier_for_ck<CK: AccountCommitmentKeyTrait<PallasA>>(
+                _: &CK,
+                expected_nullifier: PallasA,
+            ) {
+                AccountState::<PallasA>::nullifier::<CK>
+                    .mock_safe(move |_, _| MockResult::Return(expected_nullifier));
+            }
+
+            fn clear_mocks<CK: AccountCommitmentKeyTrait<PallasA>>(_: &CK) {
+                AccountState::<PallasA>::nullifier::<CK>.clear_mock();
+                CommonTransparentWithoutCommitmentsProtocol::<
+                    L,
+                    PallasFr,
+                    VestaFr,
+                    PallasConfig,
+                    VestaConfig,
+                >::nullifier_proto
+                    .clear_mock();
+                CommonTransparentWithoutCommitmentsProtocol::<
+                    L,
+                    PallasFr,
+                    VestaFr,
+                    PallasConfig,
+                    VestaConfig,
+                >::enforce_constraints_and_init_proto::<ThreadRng, PallasParams, VestaParams>
+                    .clear_mock();
+            }
+
+            #[test]
+            fn withdraw_split_rejects_host_anchor_not_matching_new_commitment() {
+                // The host hashes the device's anchor `anchor_gen * (rand_new_comm + delta)` but its new
+                // commitment carries `-rand_new_comm`, so only the anchor relation fails.
+                let mut rng = rand::thread_rng();
+                for (delta, verifies) in [
+                    (PallasFr::from(0u8), true),
+                    (PallasFr::rand(&mut rng), false),
+                ] {
+                    init_host_rand_new_comm_anchor_protocol::<PallasA>.mock_safe(
+                        move |rand_new_comm, blinding, anchor_gen| {
+                            MockResult::Return((
+                                PokDiscreteLogProtocol::init(-rand_new_comm, blinding, &anchor_gen),
+                                (anchor_gen * (rand_new_comm + delta)).into_affine(),
+                            ))
+                        },
+                    );
+                    assert_eq!(
+                        withdraw_split_with_new_blinding_offset(delta),
+                        (verifies, verifies)
+                    );
+                    init_host_rand_new_comm_anchor_protocol::<PallasA>.clear_mock();
+                }
+            }
+
+            #[test]
+            fn withdraw_proof_with_mocked_wrong_rho_for_nullifier_fails_verification() {
+                // Prover mocks the nullifier to use rho+1 (wrong rho), so the published nullifier no longer
+                // matches the committed account's rho; verification (plain and RMC) must reject.
+                let mut rng = rand::thread_rng();
+                let (account_tree_params, account_comm_key, _) =
+                    setup_gens_new::<NUM_GENS>(b"testing");
+
+                let enc_key_gen = account_comm_key.sk_enc_gen();
+                let asset_id = 1;
+                let num_auditor_keys = 2;
+                let auditor_keys = (0..num_auditor_keys)
+                    .map(|_| keygen_enc(&mut rng, enc_key_gen))
+                    .collect::<Vec<_>>();
+                let auditor_pubkeys = auditor_keys.iter().map(|k| k.1.0).collect::<Vec<_>>();
+
+                let (sk, account_pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+                let (sk_enc, pk_enc) = keygen_enc(&mut rng, enc_key_gen);
+                let id = PallasFr::rand(&mut rng);
+                let (mut account, _, _, _) =
+                    new_account(&mut rng, asset_id, account_pk, pk_enc, id);
+                account.balance = 100;
+
+                let account_tree = get_tree_with_account_comm::<L, _>(
+                    &account,
+                    account_comm_key.clone(),
+                    &account_tree_params,
+                    6,
+                )
+                .unwrap();
+
+                let withdraw_amount = 30;
+                let nonce = b"test-nonce";
+
+                let updated_account = account.get_state_for_withdraw(withdraw_amount).unwrap();
+                let updated_account_comm =
+                    updated_account.commit(account_comm_key.clone()).unwrap();
+                let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+                let root = account_tree.root_node();
+
+                let honest_nullifier =
+                    (account_comm_key.current_rho_gen() * account.current_rho()).into_affine();
+                let mocked_current_rho = account.current_rho() + PallasFr::from(1u64);
+                let expected_mocked_nullifier =
+                    (account_comm_key.current_rho_gen() * mocked_current_rho).into_affine();
+
+                mock_nullifier_for_ck(&account_comm_key, expected_mocked_nullifier);
+
+                CommonTransparentWithoutCommitmentsProtocol::<
+                    L,
+                    PallasFr,
+                    VestaFr,
+                    PallasConfig,
+                    VestaConfig,
+                >::nullifier_proto
+                    .mock_safe(move |_current_rho, old_rho_blinding, nullifier_gen| {
+                        MockResult::Return(PokDiscreteLogProtocol::init(
+                            mocked_current_rho,
+                            old_rho_blinding,
+                            nullifier_gen,
+                        ))
+                    });
+
+                let (proof, nullifier) = WithdrawProof::new::<_, PallasParams, VestaParams>(
+                    &mut rng,
+                    withdraw_amount,
+                    sk.0,
+                    sk_enc.0,
+                    &account,
+                    &updated_account,
+                    updated_account_comm,
+                    path,
+                    auditor_pubkeys.clone(),
+                    &root,
+                    nonce,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    enc_key_gen,
+                )
+                .unwrap();
+
+                assert_eq!(nullifier, expected_mocked_nullifier);
+                assert_ne!(nullifier, honest_nullifier);
+                assert!(
+                    proof
+                        .verify::<_, PallasParams, VestaParams>(
+                            asset_id,
+                            withdraw_amount,
+                            updated_account_comm,
+                            nullifier,
+                            auditor_pubkeys.clone(),
+                            &root,
+                            nonce,
+                            &account_tree_params,
+                            account_comm_key.clone(),
+                            enc_key_gen,
+                            &mut rng,
+                            None,
+                        )
+                        .is_err()
+                );
+
+                let mut rmc_0 = RandomizedMultChecker::new(PallasFr::rand(&mut rng));
+                let mut rmc_1 = RandomizedMultChecker::new(VestaFr::rand(&mut rng));
+                let verify_result = proof.verify::<_, PallasParams, VestaParams>(
+                    asset_id,
+                    withdraw_amount,
+                    updated_account_comm,
+                    nullifier,
+                    auditor_pubkeys,
+                    &root,
+                    nonce,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    enc_key_gen,
+                    &mut rng,
+                    Some((&mut rmc_0, &mut rmc_1)),
+                );
+                let rmc_result = verify_rmc(rmc_0, rmc_1);
+                assert!(verify_result.is_err() || rmc_result.is_err());
+
+                clear_mocks(&account_comm_key);
+            }
+
+            #[test]
+            fn withdraw_proof_with_mocked_balance_for_range_proof_fails_verification() {
+                // Prover feeds a wrong updated balance (true+1) into the range-proof constraints, so it no
+                // longer matches the new account commitment; verification (plain and RMC) must reject.
+                let mut rng = rand::thread_rng();
+                let (account_tree_params, account_comm_key, _) =
+                    setup_gens_new::<NUM_GENS>(b"testing");
+
+                let enc_key_gen = account_comm_key.sk_enc_gen();
+                let asset_id = 1;
+                let num_auditor_keys = 2;
+                let auditor_keys = (0..num_auditor_keys)
+                    .map(|_| keygen_enc(&mut rng, enc_key_gen))
+                    .collect::<Vec<_>>();
+                let auditor_pubkeys = auditor_keys.iter().map(|k| k.1.0).collect::<Vec<_>>();
+
+                let (sk, account_pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+                let (sk_enc, pk_enc) = keygen_enc(&mut rng, enc_key_gen);
+                let id = PallasFr::rand(&mut rng);
+                let (mut account, _, _, _) =
+                    new_account(&mut rng, asset_id, account_pk, pk_enc, id);
+                account.balance = 100;
+
+                let account_tree = get_tree_with_account_comm::<L, _>(
+                    &account,
+                    account_comm_key.clone(),
+                    &account_tree_params,
+                    6,
+                )
+                .unwrap();
+
+                let withdraw_amount = 30;
+                let nonce = b"test-nonce";
+
+                let updated_account = account.get_state_for_withdraw(withdraw_amount).unwrap();
+                let updated_account_comm =
+                    updated_account.commit(account_comm_key.clone()).unwrap();
+                let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+                let root = account_tree.root_node();
+
+                let mocked_updated_balance = updated_account.balance() + 1;
+
+                CommonTransparentWithoutCommitmentsProtocol::<
+                    L,
+                    PallasFr,
+                    VestaFr,
+                    PallasConfig,
+                    VestaConfig,
+                >::enforce_constraints_and_init_proto::<ThreadRng, PallasParams, VestaParams>
+                    .mock_safe(
+                        move |rng,
+                              has_balance_decreased,
+                              rho,
+                              current_rho,
+                              updated_current_rho,
+                              randomness,
+                              current_randomness,
+                              updated_current_randomness,
+                              _updated_balance,
+                              new_balance_blinding,
+                              initial_rho_blinding,
+                              old_rho_blinding,
+                              new_rho_blinding,
+                              initial_s_blinding,
+                              old_s_blinding,
+                              new_s_blinding,
+                              even_prover,
+                              account_tree_params| {
+                            MockResult::Continue((
+                                rng,
+                                has_balance_decreased,
+                                rho,
+                                current_rho,
+                                updated_current_rho,
+                                randomness,
+                                current_randomness,
+                                updated_current_randomness,
+                                mocked_updated_balance,
+                                new_balance_blinding,
+                                initial_rho_blinding,
+                                old_rho_blinding,
+                                new_rho_blinding,
+                                initial_s_blinding,
+                                old_s_blinding,
+                                new_s_blinding,
+                                even_prover,
+                                account_tree_params,
+                            ))
+                        },
+                    );
+
+                let (proof, nullifier) = WithdrawProof::new::<_, PallasParams, VestaParams>(
+                    &mut rng,
+                    withdraw_amount,
+                    sk.0,
+                    sk_enc.0,
+                    &account,
+                    &updated_account,
+                    updated_account_comm,
+                    path,
+                    auditor_pubkeys.clone(),
+                    &root,
+                    nonce,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    enc_key_gen,
+                )
+                .unwrap();
+
+                assert_err!(
+                    proof.verify::<_, PallasParams, VestaParams>(
                         asset_id,
                         withdraw_amount,
                         updated_account_comm,
@@ -5176,324 +5577,183 @@ mod tests {
                         enc_key_gen,
                         &mut rng,
                         None,
-                    )
-                    .is_err()
-            );
-
-            let mut rmc_0 = RandomizedMultChecker::new(PallasFr::rand(&mut rng));
-            let mut rmc_1 = RandomizedMultChecker::new(VestaFr::rand(&mut rng));
-            let verify_result = proof.verify::<_, PallasParams, VestaParams>(
-                asset_id,
-                withdraw_amount,
-                updated_account_comm,
-                nullifier,
-                auditor_pubkeys,
-                &root,
-                nonce,
-                &account_tree_params,
-                account_comm_key.clone(),
-                enc_key_gen,
-                &mut rng,
-                Some((&mut rmc_0, &mut rmc_1)),
-            );
-            let rmc_result = verify_rmc(rmc_0, rmc_1);
-            assert!(verify_result.is_err() || rmc_result.is_err());
-
-            clear_mocks(&account_comm_key);
-        }
-
-        #[test]
-        fn withdraw_proof_with_mocked_balance_for_range_proof_fails_verification() {
-            // Prover feeds a wrong updated balance (true+1) into the range-proof constraints, so it no
-            // longer matches the new account commitment; verification (plain and RMC) must reject.
-            let mut rng = rand::thread_rng();
-            let (account_tree_params, account_comm_key, _) = setup_gens_new::<NUM_GENS>(b"testing");
-
-            let enc_key_gen = account_comm_key.sk_enc_gen();
-            let asset_id = 1;
-            let num_auditor_keys = 2;
-            let auditor_keys = (0..num_auditor_keys)
-                .map(|_| keygen_enc(&mut rng, enc_key_gen))
-                .collect::<Vec<_>>();
-            let auditor_pubkeys = auditor_keys.iter().map(|k| k.1.0).collect::<Vec<_>>();
-
-            let (sk, account_pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
-            let (sk_enc, pk_enc) = keygen_enc(&mut rng, enc_key_gen);
-            let id = PallasFr::rand(&mut rng);
-            let (mut account, _, _, _) = new_account(&mut rng, asset_id, account_pk, pk_enc, id);
-            account.balance = 100;
-
-            let account_tree = get_tree_with_account_comm::<L, _>(
-                &account,
-                account_comm_key.clone(),
-                &account_tree_params,
-                6,
-            )
-            .unwrap();
-
-            let withdraw_amount = 30;
-            let nonce = b"test-nonce";
-
-            let updated_account = account.get_state_for_withdraw(withdraw_amount).unwrap();
-            let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
-            let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
-            let root = account_tree.root_node();
-
-            let mocked_updated_balance = updated_account.balance() + 1;
-
-            CommonTransparentWithoutCommitmentsProtocol::<
-                L,
-                PallasFr,
-                VestaFr,
-                PallasConfig,
-                VestaConfig,
-            >::enforce_constraints_and_init_proto::<ThreadRng, PallasParams, VestaParams>
-                .mock_safe(
-                    move |rng,
-                          has_balance_decreased,
-                          rho,
-                          current_rho,
-                          updated_current_rho,
-                          randomness,
-                          current_randomness,
-                          updated_current_randomness,
-                          _updated_balance,
-                          new_balance_blinding,
-                          initial_rho_blinding,
-                          old_rho_blinding,
-                          new_rho_blinding,
-                          initial_s_blinding,
-                          old_s_blinding,
-                          new_s_blinding,
-                          even_prover,
-                          account_tree_params| {
-                        MockResult::Continue((
-                            rng,
-                            has_balance_decreased,
-                            rho,
-                            current_rho,
-                            updated_current_rho,
-                            randomness,
-                            current_randomness,
-                            updated_current_randomness,
-                            mocked_updated_balance,
-                            new_balance_blinding,
-                            initial_rho_blinding,
-                            old_rho_blinding,
-                            new_rho_blinding,
-                            initial_s_blinding,
-                            old_s_blinding,
-                            new_s_blinding,
-                            even_prover,
-                            account_tree_params,
-                        ))
-                    },
+                    ),
+                    Error::SchnorrError(_)
                 );
 
-            let (proof, nullifier) = WithdrawProof::new::<_, PallasParams, VestaParams>(
-                &mut rng,
-                withdraw_amount,
-                sk.0,
-                sk_enc.0,
-                &account,
-                &updated_account,
-                updated_account_comm,
-                path,
-                auditor_pubkeys.clone(),
-                &root,
-                nonce,
-                &account_tree_params,
-                account_comm_key.clone(),
-                enc_key_gen,
-            )
-            .unwrap();
-
-            assert_err!(
-                proof.verify::<_, PallasParams, VestaParams>(
+                let mut rmc_0 = RandomizedMultChecker::new(PallasFr::rand(&mut rng));
+                let mut rmc_1 = RandomizedMultChecker::new(VestaFr::rand(&mut rng));
+                let verify_result = proof.verify::<_, PallasParams, VestaParams>(
                     asset_id,
                     withdraw_amount,
                     updated_account_comm,
                     nullifier,
-                    auditor_pubkeys.clone(),
+                    auditor_pubkeys,
                     &root,
                     nonce,
                     &account_tree_params,
                     account_comm_key.clone(),
                     enc_key_gen,
                     &mut rng,
-                    None,
-                ),
-                Error::SchnorrError(_)
-            );
-
-            let mut rmc_0 = RandomizedMultChecker::new(PallasFr::rand(&mut rng));
-            let mut rmc_1 = RandomizedMultChecker::new(VestaFr::rand(&mut rng));
-            let verify_result = proof.verify::<_, PallasParams, VestaParams>(
-                asset_id,
-                withdraw_amount,
-                updated_account_comm,
-                nullifier,
-                auditor_pubkeys,
-                &root,
-                nonce,
-                &account_tree_params,
-                account_comm_key.clone(),
-                enc_key_gen,
-                &mut rng,
-                Some((&mut rmc_0, &mut rmc_1)),
-            );
-            let rmc_result = verify_rmc(rmc_0, rmc_1);
-            assert!(verify_result.is_err() || rmc_result.is_err());
-
-            clear_mocks(&account_comm_key);
-        }
-
-        #[test]
-        fn withdraw_proof_with_mocked_updated_randomness_relation_inputs_fails_verification() {
-            // Prover tampers with the new-account-commitment randomness relation, passing updated rho+1
-            // and updated randomness+1 instead of the real values; verification (plain and RMC) must reject.
-            let mut rng = rand::thread_rng();
-            let (account_tree_params, account_comm_key, _) = setup_gens_new::<NUM_GENS>(b"testing");
-
-            let enc_key_gen = account_comm_key.sk_enc_gen();
-            let asset_id = 1;
-            let num_auditor_keys = 2;
-            let auditor_keys = (0..num_auditor_keys)
-                .map(|_| keygen_enc(&mut rng, enc_key_gen))
-                .collect::<Vec<_>>();
-            let auditor_pubkeys = auditor_keys.iter().map(|k| k.1.0).collect::<Vec<_>>();
-
-            let (sk, account_pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
-            let (sk_enc, pk_enc) = keygen_enc(&mut rng, enc_key_gen);
-            let id = PallasFr::rand(&mut rng);
-            let (mut account, _, _, _) = new_account(&mut rng, asset_id, account_pk, pk_enc, id);
-            account.balance = 100;
-
-            let account_tree = get_tree_with_account_comm::<L, _>(
-                &account,
-                account_comm_key.clone(),
-                &account_tree_params,
-                6,
-            )
-            .unwrap();
-
-            let withdraw_amount = 30;
-            let nonce = b"test-nonce";
-
-            let updated_account = account.get_state_for_withdraw(withdraw_amount).unwrap();
-            let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
-            let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
-            let root = account_tree.root_node();
-
-            let mocked_updated_current_rho = updated_account.current_rho() + PallasFr::from(1u64);
-            let mocked_updated_current_randomness =
-                updated_account.current_randomness() + PallasFr::from(1u64);
-
-            CommonTransparentWithoutCommitmentsProtocol::<
-                L,
-                PallasFr,
-                VestaFr,
-                PallasConfig,
-                VestaConfig,
-            >::enforce_constraints_and_init_proto::<ThreadRng, PallasParams, VestaParams>
-                .mock_safe(
-                    move |rng,
-                          has_balance_decreased,
-                          rho,
-                          current_rho,
-                          _updated_current_rho,
-                          randomness,
-                          current_randomness,
-                          _updated_current_randomness,
-                          updated_balance,
-                          new_balance_blinding,
-                          initial_rho_blinding,
-                          old_rho_blinding,
-                          new_rho_blinding,
-                          initial_s_blinding,
-                          old_s_blinding,
-                          new_s_blinding,
-                          even_prover,
-                          account_tree_params| {
-                        MockResult::Continue((
-                            rng,
-                            has_balance_decreased,
-                            rho,
-                            current_rho,
-                            mocked_updated_current_rho,
-                            randomness,
-                            current_randomness,
-                            mocked_updated_current_randomness,
-                            updated_balance,
-                            new_balance_blinding,
-                            initial_rho_blinding,
-                            old_rho_blinding,
-                            new_rho_blinding,
-                            initial_s_blinding,
-                            old_s_blinding,
-                            new_s_blinding,
-                            even_prover,
-                            account_tree_params,
-                        ))
-                    },
+                    Some((&mut rmc_0, &mut rmc_1)),
                 );
+                let rmc_result = verify_rmc(rmc_0, rmc_1);
+                assert!(verify_result.is_err() || rmc_result.is_err());
 
-            let (proof, nullifier) = WithdrawProof::new::<_, PallasParams, VestaParams>(
-                &mut rng,
-                withdraw_amount,
-                sk.0,
-                sk_enc.0,
-                &account,
-                &updated_account,
-                updated_account_comm,
-                path,
-                auditor_pubkeys.clone(),
-                &root,
-                nonce,
-                &account_tree_params,
-                account_comm_key.clone(),
-                enc_key_gen,
-            )
-            .unwrap();
+                clear_mocks(&account_comm_key);
+            }
 
-            assert_err!(
-                proof.verify::<_, PallasParams, VestaParams>(
-                    asset_id,
+            #[test]
+            fn withdraw_proof_with_mocked_updated_randomness_relation_inputs_fails_verification() {
+                // Prover tampers with the new-account-commitment randomness relation, passing updated rho+1
+                // and updated randomness+1 instead of the real values; verification (plain and RMC) must reject.
+                let mut rng = rand::thread_rng();
+                let (account_tree_params, account_comm_key, _) =
+                    setup_gens_new::<NUM_GENS>(b"testing");
+
+                let enc_key_gen = account_comm_key.sk_enc_gen();
+                let asset_id = 1;
+                let num_auditor_keys = 2;
+                let auditor_keys = (0..num_auditor_keys)
+                    .map(|_| keygen_enc(&mut rng, enc_key_gen))
+                    .collect::<Vec<_>>();
+                let auditor_pubkeys = auditor_keys.iter().map(|k| k.1.0).collect::<Vec<_>>();
+
+                let (sk, account_pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+                let (sk_enc, pk_enc) = keygen_enc(&mut rng, enc_key_gen);
+                let id = PallasFr::rand(&mut rng);
+                let (mut account, _, _, _) =
+                    new_account(&mut rng, asset_id, account_pk, pk_enc, id);
+                account.balance = 100;
+
+                let account_tree = get_tree_with_account_comm::<L, _>(
+                    &account,
+                    account_comm_key.clone(),
+                    &account_tree_params,
+                    6,
+                )
+                .unwrap();
+
+                let withdraw_amount = 30;
+                let nonce = b"test-nonce";
+
+                let updated_account = account.get_state_for_withdraw(withdraw_amount).unwrap();
+                let updated_account_comm =
+                    updated_account.commit(account_comm_key.clone()).unwrap();
+                let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+                let root = account_tree.root_node();
+
+                let mocked_updated_current_rho =
+                    updated_account.current_rho() + PallasFr::from(1u64);
+                let mocked_updated_current_randomness =
+                    updated_account.current_randomness() + PallasFr::from(1u64);
+
+                CommonTransparentWithoutCommitmentsProtocol::<
+                    L,
+                    PallasFr,
+                    VestaFr,
+                    PallasConfig,
+                    VestaConfig,
+                >::enforce_constraints_and_init_proto::<ThreadRng, PallasParams, VestaParams>
+                    .mock_safe(
+                        move |rng,
+                              has_balance_decreased,
+                              rho,
+                              current_rho,
+                              _updated_current_rho,
+                              randomness,
+                              current_randomness,
+                              _updated_current_randomness,
+                              updated_balance,
+                              new_balance_blinding,
+                              initial_rho_blinding,
+                              old_rho_blinding,
+                              new_rho_blinding,
+                              initial_s_blinding,
+                              old_s_blinding,
+                              new_s_blinding,
+                              even_prover,
+                              account_tree_params| {
+                            MockResult::Continue((
+                                rng,
+                                has_balance_decreased,
+                                rho,
+                                current_rho,
+                                mocked_updated_current_rho,
+                                randomness,
+                                current_randomness,
+                                mocked_updated_current_randomness,
+                                updated_balance,
+                                new_balance_blinding,
+                                initial_rho_blinding,
+                                old_rho_blinding,
+                                new_rho_blinding,
+                                initial_s_blinding,
+                                old_s_blinding,
+                                new_s_blinding,
+                                even_prover,
+                                account_tree_params,
+                            ))
+                        },
+                    );
+
+                let (proof, nullifier) = WithdrawProof::new::<_, PallasParams, VestaParams>(
+                    &mut rng,
                     withdraw_amount,
+                    sk.0,
+                    sk_enc.0,
+                    &account,
+                    &updated_account,
                     updated_account_comm,
-                    nullifier,
+                    path,
                     auditor_pubkeys.clone(),
                     &root,
                     nonce,
                     &account_tree_params,
                     account_comm_key.clone(),
                     enc_key_gen,
+                )
+                .unwrap();
+
+                assert_err!(
+                    proof.verify::<_, PallasParams, VestaParams>(
+                        asset_id,
+                        withdraw_amount,
+                        updated_account_comm,
+                        nullifier,
+                        auditor_pubkeys.clone(),
+                        &root,
+                        nonce,
+                        &account_tree_params,
+                        account_comm_key.clone(),
+                        enc_key_gen,
+                        &mut rng,
+                        None,
+                    ),
+                    Error::SchnorrError(_)
+                );
+
+                let mut rmc_0 = RandomizedMultChecker::new(PallasFr::rand(&mut rng));
+                let mut rmc_1 = RandomizedMultChecker::new(VestaFr::rand(&mut rng));
+                let verify_result = proof.verify::<_, PallasParams, VestaParams>(
+                    asset_id,
+                    withdraw_amount,
+                    updated_account_comm,
+                    nullifier,
+                    auditor_pubkeys,
+                    &root,
+                    nonce,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    enc_key_gen,
                     &mut rng,
-                    None,
-                ),
-                Error::SchnorrError(_)
-            );
+                    Some((&mut rmc_0, &mut rmc_1)),
+                );
+                let rmc_result = verify_rmc(rmc_0, rmc_1);
+                assert!(verify_result.is_err() || rmc_result.is_err());
 
-            let mut rmc_0 = RandomizedMultChecker::new(PallasFr::rand(&mut rng));
-            let mut rmc_1 = RandomizedMultChecker::new(VestaFr::rand(&mut rng));
-            let verify_result = proof.verify::<_, PallasParams, VestaParams>(
-                asset_id,
-                withdraw_amount,
-                updated_account_comm,
-                nullifier,
-                auditor_pubkeys,
-                &root,
-                nonce,
-                &account_tree_params,
-                account_comm_key.clone(),
-                enc_key_gen,
-                &mut rng,
-                Some((&mut rmc_0, &mut rmc_1)),
-            );
-            let rmc_result = verify_rmc(rmc_0, rmc_1);
-            assert!(verify_result.is_err() || rmc_result.is_err());
-
-            clear_mocks(&account_comm_key);
+                clear_mocks(&account_comm_key);
+            }
         }
     }
 }

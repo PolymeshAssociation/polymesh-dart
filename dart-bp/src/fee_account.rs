@@ -4,8 +4,11 @@ use crate::auth_proofs::{AuthProofOnlySk, AuthProofOnlySkProtocol, DeviceTxnType
 use crate::dst;
 use crate::error::*;
 use crate::util::{
-    BPProof, append_auth_proof_and_get_challenge, get_verification_tuples_with_rng,
-    handle_verification_tuples, make_ledger_nonce, prove_with_rng,
+    BPProof, append_auth_proof_and_get_challenge, bp_gens_vec_for_randomness_relations,
+    enforce_constraints_for_randomness_relations, get_verification_tuples_with_rng,
+    handle_verification_tuples, host_rand_new_comm_anchor_challenge_contribution,
+    init_host_rand_new_comm_anchor_protocol, make_ledger_nonce, prove_with_rng,
+    verify_host_rand_new_comm_anchor,
 };
 use crate::{
     ASSET_ID_LABEL, INCREASE_BAL_BY_LABEL, NONCE_LABEL, PK_LABEL, RE_RANDOMIZED_PATH_LABEL,
@@ -20,8 +23,9 @@ use ark_ff::PrimeField;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::collections::BTreeMap;
 use ark_std::string::ToString;
-use ark_std::{UniformRand, format, vec::Vec};
+use ark_std::{UniformRand, format, vec, vec::Vec};
 use bulletproofs::r1cs::{ConstraintSystem, Prover, VerificationTuple, Verifier};
+use bulletproofs::{BulletproofGens, PedersenGens};
 use curve_tree_relations::curve_tree::{Root, SelectAndRerandomizePathWithDivisorComms};
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use curve_tree_relations::parameters::SelRerandProofParametersNew;
@@ -66,9 +70,7 @@ pub struct FeeAccountState<G: AffineRepr> {
     /// This is 0 for PolyX is always revealed when paying fee
     /// Including the asset-id as we might need to support multiple fee currencies in future.
     pub asset_id: AssetId,
-    /// Not committed in fee account commitment
     pub initial_rho: G::ScalarField,
-    /// Not committed in fee account commitment
     pub initial_randomness: G::ScalarField,
     pub rho: G::ScalarField,
     pub randomness: G::ScalarField,
@@ -124,12 +126,16 @@ impl<G: AffineRepr> FeeAccountState<G> {
                 account_comm_key.balance_gen(),
                 account_comm_key.asset_id_gen(),
                 account_comm_key.rho_gen(),
+                account_comm_key.current_rho_gen(),
                 account_comm_key.randomness_gen(),
+                account_comm_key.current_randomness_gen(),
             ],
             &[
                 G::ScalarField::from(self.balance),
                 G::ScalarField::from(self.asset_id),
+                self.initial_rho,
                 self.rho,
+                self.initial_randomness,
                 self.randomness,
             ],
         )
@@ -161,16 +167,12 @@ impl<G: AffineRepr> FeeAccountState<G> {
     }
 
     pub fn refresh_randomness_for_state_change(&mut self) {
-        // This isn't enforced in the verification and only here to let users have all randomness derived from a
-        // "seed" such that they can recover. The cost is 2 extra items in the commitment.
-        // An alternative could be a user held counter not part of state used to derive the randomness but above keeps
-        // it similar to main account commitment.
         self.rho *= self.initial_rho;
         self.randomness *= self.initial_randomness;
     }
 
     pub fn nullifier<CK: AccountCommitmentKeyTrait<G>>(&self, comm_key: &CK) -> G {
-        (comm_key.rho_gen() * self.rho()).into()
+        (comm_key.current_rho_gen() * self.rho()).into()
     }
 
     #[inline]
@@ -203,12 +205,25 @@ impl<G: AffineRepr> FeeAccountState<G> {
 // proof of knowledge of secret key in the public key and the second prover's proof of knowledge of other witnesses in `C' = G_i * rho + G_j * s + ....`
 // Now the verifier can check that `C = C' + pk` as `pk(=G * sk)` is public
 
+/// Proves `C - D = (g_rho + g_current_rho) * rho + (g_randomness + g_current_randomness) * randomness`,
+/// so a registered state has `initial_rho = rho` and `initial_randomness = randomness`.
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct RegTxnWithoutSkProof<G: AffineRepr>(pub PokPedersenCommitment<G>);
 
 #[derive(Clone)]
 pub struct RegTxnProofWithoutSkProtocol<G: AffineRepr> {
     pub comm_protocol: PokPedersenCommitmentProtocol<G>,
+}
+
+/// Generators `(g_rho + g_current_rho, g_randomness + g_current_randomness)` of the registration proof.
+fn reg_comm_gens<G: AffineRepr>(account_comm_key: &impl AccountCommitmentKeyTrait<G>) -> (G, G) {
+    (
+        (account_comm_key.rho_gen().into_group() + account_comm_key.current_rho_gen())
+            .into_affine(),
+        (account_comm_key.randomness_gen().into_group()
+            + account_comm_key.current_randomness_gen())
+        .into_affine(),
+    )
 }
 
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
@@ -267,17 +282,26 @@ impl<G: AffineRepr> RegTxnProofWithoutSkProtocol<G> {
             + (account_comm_key.balance_gen() * G::ScalarField::from(account.balance()))
             + (account_comm_key.asset_id_gen() * G::ScalarField::from(account.asset_id()));
 
+        #[cfg(not(feature = "ignore_prover_input_sanitation"))]
+        if account.rho != account.initial_rho || account.randomness != account.initial_randomness {
+            return Err(Error::ProofGenerationError(
+                "Registered fee account state must have rho = initial_rho and randomness = initial_randomness"
+                    .to_string(),
+            ));
+        }
+
         let mut rho_blinding = G::ScalarField::rand(rng);
         let mut randomness_blinding = G::ScalarField::rand(rng);
 
-        // For proving Comm - D = g_rho * rho + g_randomness * randomness
+        let (rho_gen, randomness_gen) = reg_comm_gens(&account_comm_key);
+        // For proving Comm - D = (g_rho + g_current_rho) * rho + (g_randomness + g_current_randomness) * randomness
         let comm_protocol = PokPedersenCommitmentProtocol::init(
             account.rho(),
             rho_blinding,
-            &account_comm_key.rho_gen(),
+            &rho_gen,
             account.randomness(),
             randomness_blinding,
-            &account_comm_key.randomness_gen(),
+            &randomness_gen,
         );
 
         rho_blinding.zeroize();
@@ -285,8 +309,8 @@ impl<G: AffineRepr> RegTxnProofWithoutSkProtocol<G> {
 
         let reduced_acc_comm = (account_commitment.0.into_group() - D).into_affine();
         comm_protocol.challenge_contribution(
-            &account_comm_key.rho_gen(),
-            &account_comm_key.randomness_gen(),
+            &rho_gen,
+            &randomness_gen,
             &reduced_acc_comm,
             dst::FEE_REG_COMM,
             &mut transcript,
@@ -296,8 +320,10 @@ impl<G: AffineRepr> RegTxnProofWithoutSkProtocol<G> {
     }
 
     /// Response for sigma protocol
-    pub fn gen_proof(self, challenge: &G::ScalarField) -> RegTxnWithoutSkProof<G> {
-        RegTxnWithoutSkProof(self.comm_protocol.gen_proof(challenge))
+    pub fn gen_proof(self, challenge: &G::ScalarField) -> Result<RegTxnWithoutSkProof<G>> {
+        Ok(RegTxnWithoutSkProof(
+            self.comm_protocol.gen_proof(challenge),
+        ))
     }
 
     pub fn new<R: CryptoRngCore>(
@@ -317,7 +343,7 @@ impl<G: AffineRepr> RegTxnProofWithoutSkProtocol<G> {
             &mut transcript,
         )?;
         let challenge_h = transcript.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
-        let proof = proto.gen_proof(&challenge_h);
+        let proof = proto.gen_proof(&challenge_h)?;
         Ok(proof)
     }
 }
@@ -359,9 +385,10 @@ impl<G: AffineRepr> RegTxnWithoutSkProof<G> {
             + (account_comm_key.asset_id_gen() * G::ScalarField::from(asset_id));
 
         let reduced_acc_comm = (account_commitment.0.into_group() - D).into_affine();
+        let (rho_gen, randomness_gen) = reg_comm_gens(&account_comm_key);
         self.0.challenge_contribution(
-            &account_comm_key.rho_gen(),
-            &account_comm_key.randomness_gen(),
+            &rho_gen,
+            &randomness_gen,
             &reduced_acc_comm,
             dst::FEE_REG_COMM,
             &mut transcript,
@@ -376,13 +403,14 @@ impl<G: AffineRepr> RegTxnWithoutSkProof<G> {
         challenge: &G::ScalarField,
         mut rmc: Option<&mut RandomizedMultChecker<G>>,
     ) -> Result<()> {
+        let (rho_gen, randomness_gen) = reg_comm_gens(&account_comm_key);
         verify_or_rmc_3!(
             rmc,
             self.0,
             "Account commitment proof verification failed",
             reduced_acc_comm,
-            account_comm_key.rho_gen(),
-            account_comm_key.randomness_gen(),
+            rho_gen,
+            randomness_gen,
             challenge,
         );
 
@@ -436,7 +464,7 @@ impl<G: AffineRepr> RegTxnProof<G> {
         let challenge = transcript.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
         let auth_proof = auth_protocol.gen_proof(&challenge);
 
-        let partial = partial.gen_proof(&challenge);
+        let partial = partial.gen_proof(&challenge)?;
 
         Ok(Self {
             partial,
@@ -532,8 +560,9 @@ impl<G: AffineRepr> RegTxnProof<G> {
 
         let ledger_nonce_v = make_ledger_nonce(&challenge_h_v, nonce)?;
 
-        self.auth_proof.verify(
+        self.auth_proof.verify_with_account_commitment(
             *pk,
+            &account_commitment.0,
             &ledger_nonce_v,
             &DeviceTxnType::FeeAccountRegistration { asset_id, balance },
             &account_comm_key.sk_gen(),
@@ -566,6 +595,12 @@ pub struct FeeAccountTopupTxnWithoutSkProof<
     pub re_randomized_path: SelectAndRerandomizePathWithDivisorComms<L, G0, G1>,
     /// Schnorr proof for both account commitments (T-values + responses), without secret key
     pub account_comm_proof: AccountCommitmentsWithoutSkProof<G0>,
+    /// Commitment to `[initial_rho, rho_old, rho_new, initial_randomness, randomness_old, randomness_new]`
+    /// used by the BP relation `rho_new = rho_old * initial_rho` and the analogous randomness relation
+    pub comm_bp_randomness_relations: Affine<G0>,
+    /// Responses for the BP randomness-relations Schnorr proof. Only contains the response for
+    /// `comm_bp_randomness_relations`' blinding; the other responses are shared with `account_comm_proof`.
+    pub resp_bp_randomness_relations: PartialSchnorrResponse<Affine<G0>>,
     /// Commitment to randomness and response for proving correctness of nullifier using Schnorr protocol (step 1 and 3 of Schnorr)
     pub resp_null: PartialPokDiscreteLog<Affine<G0>>,
     /// Commitment to the balance in new account commitment (which becomes new leaf) used with Bulletproof
@@ -582,6 +617,7 @@ pub struct FeeAccountTopupTxnWithoutSkProtocol<
     const L: usize,
 > {
     acc_comm: AccountCommitmentsWithoutSkProtocol<G0>,
+    bp_randomness_relations: FeeRandomnessRelationsProtocol<Affine<G0>>,
     t_null: PokDiscreteLogProtocol<Affine<G0>>,
     t_bp: PokPedersenCommitmentProtocol<Affine<G0>>,
     re_randomized_path: SelectAndRerandomizePathWithDivisorComms<L, G0, G1>,
@@ -765,10 +801,14 @@ impl<
             .pc_gens()
             .B_blinding;
 
-        let acc_comm =
-            AccountCommitmentsWithoutSkProtocol::init(rng, account_comm_key.clone(), b_blinding);
+        let acc_comm = AccountCommitmentsWithoutSkProtocol::init(
+            rng,
+            account_comm_key.clone(),
+            b_blinding,
+            None,
+        );
 
-        let nullifier_gen = account_comm_key.rho_gen();
+        let nullifier_gen = account_comm_key.current_rho_gen();
         let nullifier = account.nullifier(&account_comm_key);
         let new_balance = F0::from(updated_account.balance());
 
@@ -784,7 +824,9 @@ impl<
             &[
                 new_balance,
                 account.rho(),
+                account.initial_rho,
                 account.randomness(),
+                account.initial_randomness,
                 rerandomization,
             ],
         )
@@ -794,7 +836,9 @@ impl<
             &[
                 new_balance,
                 updated_account.rho(),
+                updated_account.initial_rho,
                 updated_account.randomness(),
+                updated_account.initial_randomness,
             ],
         )
         .into_affine();
@@ -802,22 +846,40 @@ impl<
         transcript.append(b"acc_comm_old", &acc_old);
         transcript.append(b"acc_comm_new", &acc_new);
 
-        let t_null =
-            Self::nullifier_proto(account.rho(), acc_comm.old_rho_blinding, &nullifier_gen);
-        t_null.challenge_contribution(
-            &nullifier_gen,
-            &nullifier,
-            dst::FEE_NULLIFIER,
-            &mut transcript,
-        )?;
-
-        // Drop reference to borrow even_prover below
         let _ = transcript;
+
+        let bp_randomness_relations = init_bp_randomness_relations::<_, G0>(
+            rng,
+            &account,
+            &updated_account,
+            &acc_comm.blindings,
+            even_prover,
+            &account_tree_params.even_parameters.sl_params.pc_gens(),
+            &account_tree_params.even_parameters.bp_gens(),
+        );
+
+        let t_null = Self::nullifier_proto(
+            account.rho(),
+            acc_comm.blindings.old_rho_blinding,
+            &nullifier_gen,
+        );
+        {
+            let mut transcript = even_prover.transcript();
+            bp_randomness_relations
+                .t_bp
+                .challenge_contribution(dst::BP_RANDOMNESS_RELATIONS, &mut transcript)?;
+            t_null.challenge_contribution(
+                &nullifier_gen,
+                &nullifier,
+                dst::FEE_NULLIFIER,
+                &mut transcript,
+            )?;
+        }
 
         let (comm_new_bal, t_bp) = Self::enforce_range_and_init_proto(
             rng,
             updated_account.balance(),
-            acc_comm.new_balance_blinding,
+            acc_comm.blindings.new_balance_blinding,
             even_prover,
             &account_tree_params.even_parameters.sl_params.pc_gens().B,
             &account_tree_params
@@ -844,6 +906,7 @@ impl<
         Ok((
             Self {
                 acc_comm,
+                bp_randomness_relations,
                 t_null,
                 t_bp,
                 re_randomized_path,
@@ -906,10 +969,13 @@ impl<
             challenge,
             F0::from(self.new_account_state.balance),
             self.old_account_state.rho,
+            self.old_account_state.initial_rho,
             self.old_account_state.randomness,
+            self.old_account_state.initial_randomness,
             self.rerandomization,
             self.new_account_state.rho,
             self.new_account_state.randomness,
+            None,
         )?;
 
         self.rerandomization.zeroize();
@@ -917,10 +983,20 @@ impl<
         let resp_null = self.t_null.gen_partial_proof();
         let resp_bp = self.t_bp.gen_partial2_proof(challenge);
 
+        let mut comm_bp_blinding = self.bp_randomness_relations.comm_blinding;
+        let comm_bp_randomness_relations = self.bp_randomness_relations.comm;
+        let resp_bp_randomness_relations = self
+            .bp_randomness_relations
+            .t_bp
+            .partial_response(BTreeMap::from([(0, comm_bp_blinding)]), challenge)?;
+        comm_bp_blinding.zeroize();
+
         Ok(FeeAccountTopupTxnWithoutSkProof {
             r1cs_proof: None,
             re_randomized_path: self.re_randomized_path,
             account_comm_proof,
+            comm_bp_randomness_relations,
+            resp_bp_randomness_relations,
             resp_null,
             comm_new_bal: self.comm_new_bal,
             resp_bp,
@@ -1024,7 +1100,7 @@ impl<
             updated_account_commitment
         );
 
-        let nullifier_gen = account_comm_key.rho_gen();
+        let nullifier_gen = account_comm_key.current_rho_gen();
 
         self.account_comm_proof
             .resp_acc_old
@@ -1041,6 +1117,18 @@ impl<
         let acc_new = (updated_account_commitment.0 - reduce).into_affine();
         transcript.append(b"acc_comm_old", &acc_old);
         transcript.append(b"acc_comm_new", &acc_new);
+
+        // Drop reference to borrow even_verifier below
+        let _ = transcript;
+
+        // Enforce the randomness relations `rho_new = rho_old * initial_rho` and
+        // `randomness_new = randomness_old * initial_randomness`, and absorb the BP T-value.
+        let mut bp_vars = even_verifier.commit_vec(6, self.comm_bp_randomness_relations);
+        enforce_constraints_for_randomness_relations(even_verifier, &mut bp_vars);
+
+        let mut transcript = even_verifier.transcript();
+        self.resp_bp_randomness_relations
+            .challenge_contribution(dst::BP_RANDOMNESS_RELATIONS, &mut transcript)?;
 
         self.resp_null.challenge_contribution(
             &nullifier_gen,
@@ -1095,9 +1183,9 @@ impl<
         // `(acc_old, acc_new)` from the paired challenge phase; `None` recomputes them (same values).
         precomputed_acc_old_new: Option<(Affine<G0>, Affine<G0>)>,
     ) -> Result<()> {
-        if self.account_comm_proof.resp_acc_old.len() != 4 {
+        if self.account_comm_proof.resp_acc_old.len() != 6 {
             return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(
-                4,
+                6,
                 self.account_comm_proof.resp_acc_old.len(),
             ));
         }
@@ -1122,9 +1210,12 @@ impl<
             }
         };
         let mut missing_resps = BTreeMap::new();
-        missing_resps.insert(0, self.account_comm_proof.resp_acc_old.0[0]);
+        missing_resps.insert(0, self.account_comm_proof.resp_acc_old.0[0]); // balance
+        // `initial_rho` and `initial_randomness` are unchanged between old and new commitments.
+        missing_resps.insert(2, self.account_comm_proof.resp_acc_old.0[2]);
+        missing_resps.insert(4, self.account_comm_proof.resp_acc_old.0[4]);
 
-        let nullifier_gen = account_comm_key.rho_gen();
+        let nullifier_gen = account_comm_key.current_rho_gen();
 
         verify_schnorr_resp_or_rmc!(
             rmc,
@@ -1148,6 +1239,29 @@ impl<
             acc_new,
             challenge,
             missing_resps,
+        );
+        // The BP randomness-relations proof shares its witness responses with the account
+        // commitment proofs. Index mapping:
+        // 1 = initial_rho, 2 = rho_old, 3 = rho_new, 4 = initial_randomness,
+        // 5 = randomness_old, 6 = randomness_new (0 is the BP commitment blinding).
+        let mut missing_resps_bp = BTreeMap::new();
+        missing_resps_bp.insert(1, self.account_comm_proof.resp_acc_old.0[2]);
+        missing_resps_bp.insert(2, self.account_comm_proof.resp_acc_old.0[1]);
+        missing_resps_bp.insert(3, *self.account_comm_proof.resp_acc_new.get_response(1)?);
+        missing_resps_bp.insert(4, self.account_comm_proof.resp_acc_old.0[4]);
+        missing_resps_bp.insert(5, self.account_comm_proof.resp_acc_old.0[3]);
+        missing_resps_bp.insert(6, *self.account_comm_proof.resp_acc_new.get_response(3)?);
+        verify_partial_schnorr_resp_or_rmc!(
+            rmc,
+            self.resp_bp_randomness_relations,
+            bp_gens_vec_for_randomness_relations(
+                &account_tree_params.even_parameters.sl_params.pc_gens(),
+                &account_tree_params.even_parameters.bp_gens(),
+            )
+            .to_vec(),
+            self.comm_bp_randomness_relations,
+            challenge,
+            missing_resps_bp,
         );
         // rho matches the one in nullifier
         verify_or_rmc_2!(
@@ -1789,8 +1903,59 @@ impl<G: SWCurveConfig + Clone + Copy> AccountCommitmentsWithoutSkProof<G> {
             y_new,
             account_comm_key,
             blinding_gen,
+            None,
             false,
             challenge,
+            rmc,
+        )
+    }
+}
+
+/// Host's part of `AccountCommitmentsSplitProof`. The new commitment also opens the host's share
+/// `w` of the `B_blinding` term, and `resp_rand_new_comm_anchor` proves
+/// `-rand_new_comm_anchor = anchor_gen * w` with the response for `w`.
+#[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
+pub struct AccountCommitmentsSplitHostProof<G: SWCurveConfig + Clone + Copy> {
+    /// Response for proving knowledge of re-randomized leaf using Schnorr protocol (step 3 of
+    /// Schnorr). Carries the commitment to randomness `t` from step 1.
+    pub resp_acc_old: SchnorrResponse<Affine<G>>,
+    /// Response for proving knowledge of new account commitment using Schnorr protocol (step 3
+    /// of Schnorr). Carries the commitment to randomness `t` from step 1.
+    pub resp_acc_new: PartialSchnorrResponse<Affine<G>>,
+    pub resp_rand_new_comm_anchor: PartialPokDiscreteLog<Affine<G>>,
+}
+
+impl<G: SWCurveConfig + Clone + Copy> AccountCommitmentsSplitHostProof<G> {
+    /// Verify the host's account commitment Schnorr proofs and its anchor proof.
+    pub fn verify_with_challenge(
+        &self,
+        y_old: Affine<G>,
+        y_new: Affine<G>,
+        rand_new_comm_anchor: Affine<G>,
+        account_comm_key: impl AccountCommitmentKeyTrait<Affine<G>>,
+        blinding_gen: Affine<G>,
+        anchor_gen: Affine<G>,
+        challenge: &G::ScalarField,
+        mut rmc: Option<&mut RandomizedMultChecker<Affine<G>>>,
+    ) -> Result<()> {
+        verify_acc_comm(
+            &self.resp_acc_old,
+            &self.resp_acc_new,
+            y_old,
+            y_new,
+            account_comm_key,
+            blinding_gen,
+            Some(blinding_gen),
+            false,
+            challenge,
+            rmc.as_deref_mut(),
+        )?;
+        verify_host_rand_new_comm_anchor(
+            &self.resp_rand_new_comm_anchor,
+            rand_new_comm_anchor,
+            anchor_gen,
+            challenge,
+            self.resp_acc_new.get_response(5)?,
             rmc,
         )
     }
@@ -1803,60 +1968,63 @@ pub struct AccountCommitmentsSplitProof<G: SWCurveConfig + Clone + Copy> {
     /// Proves knowledge of secret key in account commitments
     pub auth_proof: AuthProofFeePayment<Affine<G>>,
     /// Proves knowledge of values other than secret key in account commitments
-    pub host_proof: AccountCommitmentsWithoutSkProof<G>,
+    pub host_proof: AccountCommitmentsSplitHostProof<G>,
 }
 
 #[derive(Clone, Debug, Zeroize, ZeroizeOnDrop)]
 pub struct AccountCommitmentsWithoutSkProtocol<G: SWCurveConfig + Clone + Copy> {
     pub t_acc_old: SchnorrCommitment<Affine<G>>,
     pub t_acc_new: SchnorrCommitment<Affine<G>>,
-    /// Blindings shared with partial protocol
-    pub new_balance_blinding: G::ScalarField,
-    pub old_rho_blinding: G::ScalarField,
-    /// Internal blindings (not shared with partial)
-    pub new_rho_blinding: G::ScalarField,
-    pub old_s_blinding: G::ScalarField,
+    /// Blindings shared with the partial protocol and the BP randomness relations
+    pub blindings: AccCommBlindings<G::ScalarField>,
+    /// Blinding of the host's `B_blinding` share in the new commitment (shared with the host anchor proof)
+    pub new_rerandomization_blinding: Option<G::ScalarField>,
 }
 
 impl<G: SWCurveConfig + Clone + Copy> AccountCommitmentsWithoutSkProtocol<G> {
-    /// Creates all blindings internally. Shared blindings (`new_balance_blinding`, `old_rho_blinding`)
-    /// can be read from the struct and passed to the partial protocol.
+    /// Creates all blindings internally. Shared blindings can be read from the struct and passed
+    /// to the partial protocol and to the BP randomness relations T-values. When
+    /// `new_blinding_gen` is `Some`, the new commitment also has the host's share of a term on it.
     pub fn init<R: CryptoRngCore>(
         rng: &mut R,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G>>,
         blinding_gen: Affine<G>,
+        new_blinding_gen: Option<Affine<G>>,
     ) -> Self {
-        let (
-            t_acc_old,
-            t_acc_new,
-            new_balance_blinding,
-            old_rho_blinding,
-            new_rho_blinding,
-            old_s_blinding,
-        ) = init_acc_comm(rng, account_comm_key, blinding_gen, None, None);
+        let (t_acc_old, t_acc_new, blindings, new_rerandomization_blinding) = init_acc_comm(
+            rng,
+            account_comm_key,
+            blinding_gen,
+            None,
+            None,
+            new_blinding_gen,
+        );
 
         Self {
             t_acc_old,
             t_acc_new,
-            new_balance_blinding,
-            old_rho_blinding,
-            new_rho_blinding,
-            old_s_blinding,
+            blindings,
+            new_rerandomization_blinding,
         }
     }
 
     /// Generate the host's portion of the split proof.
-    /// Witnesses for old: [new_balance, old_rho, old_randomness, host_rerandomization] (4 generators);
-    /// for new: rho at index 1, host_new_randomness at index 2 (balance at 0 shared from old).
+    /// Witnesses for old: `[new_balance, old_rho, initial_rho, old_randomness, initial_randomness, host_rerandomization]`;
+    /// for new: `rho` at index 1, `initial_rho` at index 2, randomness at index 3,
+    /// `initial_randomness` at index 4 and `host_new_rerandomization` at index 5 when present
+    /// (balance at 0 shared from old).
     pub fn gen_proof(
         self,
         challenge: &G::ScalarField,
         new_balance: G::ScalarField,
         old_rho: G::ScalarField,
+        initial_rho: G::ScalarField,
         old_randomness: G::ScalarField,
+        initial_randomness: G::ScalarField,
         host_rerandomization: G::ScalarField,
         new_rho: G::ScalarField,
-        host_new_randomness: G::ScalarField,
+        new_randomness: G::ScalarField,
+        host_new_rerandomization: Option<G::ScalarField>,
     ) -> Result<AccountCommitmentsWithoutSkProof<G>> {
         let (resp_acc_old, resp_acc_new) = resp_acc_comm(
             &self.t_acc_old,
@@ -1865,10 +2033,13 @@ impl<G: SWCurveConfig + Clone + Copy> AccountCommitmentsWithoutSkProtocol<G> {
             None,
             new_balance,
             old_rho,
+            initial_rho,
             old_randomness,
+            initial_randomness,
             host_rerandomization,
             new_rho,
-            host_new_randomness,
+            new_randomness,
+            host_new_rerandomization,
         )?;
         Ok(AccountCommitmentsWithoutSkProof {
             resp_acc_old,
@@ -1884,11 +2055,8 @@ pub struct AccountCommitmentsProtocol<G: SWCurveConfig + Clone + Copy> {
     pub t_acc_new: SchnorrCommitment<Affine<G>>,
     /// Blindings stored so caller can pass shared ones to partial protocol
     pub sk_blinding: G::ScalarField,
-    pub new_balance_blinding: G::ScalarField,
-    pub old_rho_blinding: G::ScalarField,
-    pub new_rho_blinding: G::ScalarField,
-    pub old_s_blinding: G::ScalarField,
-    pub new_s_blinding: G::ScalarField,
+    /// Blindings shared with the partial protocol and the BP randomness relations
+    pub blindings: AccCommBlindings<G::ScalarField>,
 }
 
 impl<G: SWCurveConfig + Clone + Copy> AccountCommitmentsProtocol<G> {
@@ -1898,31 +2066,21 @@ impl<G: SWCurveConfig + Clone + Copy> AccountCommitmentsProtocol<G> {
         blinding_gen: Affine<G>,
     ) -> Self {
         let sk_blinding = G::ScalarField::rand(rng);
-        let new_s_blinding = G::ScalarField::rand(rng);
-        let (
-            t_acc_old,
-            t_acc_new,
-            new_balance_blinding,
-            old_rho_blinding,
-            new_rho_blinding,
-            old_s_blinding,
-        ) = init_acc_comm(
+        let new_randomness_blinding = G::ScalarField::rand(rng);
+        let (t_acc_old, t_acc_new, blindings, _) = init_acc_comm(
             rng,
             account_comm_key,
             blinding_gen,
             Some(sk_blinding),
-            Some(new_s_blinding),
+            Some(new_randomness_blinding),
+            None,
         );
 
         Self {
             t_acc_old,
             t_acc_new,
             sk_blinding,
-            new_balance_blinding,
-            old_rho_blinding,
-            new_rho_blinding,
-            old_s_blinding,
-            new_s_blinding,
+            blindings,
         }
     }
 
@@ -1940,7 +2098,9 @@ impl<G: SWCurveConfig + Clone + Copy> AccountCommitmentsProtocol<G> {
         sk: G::ScalarField,
         new_balance: G::ScalarField,
         old_rho: G::ScalarField,
+        initial_rho: G::ScalarField,
         old_randomness: G::ScalarField,
+        initial_randomness: G::ScalarField,
         rerandomization: G::ScalarField,
         new_rho: G::ScalarField,
         new_randomness: G::ScalarField,
@@ -1952,10 +2112,13 @@ impl<G: SWCurveConfig + Clone + Copy> AccountCommitmentsProtocol<G> {
             Some(sk),
             new_balance,
             old_rho,
+            initial_rho,
             old_randomness,
+            initial_randomness,
             rerandomization,
             new_rho,
             new_randomness,
+            None,
         )?;
         Ok(AccountCommitmentsProof {
             resp_acc_old,
@@ -1990,6 +2153,7 @@ impl<G: SWCurveConfig + Clone + Copy> AccountCommitmentsProof<G> {
             y_new,
             account_comm_key,
             blinding_gen,
+            None,
             true,
             challenge,
             rmc,
@@ -2007,6 +2171,13 @@ pub struct FeePaymentWithoutCommitmentsProof<
 > {
     /// This contains the old account state, but re-randomized (as re-randomized leaf)
     pub re_randomized_path: SelectAndRerandomizePathWithDivisorComms<L, G0, G1>,
+    /// Commitment to `[initial_rho, rho_old, rho_new, initial_randomness, randomness_old, randomness_new]`
+    /// used by the BP relation `rho_new = rho_old * initial_rho` and the analogous randomness relation
+    pub comm_bp_randomness_relations: Affine<G0>,
+    /// Responses for the BP randomness-relations Schnorr proof. Only contains the response for
+    /// `comm_bp_randomness_relations`' blinding; the others are shared with the account commitment
+    /// (and, in the split flow, auth) proofs.
+    pub resp_bp_randomness_relations: PartialSchnorrResponse<Affine<G0>>,
     /// Commitment to randomness and response for proving correctness of nullifier using Schnorr protocol (step 1 and 3 of Schnorr)
     pub resp_null: PartialPokDiscreteLog<Affine<G0>>,
     pub comm_new_bal: Affine<G0>,
@@ -2047,6 +2218,7 @@ pub struct FeePaymentWithoutCommitmentsProtocol<
 > {
     pub t_null: PokDiscreteLogProtocol<Affine<G0>>,
     pub t_bp: PokPedersenCommitmentProtocol<Affine<G0>>,
+    pub bp_randomness_relations: FeeRandomnessRelationsProtocol<Affine<G0>>,
     pub re_randomized_path: SelectAndRerandomizePathWithDivisorComms<L, G0, G1>,
     pub rerandomization: F0,
     pub comm_new_bal: Affine<G0>,
@@ -2100,8 +2272,15 @@ impl<
             odd_transcript,
         );
 
-        let mut new_balance_blinding = F0::rand(rng);
-        let mut old_rho_blinding = F0::rand(rng);
+        let acc_comm_blindings = AccCommBlindings {
+            new_balance_blinding: F0::rand(rng),
+            old_rho_blinding: F0::rand(rng),
+            new_rho_blinding: F0::rand(rng),
+            initial_rho_blinding: F0::rand(rng),
+            old_randomness_blinding: F0::rand(rng),
+            new_randomness_blinding: F0::rand(rng),
+            initial_randomness_blinding: F0::rand(rng),
+        };
 
         let (proto, nullifier) = Self::init_with_given_prover::<_, Parameters0, Parameters1, _>(
             rng,
@@ -2114,19 +2293,15 @@ impl<
             nonce,
             account_tree_params,
             account_comm_key,
-            new_balance_blinding,
-            old_rho_blinding,
+            &acc_comm_blindings,
             &mut even_prover,
             &mut odd_prover,
         )?;
 
-        new_balance_blinding.zeroize();
-        old_rho_blinding.zeroize();
-
         let challenge_h = even_prover
             .transcript()
             .challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
-        let mut partial = proto.gen_proof(&challenge_h);
+        let mut partial = proto.gen_proof(&challenge_h)?;
 
         let (even_proof, odd_proof) = prove_with_rng(
             even_prover,
@@ -2143,8 +2318,8 @@ impl<
         Ok((partial, nullifier, challenge_h))
     }
 
-    /// `new_balance_blinding` and `old_rho_blinding` are shared with the account commitment
-    /// Schnorr proofs (created by the caller) so the corresponding responses match during verification.
+    /// `acc_comm_blindings` come from the account commitment Schnorr protocol created by the caller
+    /// and are shared so the corresponding responses match during verification.
     pub fn init_with_given_prover<
         R: CryptoRngCore,
         Parameters0: DiscreteLogParameters,
@@ -2161,8 +2336,7 @@ impl<
         nonce: &[u8],
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: CK,
-        new_balance_blinding: F0,
-        old_rho_blinding: F0,
+        acc_comm_blindings: &AccCommBlindings<F0>,
         even_prover: &mut Prover<MerlinTranscript, Affine<G0>>,
         odd_prover: &mut Prover<MerlinTranscript, Affine<G1>>,
     ) -> Result<(Self, Affine<G0>)> {
@@ -2200,12 +2374,16 @@ impl<
         // 2. Old balance = new balance + fee_amount
         // 3. Range proof on new balance
 
-        let nullifier_gen = account_comm_key.rho_gen();
+        let nullifier_gen = account_comm_key.current_rho_gen();
         let nullifier = account.nullifier(&account_comm_key);
 
         // Schnorr commitment for proving correctness of nullifier.
         // Uses old_rho_blinding shared with the account commitment proof so the rho response matches.
-        let t_null = Self::nullifier_proto(account.rho(), old_rho_blinding, &nullifier_gen);
+        let t_null = Self::nullifier_proto(
+            account.rho(),
+            acc_comm_blindings.old_rho_blinding,
+            &nullifier_gen,
+        );
 
         t_null.challenge_contribution(
             &nullifier_gen,
@@ -2216,6 +2394,25 @@ impl<
 
         // Drop reference to borrow even_prover below
         let _ = transcript;
+
+        // Create the BP commitment enforcing `rho_new = rho_old * initial_rho` and
+        // `randomness_new = randomness_old * initial_randomness`, using the account
+        // commitment blindings so the responses can be shared at verification.
+        let bp_randomness_relations = init_bp_randomness_relations::<_, G0>(
+            rng,
+            &account,
+            &updated_account,
+            acc_comm_blindings,
+            even_prover,
+            &account_tree_params.even_parameters.sl_params.pc_gens(),
+            &account_tree_params.even_parameters.bp_gens(),
+        );
+        {
+            let mut transcript = even_prover.transcript();
+            bp_randomness_relations
+                .t_bp
+                .challenge_contribution(dst::BP_RANDOMNESS_RELATIONS, &mut transcript)?;
+        }
 
         let (b, b_blinding) = (
             &account_tree_params.even_parameters.sl_params.pc_gens().B,
@@ -2229,7 +2426,7 @@ impl<
         let (comm_new_bal, t_bp) = Self::enforce_range_and_init_proto(
             rng,
             updated_account.balance(),
-            new_balance_blinding,
+            acc_comm_blindings.new_balance_blinding,
             even_prover,
             b,
             b_blinding,
@@ -2249,6 +2446,7 @@ impl<
             Self {
                 t_null,
                 t_bp,
+                bp_randomness_relations,
                 re_randomized_path,
                 comm_new_bal,
                 rerandomization,
@@ -2259,19 +2457,32 @@ impl<
         ))
     }
 
-    pub fn gen_proof(self, challenge: &F0) -> FeePaymentWithoutCommitmentsProof<L, F0, F1, G0, G1> {
+    pub fn gen_proof(
+        self,
+        challenge: &F0,
+    ) -> Result<FeePaymentWithoutCommitmentsProof<L, F0, F1, G0, G1>> {
         let resp_null = self.t_null.gen_partial_proof();
 
         // Response for witness will already be generated in sigma protocol for the new account commitment
-        let resp_bp = self.t_bp.gen_partial2_proof(&challenge);
+        let resp_bp = self.t_bp.gen_partial2_proof(challenge);
 
-        FeePaymentWithoutCommitmentsProof {
+        let mut comm_bp_blinding = self.bp_randomness_relations.comm_blinding;
+        let comm_bp_randomness_relations = self.bp_randomness_relations.comm;
+        let resp_bp_randomness_relations = self
+            .bp_randomness_relations
+            .t_bp
+            .partial_response(BTreeMap::from([(0, comm_bp_blinding)]), challenge)?;
+        comm_bp_blinding.zeroize();
+
+        Ok(FeePaymentWithoutCommitmentsProof {
+            re_randomized_path: self.re_randomized_path,
+            comm_bp_randomness_relations,
+            resp_bp_randomness_relations,
             resp_null,
             resp_bp,
-            re_randomized_path: self.re_randomized_path,
             r1cs_proof: None,
             comm_new_bal: self.comm_new_bal,
-        }
+        })
     }
 
     fn nullifier_proto(
@@ -2372,7 +2583,7 @@ impl<
             updated_account_commitment
         );
 
-        let nullifier_gen = account_comm_key.rho_gen();
+        let nullifier_gen = account_comm_key.current_rho_gen();
 
         self.resp_null.challenge_contribution(
             &nullifier_gen,
@@ -2383,6 +2594,16 @@ impl<
 
         // Drop reference to borrow even_verifier below
         let _ = transcript;
+
+        // Enforce the randomness relations `rho_new = rho_old * initial_rho` and
+        // `randomness_new = randomness_old * initial_randomness`, and absorb the BP T-value.
+        let mut bp_vars = even_verifier.commit_vec(6, self.comm_bp_randomness_relations);
+        enforce_constraints_for_randomness_relations(even_verifier, &mut bp_vars);
+        {
+            let mut transcript = even_verifier.transcript();
+            self.resp_bp_randomness_relations
+                .challenge_contribution(dst::BP_RANDOMNESS_RELATIONS, &mut transcript)?;
+        }
 
         let new_bal_var = even_verifier.commit(self.comm_new_bal);
 
@@ -2410,8 +2631,10 @@ impl<
         Ok(())
     }
 
-    /// Verify the partial proof's sigma protocols. The `rho_response` and `balance_response` must
-    /// come from the account commitment proof (they are shared across sub-protocols).
+    /// Verify the partial proof's sigma protocols. The responses for the shared witnesses
+    /// (`balance`, `rho`, `initial_rho`, `randomness`, `initial_randomness` and, when `has_sk`,
+    /// `sk`) come from the account commitment proof (and the auth proof in the split flow).
+    #[allow(clippy::too_many_arguments)]
     pub fn verify_with_given_challenge<
         Parameters0: DiscreteLogParameters,
         Parameters1: DiscreteLogParameters,
@@ -2421,11 +2644,29 @@ impl<
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         challenge: &F0,
-        rho_response: &F0,
-        balance_response: &F0,
+        resp_acc_old: &SchnorrResponse<Affine<G0>>,
+        resp_acc_new: &PartialSchnorrResponse<Affine<G0>>,
+        has_sk: bool,
         mut rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<()> {
-        let nullifier_gen = account_comm_key.rho_gen();
+        let offset = if has_sk { 1usize } else { 0 };
+        let expected_old = 6 + offset;
+        if resp_acc_old.len() != expected_old {
+            return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(
+                expected_old,
+                resp_acc_old.len(),
+            ));
+        }
+        // The split new commitment also opens the host's `B_blinding` share.
+        let expected_new = if has_sk { 2 } else { 3 };
+        if resp_acc_new.responses.len() != expected_new {
+            return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(
+                expected_new,
+                resp_acc_new.responses.len(),
+            ));
+        }
+
+        let nullifier_gen = account_comm_key.current_rho_gen();
         // rho in nullifier matches the rho in the old account commitment
         verify_or_rmc_2!(
             rmc,
@@ -2434,7 +2675,7 @@ impl<
             nullifier,
             nullifier_gen,
             challenge,
-            rho_response,
+            &resp_acc_old.0[offset + 1],
         );
         // balance in BP commitment matches the balance in the account commitment
         verify_or_rmc_3!(
@@ -2449,7 +2690,31 @@ impl<
                 .pc_gens()
                 .B_blinding,
             challenge,
-            balance_response,
+            &resp_acc_old.0[offset],
+        );
+
+        // The BP randomness-relations proof shares its witness responses with the account
+        // commitment proofs. Index mapping:
+        // 1 = initial_rho, 2 = rho_old, 3 = rho_new, 4 = initial_randomness,
+        // 5 = randomness_old, 6 = randomness_new (0 is the BP commitment blinding).
+        let mut missing_resps_bp = BTreeMap::new();
+        missing_resps_bp.insert(1, resp_acc_old.0[offset + 2]);
+        missing_resps_bp.insert(2, resp_acc_old.0[offset + 1]);
+        missing_resps_bp.insert(3, *resp_acc_new.get_response(1 + offset)?);
+        missing_resps_bp.insert(4, resp_acc_old.0[offset + 4]);
+        missing_resps_bp.insert(5, resp_acc_old.0[offset + 3]);
+        missing_resps_bp.insert(6, *resp_acc_new.get_response(3 + offset)?);
+        verify_partial_schnorr_resp_or_rmc!(
+            rmc,
+            self.resp_bp_randomness_relations,
+            bp_gens_vec_for_randomness_relations(
+                &account_tree_params.even_parameters.sl_params.pc_gens(),
+                &account_tree_params.even_parameters.bp_gens(),
+            )
+            .to_vec(),
+            self.comm_bp_randomness_relations,
+            challenge,
+            missing_resps_bp,
         );
         Ok(())
     }
@@ -2571,8 +2836,7 @@ impl<
                 nonce,
                 account_tree_params,
                 account_comm_key,
-                acc_proto.new_balance_blinding,
-                acc_proto.old_rho_blinding,
+                &acc_proto.blindings,
                 &mut even_prover,
                 &mut odd_prover,
             )?;
@@ -2586,13 +2850,15 @@ impl<
             sk,
             F0::from(partial_proto.new_account_state.balance),
             partial_proto.old_account_state.rho,
+            partial_proto.old_account_state.initial_rho,
             partial_proto.old_account_state.randomness,
+            partial_proto.old_account_state.initial_randomness,
             partial_proto.rerandomization,
             partial_proto.new_account_state.rho,
             partial_proto.new_account_state.randomness,
         )?;
 
-        let mut partial = partial_proto.gen_proof(&challenge);
+        let mut partial = partial_proto.gen_proof(&challenge)?;
 
         // Finalize Bulletproof (R1CS proof)
         let (even_proof, odd_proof) = prove_with_rng(
@@ -2704,9 +2970,9 @@ impl<
         let transcript = even_verifier.transcript();
         let challenge = transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
 
-        // Verify partial sigma protocols (nullifier + BP)
-        // In the solo proof: rho is at index 2, balance at index 1 in resp_acc_old
-        let expected_len = 5;
+        // Verify partial sigma protocols (nullifier, BP balance, BP randomness relations).
+        // In the solo proof: sk is at index 0, balance at 1, rho at 2.
+        let expected_len = 7;
         if self.commitment_proof.resp_acc_old.len() != expected_len {
             return Err(Error::ProofVerificationError(format!(
                 "Invalid resp_acc_old length. Expected {}, got {}",
@@ -2721,8 +2987,9 @@ impl<
                 account_tree_params,
                 account_comm_key.clone(),
                 &challenge,
-                &self.commitment_proof.resp_acc_old.0[2], // rho response
-                &self.commitment_proof.resp_acc_old.0[1], // balance response
+                &self.commitment_proof.resp_acc_old,
+                &self.commitment_proof.resp_acc_new,
+                true,
                 rmc.as_mut().map(|r| &mut **r),
             )?;
 
@@ -2731,7 +2998,7 @@ impl<
         let fee_amount_f = F0::from(fee_amount);
 
         // Old re-randomized leaf minus public terms and fee_amount offset.
-        // This gives: sk_gen*sk + balance_gen*new_balance + rho_gen*old_rho + randomness_gen*old_randomness + B_blinding*rerandomization
+        // This gives: sk_gen*sk + balance_gen*new_balance + current_rho_gen*old_rho + current_randomness_gen*old_randomness + B_blinding*rerandomization
         let y_old = self
             .partial
             .re_randomized_path
@@ -2743,7 +3010,7 @@ impl<
         let y_old_affine = y_old.into_affine();
 
         // New account commitment minus public terms.
-        // This gives: sk_gen*sk + balance_gen*new_balance + rho_gen*new_rho + randomness_gen*new_randomness
+        // This gives: sk_gen*sk + balance_gen*new_balance + current_rho_gen*new_rho + current_randomness_gen*new_randomness
         let y_new = updated_account_commitment.0.into_group() - asset_id_comm;
         let y_new_affine = y_new.into_affine();
 
@@ -2793,11 +3060,16 @@ pub struct FeePaymentSplitProtocol<
     acc_host: AccountCommitmentsWithoutSkProtocol<G0>,
     without_comm: FeePaymentWithoutCommitmentsProtocol<L, F0, F1, G0, G1>,
     host_rerandomization: F0,
-    host_new_randomness: F0,
+    /// Host's `B_blinding` share in the new account commitment, `-auth_new_randomness`
+    host_new_rerandomization: F0,
+    /// For proving `-rand_new_comm_anchor = anchor_gen * host_new_rerandomization`
+    t_rand_new_comm_anchor: PokDiscreteLogProtocol<Affine<G0>>,
     /// Ledger's share of the leaf rerandomization scalar
     pub auth_rerandomization: F0,
-    /// Ledger's share of the new account's randomness scalar
+    /// Ledger's `B_blinding` share in the new account commitment
     pub auth_new_randomness: F0,
+    /// `anchor_gen * auth_new_randomness`, published by the Ledger in its auth proof
+    pub rand_new_comm_anchor: Affine<G0>,
     /// Challenge derived from the transcript during init
     pub challenge_h: F0,
 }
@@ -2857,9 +3129,16 @@ impl<
             .pc_gens()
             .B_blinding;
 
-        // Create host account commitment protocol (creates all blindings internally)
-        let acc_host_proto =
-            AccountCommitmentsWithoutSkProtocol::init(rng, account_comm_key.clone(), b_blinding);
+        let anchor_gen = account_tree_params.even_parameters.sl_params.pc_gens().B;
+
+        // Create host account commitment protocol (creates all blindings internally). The new
+        // commitment carries the host's `B_blinding` share, which cancels the Ledger's.
+        let acc_host_proto = AccountCommitmentsWithoutSkProtocol::init(
+            rng,
+            account_comm_key.clone(),
+            b_blinding,
+            Some(b_blinding),
+        );
 
         // Create partial protocol, passing the shared blindings from acc_host_proto
         let (partial_proto, nullifier) =
@@ -2879,21 +3158,31 @@ impl<
                 nonce,
                 account_tree_params,
                 account_comm_key.clone(),
-                acc_host_proto.new_balance_blinding,
-                acc_host_proto.old_rho_blinding,
+                &acc_host_proto.blindings,
                 &mut even_prover,
                 &mut odd_prover,
             )?;
 
         let rerandomization = partial_proto.rerandomization;
-        let new_randomness = partial_proto.new_account_state.randomness;
 
-        // Split rerandomization and new_randomness: host picks random shares,
-        // derives auth (Ledger) shares as the remainder.
+        // Split rerandomization: host picks a random share and the Ledger gets the remainder,
+        // both opening against `B_blinding` (the auth proof and the host proof).
         let host_rerandomization = F0::rand(rng);
         let auth_rerandomization = rerandomization - host_rerandomization;
-        let host_new_randomness = F0::rand(rng);
-        let auth_new_randomness = new_randomness - host_new_randomness;
+
+        // The host proves the full new randomness, which the BP randomness relations bind. The
+        // Ledger blinds `pk` in its share of the new commitment with `B_blinding * auth_new_randomness`
+        // and the host's share cancels it.
+        let auth_new_randomness = F0::rand(rng);
+        let host_new_rerandomization = -auth_new_randomness;
+        let (t_rand_new_comm_anchor, rand_new_comm_anchor) =
+            init_host_rand_new_comm_anchor_protocol(
+                auth_new_randomness,
+                acc_host_proto.new_rerandomization_blinding.ok_or_else(|| {
+                    Error::ProofGenerationError("Missing host anchor blinding".to_string())
+                })?,
+                anchor_gen,
+            );
 
         let mut transcript = even_prover.transcript();
 
@@ -2912,23 +3201,35 @@ impl<
             &[
                 F0::from(partial_proto.new_account_state.balance),
                 partial_proto.old_account_state.rho,
+                partial_proto.old_account_state.initial_rho,
                 partial_proto.old_account_state.randomness,
+                partial_proto.old_account_state.initial_randomness,
                 host_rerandomization,
             ],
         )
         .into_affine();
         let acc_new = <Projective<G0> as VariableBaseMSM>::msm_unchecked(
-            &acc_new_gens_without_sk(&account_comm_key),
+            &acc_new_gens_split(&account_comm_key, b_blinding),
             &[
                 F0::from(partial_proto.new_account_state.balance),
                 partial_proto.new_account_state.rho,
-                host_new_randomness,
+                partial_proto.new_account_state.initial_rho,
+                partial_proto.new_account_state.randomness,
+                partial_proto.new_account_state.initial_randomness,
+                host_new_rerandomization,
             ],
         )
         .into_affine();
 
         transcript.append(b"acc_comm_old", &acc_old);
         transcript.append(b"acc_comm_new", &acc_new);
+        host_rand_new_comm_anchor_challenge_contribution(
+            &t_rand_new_comm_anchor.t,
+            rand_new_comm_anchor,
+            &anchor_gen,
+            dst::FEE_HOST_ACC_COMM_NEW_ANCHOR,
+            &mut transcript,
+        )?;
 
         let challenge_h = transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
         Ok((
@@ -2936,9 +3237,11 @@ impl<
                 acc_host: acc_host_proto,
                 without_comm: partial_proto,
                 host_rerandomization,
-                host_new_randomness,
+                host_new_rerandomization,
+                t_rand_new_comm_anchor,
                 auth_rerandomization,
                 auth_new_randomness,
+                rand_new_comm_anchor,
                 challenge_h,
             },
             even_prover,
@@ -2973,19 +3276,30 @@ impl<
         rng: &mut R,
     ) -> Result<(
         FeePaymentWithoutCommitmentsProof<L, F0, F1, G0, G1>,
-        AccountCommitmentsWithoutSkProof<G0>,
+        AccountCommitmentsSplitHostProof<G0>,
     )> {
-        let host_commitment_proof = self.acc_host.gen_proof(
+        let AccountCommitmentsWithoutSkProof {
+            resp_acc_old,
+            resp_acc_new,
+        } = self.acc_host.gen_proof(
             challenge,
             F0::from(self.without_comm.new_account_state.balance),
             self.without_comm.old_account_state.rho,
+            self.without_comm.old_account_state.initial_rho,
             self.without_comm.old_account_state.randomness,
+            self.without_comm.old_account_state.initial_randomness,
             self.host_rerandomization,
             self.without_comm.new_account_state.rho,
-            self.host_new_randomness,
+            self.without_comm.new_account_state.randomness,
+            Some(self.host_new_rerandomization),
         )?;
+        let host_commitment_proof = AccountCommitmentsSplitHostProof {
+            resp_acc_old,
+            resp_acc_new,
+            resp_rand_new_comm_anchor: self.t_rand_new_comm_anchor.gen_partial_proof(),
+        };
 
-        let mut partial = self.without_comm.gen_proof(challenge);
+        let mut partial = self.without_comm.gen_proof(challenge)?;
 
         // Finalize Bulletproof
         let (even_proof, odd_proof) = prove_with_rng(
@@ -3025,7 +3339,7 @@ impl<
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
     ) -> Result<(
         FeePaymentWithoutCommitmentsProof<L, F0, F1, G0, G1>,
-        AccountCommitmentsWithoutSkProof<G0>,
+        AccountCommitmentsSplitHostProof<G0>,
         F0,
         F0,
         Affine<G0>,
@@ -3143,6 +3457,13 @@ impl<
         )?;
         transcript.append(b"acc_comm_old", &comm_old);
         transcript.append(b"acc_comm_new", &comm_new);
+        host_rand_new_comm_anchor_challenge_contribution(
+            &self.commitment_proof.host_proof.resp_rand_new_comm_anchor.t,
+            self.commitment_proof.auth_proof.rand_new_comm_anchor,
+            &account_tree_params.even_parameters.sl_params.pc_gens().B,
+            dst::FEE_HOST_ACC_COMM_NEW_ANCHOR,
+            &mut transcript,
+        )?;
 
         let challenge_h = transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
         Ok((even_verifier, odd_verifier, challenge_h, comm_old, comm_new))
@@ -3168,7 +3489,9 @@ impl<
         // `(comm_old, comm_new)` from the paired challenge phase; `None` recomputes them (same values).
         precomputed_host_commitments: Option<(Affine<G0>, Affine<G0>)>,
     ) -> Result<(VerificationTuple<Affine<G0>>, VerificationTuple<Affine<G1>>)> {
-        let expected_len = 4;
+        // Verify partial sigma protocols (nullifier, BP balance, BP randomness relations).
+        // In the split proof: balance at 0, rho at 1 (no sk).
+        let expected_len = 6;
         if self.commitment_proof.host_proof.resp_acc_old.len() != expected_len {
             return Err(Error::ProofVerificationError(format!(
                 "Invalid resp_acc_old length. Expected {}, got {}",
@@ -3177,15 +3500,15 @@ impl<
             )));
         }
 
-        // Verify partial sigma protocols (nullifier + BP).
         self.partial
             .verify_with_given_challenge::<Parameters0, Parameters1>(
                 nullifier,
                 account_tree_params,
                 account_comm_key.clone(),
                 challenge,
-                &self.commitment_proof.host_proof.resp_acc_old.0[1], // rho response
-                &self.commitment_proof.host_proof.resp_acc_old.0[0], // balance response
+                &self.commitment_proof.host_proof.resp_acc_old,
+                &self.commitment_proof.host_proof.resp_acc_new,
+                false,
                 rmc.as_mut().map(|r| &mut **r),
             )?;
 
@@ -3210,8 +3533,10 @@ impl<
         self.commitment_proof.host_proof.verify_with_challenge(
             y_old_affine,
             y_new_affine,
+            self.commitment_proof.auth_proof.rand_new_comm_anchor,
             account_comm_key,
             b_blinding,
+            account_tree_params.even_parameters.sl_params.pc_gens().B,
             challenge,
             rmc.as_mut().map(|r| &mut **r),
         )?;
@@ -3407,29 +3732,33 @@ impl<
 }
 
 /// Generators for the re-randomized leaf Schnorr proof (solo, with sk).
-/// Order: [sk_gen, balance_gen, rho_gen, randomness_gen, B_blinding]
+/// Order: [sk_gen, balance_gen, current_rho_gen, rho_gen, current_randomness_gen, randomness_gen, B_blinding]
 pub fn acc_old_gens_with_sk<G0: SWCurveConfig + Clone + Copy>(
     account_comm_key: &impl AccountCommitmentKeyTrait<Affine<G0>>,
     blinding_gen: Affine<G0>,
-) -> [Affine<G0>; 5] {
+) -> [Affine<G0>; 7] {
     [
         account_comm_key.sk_gen(),
         account_comm_key.balance_gen(),
+        account_comm_key.current_rho_gen(),
         account_comm_key.rho_gen(),
+        account_comm_key.current_randomness_gen(),
         account_comm_key.randomness_gen(),
         blinding_gen,
     ]
 }
 
 /// Generators for the new account commitment Schnorr proof (solo, with sk).
-/// Order: [sk_gen, balance_gen, rho_gen, randomness_gen]
+/// Order: [sk_gen, balance_gen, current_rho_gen, rho_gen, current_randomness_gen, randomness_gen]
 pub fn acc_new_gens_with_sk<G0: SWCurveConfig + Clone + Copy>(
     account_comm_key: &impl AccountCommitmentKeyTrait<Affine<G0>>,
-) -> [Affine<G0>; 4] {
+) -> [Affine<G0>; 6] {
     [
         account_comm_key.sk_gen(),
         account_comm_key.balance_gen(),
+        account_comm_key.current_rho_gen(),
         account_comm_key.rho_gen(),
+        account_comm_key.current_randomness_gen(),
         account_comm_key.randomness_gen(),
     ]
 }
@@ -3437,58 +3766,98 @@ pub fn acc_new_gens_with_sk<G0: SWCurveConfig + Clone + Copy>(
 /// Generators for the re-randomized leaf Schnorr proof (split, without sk).
 /// AuthProofFeePayment handles `sk_gen*sk + B_blinding*auth_rerandomization`, the host proves the rest
 /// including its share of the B_blinding rerandomization.
-/// Order: [balance_gen, rho_gen, randomness_gen, B_blinding]
+/// Order: [balance_gen, current_rho_gen, rho_gen, current_randomness_gen, randomness_gen, B_blinding]
 pub fn acc_old_gens_without_sk<G0: SWCurveConfig + Clone + Copy>(
     account_comm_key: &impl AccountCommitmentKeyTrait<Affine<G0>>,
     blinding_gen: Affine<G0>,
-) -> [Affine<G0>; 4] {
+) -> [Affine<G0>; 6] {
     [
         account_comm_key.balance_gen(),
+        account_comm_key.current_rho_gen(),
         account_comm_key.rho_gen(),
+        account_comm_key.current_randomness_gen(),
         account_comm_key.randomness_gen(),
         blinding_gen,
     ]
 }
 
-/// Generators for the new account commitment Schnorr proof (split, without sk).
-/// AuthProofFeePayment handles `sk_gen*sk + randomness_gen*auth_new_randomness`, the host proves the rest
-/// including its share of the randomness_gen randomness.
-/// Order: [balance_gen, rho_gen, randomness_gen]
+/// Generators for the new account commitment Schnorr proof (without sk).
+/// Order: [balance_gen, current_rho_gen, rho_gen, current_randomness_gen, randomness_gen]
 pub fn acc_new_gens_without_sk<G0: SWCurveConfig + Clone + Copy>(
     account_comm_key: &impl AccountCommitmentKeyTrait<Affine<G0>>,
-) -> [Affine<G0>; 3] {
+) -> [Affine<G0>; 5] {
     [
         account_comm_key.balance_gen(),
+        account_comm_key.current_rho_gen(),
         account_comm_key.rho_gen(),
+        account_comm_key.current_randomness_gen(),
         account_comm_key.randomness_gen(),
     ]
 }
 
+/// Generators for the host's new account commitment Schnorr proof in the split fee payment.
+/// `AuthProofFeePayment` proves `sk_gen*sk + B_blinding*auth_new_randomness`, the host proves the
+/// rest, including the full new randomness and its `B_blinding` share.
+/// Order: [balance_gen, current_rho_gen, rho_gen, current_randomness_gen, randomness_gen, B_blinding]
+pub fn acc_new_gens_split<G0: SWCurveConfig + Clone + Copy>(
+    account_comm_key: &impl AccountCommitmentKeyTrait<Affine<G0>>,
+    blinding_gen: Affine<G0>,
+) -> [Affine<G0>; 6] {
+    [
+        account_comm_key.balance_gen(),
+        account_comm_key.current_rho_gen(),
+        account_comm_key.rho_gen(),
+        account_comm_key.current_randomness_gen(),
+        account_comm_key.randomness_gen(),
+        blinding_gen,
+    ]
+}
+
+/// Blindings created by [`init_acc_comm`]. The ones for `initial_rho`, `old_rho`, `new_rho`,
+/// `initial_randomness`, old randomness and new randomness are shared with the BP
+/// randomness-relations T-values so their responses can be reused at verification.
+#[derive(Clone, Debug, Zeroize, ZeroizeOnDrop)]
+pub struct AccCommBlindings<F: PrimeField> {
+    pub new_balance_blinding: F,
+    pub old_rho_blinding: F,
+    pub new_rho_blinding: F,
+    pub initial_rho_blinding: F,
+    /// Blinding of the (current) randomness witness in the old commitment
+    pub old_randomness_blinding: F,
+    /// Blinding of the (current) randomness witness in the new commitment
+    pub new_randomness_blinding: F,
+    pub initial_randomness_blinding: F,
+}
+
 /// create SchnorrCommitments for fee account commitment Schnorr proofs.
 /// When `sk_blinding` is `Some`, sk generators are included at position 0.
-/// When `new_s_blinding` is `Some`, it's used for the last new-commitment blinding;
-/// otherwise a random value is used (appropriate for split proofs where the
-/// witness is the host's random share).
+/// When `new_randomness_blinding` is `Some`, it's used for the randomness blinding of the new commitment;
+/// otherwise a random value is used.
+/// When `new_blinding_gen` is `Some`, the new commitment gets a last term on it (the host's share of
+/// the split new commitment's blinding), whose blinding is returned.
 ///
-/// Returns `(t_acc_old, t_acc_new, new_balance_blinding, old_rho_blinding, new_rho_blinding, old_s_blinding)`.
+/// Returns `(t_acc_old, t_acc_new, blindings, new_rerandomization_blinding)`.
 fn init_acc_comm<R: CryptoRngCore, G: SWCurveConfig + Clone + Copy>(
     rng: &mut R,
     account_comm_key: impl AccountCommitmentKeyTrait<Affine<G>>,
     blinding_gen: Affine<G>,
     sk_blinding: Option<G::ScalarField>,
-    new_s_blinding: Option<G::ScalarField>,
+    new_randomness_blinding: Option<G::ScalarField>,
+    new_blinding_gen: Option<Affine<G>>,
 ) -> (
     SchnorrCommitment<Affine<G>>,
     SchnorrCommitment<Affine<G>>,
-    G::ScalarField,
-    G::ScalarField,
-    G::ScalarField,
-    G::ScalarField,
+    AccCommBlindings<G::ScalarField>,
+    Option<G::ScalarField>,
 ) {
     let new_balance_blinding = G::ScalarField::rand(rng);
     let old_rho_blinding = G::ScalarField::rand(rng);
     let new_rho_blinding = G::ScalarField::rand(rng);
-    let old_s_blinding = G::ScalarField::rand(rng);
+    let initial_rho_blinding = G::ScalarField::rand(rng);
+    let old_randomness_blinding = G::ScalarField::rand(rng);
+    let new_randomness_blinding =
+        new_randomness_blinding.unwrap_or_else(|| G::ScalarField::rand(rng));
+    let initial_randomness_blinding = G::ScalarField::rand(rng);
 
     let mut old_gens = Vec::new();
     let mut old_blindings = Vec::new();
@@ -3504,25 +3873,41 @@ fn init_acc_comm<R: CryptoRngCore, G: SWCurveConfig + Clone + Copy>(
 
     old_gens.extend_from_slice(&[
         account_comm_key.balance_gen(),
+        account_comm_key.current_rho_gen(),
         account_comm_key.rho_gen(),
+        account_comm_key.current_randomness_gen(),
         account_comm_key.randomness_gen(),
         blinding_gen,
     ]);
     old_blindings.extend_from_slice(&[
         new_balance_blinding,
         old_rho_blinding,
-        old_s_blinding,
+        initial_rho_blinding,
+        old_randomness_blinding,
+        initial_randomness_blinding,
         G::ScalarField::rand(rng),
     ]);
 
     new_gens.extend_from_slice(&[
         account_comm_key.balance_gen(),
+        account_comm_key.current_rho_gen(),
         account_comm_key.rho_gen(),
+        account_comm_key.current_randomness_gen(),
         account_comm_key.randomness_gen(),
     ]);
-    new_blindings.push(new_balance_blinding);
-    new_blindings.push(new_rho_blinding);
-    new_blindings.push(new_s_blinding.unwrap_or_else(|| G::ScalarField::rand(rng)));
+    new_blindings.extend_from_slice(&[
+        new_balance_blinding,
+        new_rho_blinding,
+        initial_rho_blinding,
+        new_randomness_blinding,
+        initial_randomness_blinding,
+    ]);
+    let new_rerandomization_blinding = new_blinding_gen.map(|g| {
+        let b = G::ScalarField::rand(rng);
+        new_gens.push(g);
+        new_blindings.push(b);
+        b
+    });
 
     let t_acc_old = SchnorrCommitment::new(&old_gens, old_blindings);
     let t_acc_new = SchnorrCommitment::new(&new_gens, new_blindings);
@@ -3530,18 +3915,26 @@ fn init_acc_comm<R: CryptoRngCore, G: SWCurveConfig + Clone + Copy>(
     (
         t_acc_old,
         t_acc_new,
-        new_balance_blinding,
-        old_rho_blinding,
-        new_rho_blinding,
-        old_s_blinding,
+        AccCommBlindings {
+            new_balance_blinding,
+            old_rho_blinding,
+            new_rho_blinding,
+            initial_rho_blinding,
+            old_randomness_blinding,
+            new_randomness_blinding,
+            initial_randomness_blinding,
+        },
+        new_rerandomization_blinding,
     )
 }
 
 /// generate responses for fee account commitment Schnorr proofs.
 /// When `sk` is `Some`, it appears at position 0 of old witnesses;
 /// new-commitment partial-response indices are shifted accordingly.
+/// `new_rerandomization` is the witness of the last new-commitment term created by `init_acc_comm`
+/// for `new_blinding_gen`.
 ///
-/// Returns `(resp_acc_old, resp_acc_new, t_acc_old, t_acc_new)`.
+/// Returns `(resp_acc_old, resp_acc_new)`.
 fn resp_acc_comm<G: SWCurveConfig + Clone + Copy>(
     t_acc_old: &SchnorrCommitment<Affine<G>>,
     t_acc_new: &SchnorrCommitment<Affine<G>>,
@@ -3549,10 +3942,13 @@ fn resp_acc_comm<G: SWCurveConfig + Clone + Copy>(
     sk: Option<G::ScalarField>,
     new_balance: G::ScalarField,
     old_rho: G::ScalarField,
+    initial_rho: G::ScalarField,
     old_randomness: G::ScalarField,
+    initial_randomness: G::ScalarField,
     rerandomization: G::ScalarField,
     new_rho: G::ScalarField,
     new_randomness: G::ScalarField,
+    new_rerandomization: Option<G::ScalarField>,
 ) -> Result<(
     SchnorrResponse<Affine<G>>,
     PartialSchnorrResponse<Affine<G>>,
@@ -3564,21 +3960,94 @@ fn resp_acc_comm<G: SWCurveConfig + Clone + Copy>(
     } else {
         0
     };
-    old_wits.extend_from_slice(&[new_balance, old_rho, old_randomness, rerandomization]);
+    old_wits.extend_from_slice(&[
+        new_balance,
+        old_rho,
+        initial_rho,
+        old_randomness,
+        initial_randomness,
+        rerandomization,
+    ]);
 
     let resp_acc_old = t_acc_old.response(&old_wits, challenge)?;
 
     let mut new_wits = BTreeMap::new();
     new_wits.insert(1 + offset, new_rho);
-    new_wits.insert(2 + offset, new_randomness);
+    new_wits.insert(3 + offset, new_randomness);
+    if let Some(r) = new_rerandomization {
+        new_wits.insert(5 + offset, r);
+    }
     let resp_acc_new = t_acc_new.partial_response(new_wits, challenge)?;
 
     Ok((resp_acc_old, resp_acc_new))
 }
 
+/// BP commitment and matching Schnorr T-value for the fee-account randomness relations.
+#[derive(Zeroize, ZeroizeOnDrop)]
+pub struct FeeRandomnessRelationsProtocol<G: AffineRepr> {
+    /// BP vector commitment to
+    /// `[initial_rho, rho_old, rho_new, initial_randomness, randomness_old, randomness_new]`
+    #[zeroize(skip)]
+    comm: G,
+    comm_blinding: G::ScalarField,
+    /// Schnorr commitment over `[B_blinding, g_0..g_5]` used to prove knowledge of the openings
+    t_bp: SchnorrCommitment<G>,
+}
+
+/// Creates the BP commitment and matching Schnorr T-value enforcing the fee-account randomness
+/// relations `rho_new = rho_old * initial_rho` and
+/// `randomness_new = randomness_old * initial_randomness`.
+fn init_bp_randomness_relations<R: CryptoRngCore, G0>(
+    rng: &mut R,
+    account: &FeeAccountState<Affine<G0>>,
+    updated_account: &FeeAccountState<Affine<G0>>,
+    blindings: &AccCommBlindings<G0::ScalarField>,
+    prover: &mut Prover<MerlinTranscript, Affine<G0>>,
+    pc_gens: &PedersenGens<Affine<G0>>,
+    bp_gens: &BulletproofGens<Affine<G0>>,
+) -> FeeRandomnessRelationsProtocol<Affine<G0>>
+where
+    G0: SWCurveConfig + Copy,
+{
+    let mut wits = vec![
+        account.initial_rho,
+        account.rho,
+        updated_account.rho,
+        account.initial_randomness,
+        account.randomness,
+        updated_account.randomness,
+    ];
+    let comm_blinding = G0::ScalarField::rand(rng);
+
+    let (comm, mut vars) = prover.commit_vec(&wits, comm_blinding, bp_gens);
+    enforce_constraints_for_randomness_relations(prover, &mut vars);
+
+    let t_bp = SchnorrCommitment::new(
+        &bp_gens_vec_for_randomness_relations(pc_gens, bp_gens),
+        vec![
+            comm_blinding,
+            blindings.initial_rho_blinding,
+            blindings.old_rho_blinding,
+            blindings.new_rho_blinding,
+            blindings.initial_randomness_blinding,
+            blindings.old_randomness_blinding,
+            blindings.new_randomness_blinding,
+        ],
+    );
+
+    wits.zeroize();
+
+    FeeRandomnessRelationsProtocol {
+        comm,
+        comm_blinding,
+        t_bp,
+    }
+}
+
 /// verify fee account commitment Schnorr proofs (old + new).
 /// When `has_sk` is true, uses with-sk generators and shares sk + balance;
 /// otherwise uses without-sk generators and shares only balance.
+/// When `new_blinding_gen` is `Some`, the new commitment has a last term on it.
 fn verify_acc_comm<G: SWCurveConfig + Clone + Copy>(
     resp_acc_old: &SchnorrResponse<Affine<G>>,
     resp_acc_new: &PartialSchnorrResponse<Affine<G>>,
@@ -3586,20 +4055,22 @@ fn verify_acc_comm<G: SWCurveConfig + Clone + Copy>(
     y_new: Affine<G>,
     account_comm_key: impl AccountCommitmentKeyTrait<Affine<G>>,
     blinding_gen: Affine<G>,
+    new_blinding_gen: Option<Affine<G>>,
     has_sk: bool,
     challenge: &G::ScalarField,
     mut rmc: Option<&mut RandomizedMultChecker<Affine<G>>>,
 ) -> Result<()> {
-    let expected_old = if has_sk { 5 } else { 4 };
+    let expected_old = if has_sk { 7 } else { 6 };
     if resp_acc_old.len() != expected_old {
         return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(
             expected_old,
             resp_acc_old.len(),
         ));
     }
-    if resp_acc_new.responses.len() != 2 {
+    let expected_new = if new_blinding_gen.is_some() { 3 } else { 2 };
+    if resp_acc_new.responses.len() != expected_new {
         return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(
-            2,
+            expected_new,
             resp_acc_new.responses.len(),
         ));
     }
@@ -3611,8 +4082,11 @@ fn verify_acc_comm<G: SWCurveConfig + Clone + Copy>(
         missing_resps.insert(0, resp_acc_old.0[0]); // sk
     }
     missing_resps.insert(offset, resp_acc_old.0[offset]); // balance
+    // `initial_rho` and `initial_randomness` are unchanged between the old and new commitments.
+    missing_resps.insert(offset + 2, resp_acc_old.0[offset + 2]);
+    missing_resps.insert(offset + 4, resp_acc_old.0[offset + 4]);
 
-    let (old_gens, new_gens): (Vec<Affine<G>>, Vec<Affine<G>>) = if has_sk {
+    let (old_gens, mut new_gens): (Vec<Affine<G>>, Vec<Affine<G>>) = if has_sk {
         (
             acc_old_gens_with_sk(&account_comm_key, blinding_gen).to_vec(),
             acc_new_gens_with_sk(&account_comm_key).to_vec(),
@@ -3623,6 +4097,7 @@ fn verify_acc_comm<G: SWCurveConfig + Clone + Copy>(
             acc_new_gens_without_sk(&account_comm_key).to_vec(),
         )
     };
+    new_gens.extend(new_blinding_gen);
 
     verify_schnorr_resp_or_rmc!(rmc, resp_acc_old, old_gens, y_old, challenge);
     verify_partial_schnorr_resp_or_rmc!(
@@ -3686,6 +4161,59 @@ pub fn ensure_same_accounts_without_sk<G: AffineRepr>(
         if old_state.randomness * old_state.initial_randomness != new_state.randomness {
             return Err(Error::ProofGenerationError(
                 "Randomness not correctly updated in new fee account state".to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// The largest divisor of `p - 1` with all prime factors below `10^7`, for the Pallas scalar field `p`.
+/// `p - 1 = 2^32 * 3^2 * 1709 * 24859 * T` where `T` has no prime factor below `10^7`.
+pub const PALLAS_FR_SMOOTH_ORDER: [u64; 1] = [0x16ca4b3700000000];
+
+/// Device check for a split fee account registration. Rejects unless
+/// `account_commitment = pk + g_balance * balance + g_asset_id * asset_id + (g_rho + g_current_rho) * initial_rho + (g_randomness + g_current_randomness) * initial_randomness`,
+/// `initial_rho^smooth_order != 1` and `initial_randomness != 0`. With `smooth_order` the smooth
+/// part of `p - 1`, the order of `initial_rho` has a prime factor outside it, so the nullifiers
+/// `g_current_rho * initial_rho^k` don't repeat within that many state changes.
+pub fn ensure_valid_fee_registration_opening<G: AffineRepr>(
+    account_commitment: &FeeAccountStateCommitment<G>,
+    pk: &G,
+    asset_id: AssetId,
+    balance: Balance,
+    initial_rho: G::ScalarField,
+    initial_randomness: G::ScalarField,
+    smooth_order: &[u64],
+    account_comm_key: &impl AccountCommitmentKeyTrait<G>,
+) -> Result<()> {
+    #[cfg(feature = "ignore_prover_input_sanitation")]
+    {
+        return Ok(());
+    }
+
+    #[cfg(not(feature = "ignore_prover_input_sanitation"))]
+    {
+        use ark_ff::Field;
+        use ark_std::{One, Zero};
+        if initial_rho.is_zero() || initial_rho.pow(smooth_order).is_one() {
+            return Err(Error::ProofGenerationError(
+                "initial_rho has small multiplicative order".to_string(),
+            ));
+        }
+        if initial_randomness.is_zero() {
+            return Err(Error::ProofGenerationError(
+                "initial_randomness is zero".to_string(),
+            ));
+        }
+        let (rho_gen, randomness_gen) = reg_comm_gens(account_comm_key);
+        let expected = pk.into_group()
+            + account_comm_key.balance_gen() * G::ScalarField::from(balance)
+            + account_comm_key.asset_id_gen() * G::ScalarField::from(asset_id)
+            + rho_gen * initial_rho
+            + randomness_gen * initial_randomness;
+        if expected.into_affine() != account_commitment.0 {
+            return Err(Error::ProofGenerationError(
+                "Fee account commitment does not match the registration opening".to_string(),
             ));
         }
         Ok(())
@@ -4042,7 +4570,7 @@ pub mod tests {
         host_transcript.append_message(b"auth-proof", &auth_proof_bytes);
         let challenge_h_final = host_transcript.challenge_scalar::<F0>(TXN_CHALLENGE_LABEL);
 
-        let partial = partial_proto.gen_proof(&challenge_h_final);
+        let partial = partial_proto.gen_proof(&challenge_h_final).unwrap();
 
         let reg_proof = RegTxnProof {
             partial,
@@ -5036,7 +5564,7 @@ pub mod tests {
         let rerandomized_leaf = partial.rerandomized_leaf().unwrap();
 
         let sk_gen = account_comm_key.sk_gen();
-        let randomness_gen = account_comm_key.randomness_gen();
+        let anchor_gen = account_tree_params.even_parameters.sl_params.pc_gens().B;
         let b_blinding = account_tree_params
             .even_parameters
             .sl_params
@@ -5057,8 +5585,8 @@ pub mod tests {
                 amount: fee_amount,
             },
             sk_gen,
-            randomness_gen,
             b_blinding,
+            anchor_gen,
         )
         .unwrap();
 
@@ -5101,11 +5629,374 @@ pub mod tests {
                     amount: fee_amount,
                 },
                 sk_gen,
-                randomness_gen,
                 b_blinding,
+                anchor_gen,
                 None,
             )
             .unwrap();
+    }
+
+    /// Builds a split fee payment where the host gives the device `auth_new_randomness + delta`
+    /// and publishes `C_new + B_blinding * delta`. Returns whether the host part verifies without and
+    /// with `RandomizedMultChecker`, after asserting the auth proof does.
+    fn split_payment_with_new_blinding_offset(delta: F0) -> (bool, bool) {
+        let mut rng = rand::thread_rng();
+        let (account_tree_params, account_comm_key, _) = setup_gens_new::<{ 1 << 13 }>(b"testing");
+        let asset_id = 1;
+        let fee_amount = 10;
+        let nonce = b"test-nonce";
+        let (sk, pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+        let account = new_fee_account::<_, PallasA>(&mut rng, asset_id, pk, 1000);
+        let account_comm = account.commit(&account_comm_key).unwrap();
+        let account_tree = CurveTree::<64, 1, PallasParameters, VestaParameters>::from_leaves(
+            &[account_comm.0],
+            &account_tree_params,
+            Some(6),
+        );
+        let root = account_tree.root_node();
+        let pc_gens = account_tree_params.even_parameters.sl_params.pc_gens();
+        let (b_blinding, anchor_gen) = (pc_gens.B_blinding, pc_gens.B);
+
+        let updated_account = account.get_state_for_payment(fee_amount).unwrap();
+        let updated_account_comm = FeeAccountStateCommitment(
+            (updated_account
+                .commit(&account_comm_key)
+                .unwrap()
+                .0
+                .into_group()
+                + b_blinding * delta)
+                .into_affine(),
+        );
+        let (partial, host_commitment_proof, auth_rerandomization, auth_new_randomness, nullifier) =
+            FeePaymentSplitProtocol::new::<_, PallasParams, VestaParams>(
+                &mut rng,
+                fee_amount,
+                &account,
+                &updated_account,
+                updated_account_comm,
+                account_tree.get_path_to_leaf_for_proof(0, 0).unwrap(),
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+            )
+            .unwrap();
+        let rerandomized_leaf = partial.rerandomized_leaf().unwrap();
+        let txn_type = DeviceTxnType::FeePayment {
+            asset_id,
+            amount: fee_amount,
+        };
+        let auth_proof = AuthProofFeePayment::new(
+            &mut rng,
+            sk.0,
+            auth_rerandomization,
+            auth_new_randomness + delta,
+            &rerandomized_leaf,
+            &updated_account_comm.0,
+            nullifier,
+            nonce,
+            &txn_type,
+            account_comm_key.sk_gen(),
+            b_blinding,
+            anchor_gen,
+        )
+        .unwrap();
+        auth_proof
+            .verify(
+                &rerandomized_leaf,
+                &updated_account_comm.0,
+                nullifier,
+                nonce,
+                &txn_type,
+                account_comm_key.sk_gen(),
+                b_blinding,
+                anchor_gen,
+                None,
+            )
+            .unwrap();
+        assert_ne!(auth_proof.partial_updated_account_commitment, pk.0);
+
+        let proof = FeePaymentSplitProof {
+            partial,
+            commitment_proof: AccountCommitmentsSplitProof {
+                auth_proof,
+                host_proof: host_commitment_proof,
+            },
+        };
+        let verified = proof
+            .verify_host_and_return_tuples::<_, PallasParams, VestaParams>(
+                asset_id,
+                fee_amount,
+                updated_account_comm,
+                nullifier,
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                &mut rng,
+                None,
+            )
+            .and_then(|(even_tuple, odd_tuple, _)| {
+                handle_verification_tuples(even_tuple, odd_tuple, &account_tree_params, None)
+            })
+            .is_ok();
+
+        let mut rmc_0 = RandomizedMultChecker::new(F0::rand(&mut rng));
+        let mut rmc_1 = RandomizedMultChecker::new(F1::rand(&mut rng));
+        let verified_with_rmc = proof
+            .verify_host_and_return_tuples::<_, PallasParams, VestaParams>(
+                asset_id,
+                fee_amount,
+                updated_account_comm,
+                nullifier,
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                &mut rng,
+                Some(&mut rmc_0),
+            )
+            .and_then(|(even_tuple, odd_tuple, _)| {
+                handle_verification_tuples(
+                    even_tuple,
+                    odd_tuple,
+                    &account_tree_params,
+                    Some((&mut rmc_0, &mut rmc_1)),
+                )
+            })
+            .and_then(|_| verify_rmc(rmc_0, rmc_1))
+            .is_ok();
+        (verified, verified_with_rmc)
+    }
+
+    #[test]
+    fn split_fee_payment_rejects_blinding_offset_in_new_commitment() {
+        // The device's `B_blinding` share in the new commitment is anchored by `rand_new_comm_anchor`,
+        // so a host that offsets it by `delta` (moving the new commitment off its opening) is rejected.
+        assert_eq!(
+            split_payment_with_new_blinding_offset(F0::from(0u8)),
+            (true, true)
+        );
+        assert_eq!(
+            split_payment_with_new_blinding_offset(F0::rand(&mut rand::thread_rng())),
+            (false, false)
+        );
+    }
+
+    #[test]
+    fn fee_payment_rejects_misplaced_new_commitment_responses() {
+        // `resp_acc_new` with the right number of responses under the wrong indices must return an
+        // error, not panic.
+        let mut rng = rand::thread_rng();
+        let (account_tree_params, account_comm_key, _) = setup_gens_new::<{ 1 << 13 }>(b"testing");
+        let asset_id = 1;
+        let fee_amount = 10;
+        let nonce = b"test-nonce";
+        let (sk, pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+        let account = new_fee_account::<_, PallasA>(&mut rng, asset_id, pk, 1000);
+        let account_comm = account.commit(&account_comm_key).unwrap();
+        let account_tree = CurveTree::<64, 1, PallasParameters, VestaParameters>::from_leaves(
+            &[account_comm.0],
+            &account_tree_params,
+            Some(6),
+        );
+        let root = account_tree.root_node();
+        let updated_account = account.get_state_for_payment(fee_amount).unwrap();
+        let updated_account_comm = updated_account.commit(&account_comm_key).unwrap();
+
+        let (mut proof, nullifier) = FeePaymentProof::new::<_, PallasParams, VestaParams>(
+            &mut rng,
+            fee_amount,
+            sk.0,
+            &account,
+            &updated_account,
+            updated_account_comm,
+            account_tree.get_path_to_leaf_for_proof(0, 0).unwrap(),
+            &root,
+            nonce,
+            &account_tree_params,
+            account_comm_key.clone(),
+        )
+        .unwrap();
+        let responses = &mut proof.commitment_proof.resp_acc_new.responses;
+        let r = responses.remove(&2u32).unwrap();
+        responses.insert(0u32, r);
+        assert!(
+            proof
+                .verify(
+                    asset_id,
+                    fee_amount,
+                    updated_account_comm,
+                    nullifier,
+                    &root,
+                    nonce,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    &mut rng,
+                    None,
+                )
+                .is_err()
+        );
+
+        let (
+            partial,
+            mut host_commitment_proof,
+            auth_rerandomization,
+            auth_new_randomness,
+            nullifier,
+        ) = FeePaymentSplitProtocol::new::<_, PallasParams, VestaParams>(
+            &mut rng,
+            fee_amount,
+            &account,
+            &updated_account,
+            updated_account_comm,
+            account_tree.get_path_to_leaf_for_proof(0, 0).unwrap(),
+            &root,
+            nonce,
+            &account_tree_params,
+            account_comm_key.clone(),
+        )
+        .unwrap();
+        let responses = &mut host_commitment_proof.resp_acc_new.responses;
+        let r = responses.remove(&1u32).unwrap();
+        responses.insert(0u32, r);
+        let rerandomized_leaf = partial.rerandomized_leaf().unwrap();
+        let pc_gens = account_tree_params.even_parameters.sl_params.pc_gens();
+        let auth_proof = AuthProofFeePayment::new(
+            &mut rng,
+            sk.0,
+            auth_rerandomization,
+            auth_new_randomness,
+            &rerandomized_leaf,
+            &updated_account_comm.0,
+            nullifier,
+            nonce,
+            &DeviceTxnType::FeePayment {
+                asset_id,
+                amount: fee_amount,
+            },
+            account_comm_key.sk_gen(),
+            pc_gens.B_blinding,
+            pc_gens.B,
+        )
+        .unwrap();
+        let proof = FeePaymentSplitProof {
+            partial,
+            commitment_proof: AccountCommitmentsSplitProof {
+                auth_proof,
+                host_proof: host_commitment_proof,
+            },
+        };
+        assert!(
+            proof
+                .verify_host_and_return_tuples::<_, PallasParams, VestaParams>(
+                    asset_id,
+                    fee_amount,
+                    updated_account_comm,
+                    nullifier,
+                    &root,
+                    nonce,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    &mut rng,
+                    None,
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn pallas_fr_smooth_order_divides_p_minus_1() {
+        use core::str::FromStr;
+        let smooth = F0::from(PALLAS_FR_SMOOTH_ORDER[0]);
+        let cofactor =
+            F0::from_str("17627503553531704781201602214972145569028026719617221564519").unwrap();
+        assert_eq!(smooth * cofactor, -F0::from(1u8));
+    }
+
+    #[cfg(not(feature = "ignore_prover_input_sanitation"))]
+    #[test]
+    fn fee_registration_device_check() {
+        use ark_ff::FftField;
+        let mut rng = rand::thread_rng();
+        let account_comm_key = setup_comm_key(b"testing");
+        let asset_id = 1;
+        let balance = 1000;
+        let (_, pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+
+        let check = |account: &FeeAccountState<PallasA>| {
+            let comm = account.commit(&account_comm_key).unwrap();
+            ensure_valid_fee_registration_opening(
+                &comm,
+                &pk.0,
+                asset_id,
+                balance,
+                account.initial_rho,
+                account.initial_randomness,
+                &PALLAS_FR_SMOOTH_ORDER,
+                &account_comm_key,
+            )
+        };
+        let with_initial = |rho: F0, randomness: F0| {
+            let mut account = new_fee_account::<_, PallasA>(
+                &mut rand::thread_rng(),
+                asset_id,
+                pk.clone(),
+                balance,
+            );
+            account.initial_rho = rho;
+            account.rho = rho;
+            account.initial_randomness = randomness;
+            account.randomness = randomness;
+            account
+        };
+
+        let account = new_fee_account::<_, PallasA>(&mut rng, asset_id, pk.clone(), balance);
+        check(&account).unwrap();
+
+        // `initial_rho` of small order repeats the nullifier sequence.
+        let s = F0::rand(&mut rng);
+        for rho in [
+            F0::from(0u8),
+            F0::from(1u8),
+            -F0::from(1u8),
+            F0::TWO_ADIC_ROOT_OF_UNITY,
+        ] {
+            assert!(check(&with_initial(rho, s)).is_err());
+        }
+        assert!(check(&with_initial(F0::rand(&mut rng), F0::from(0u8))).is_err());
+
+        // The commitment must open to the given opening and balance.
+        let comm = account.commit(&account_comm_key).unwrap();
+        assert!(
+            ensure_valid_fee_registration_opening(
+                &comm,
+                &pk.0,
+                asset_id,
+                balance + 1,
+                account.initial_rho,
+                account.initial_randomness,
+                &PALLAS_FR_SMOOTH_ORDER,
+                &account_comm_key,
+            )
+            .is_err()
+        );
+        let mut rho_not_initial = account.clone();
+        rho_not_initial.rho += F0::from(1u8);
+        let comm = rho_not_initial.commit(&account_comm_key).unwrap();
+        assert!(
+            ensure_valid_fee_registration_opening(
+                &comm,
+                &pk.0,
+                asset_id,
+                balance,
+                account.initial_rho,
+                account.initial_randomness,
+                &PALLAS_FR_SMOOTH_ORDER,
+                &account_comm_key,
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -5173,7 +6064,7 @@ pub mod tests {
         let rerandomized_leaf = protocol.rerandomized_leaf();
 
         let sk_gen = account_comm_key.sk_gen();
-        let randomness_gen = account_comm_key.randomness_gen();
+        let anchor_gen = account_tree_params.even_parameters.sl_params.pc_gens().B;
         let b_blinding = account_tree_params
             .even_parameters
             .sl_params
@@ -5194,8 +6085,8 @@ pub mod tests {
                 amount: fee_amount,
             },
             sk_gen,
-            randomness_gen,
             b_blinding,
+            anchor_gen,
         )
         .unwrap();
 
@@ -5269,8 +6160,8 @@ pub mod tests {
                     amount: fee_amount,
                 },
                 sk_gen,
-                randomness_gen,
                 b_blinding,
+                anchor_gen,
                 None,
             )
             .unwrap();
@@ -5573,6 +6464,236 @@ pub mod tests {
             assert!(verify_result.is_err() || rmc_result.is_err());
         }
 
+        #[test]
+        fn non_relation_rho_and_randomness_fail_in_payment_txn() {
+            // With input sanitation disabled the prover can pick the new rho and randomness freely.
+            // The in-circuit relations `rho_new = rho_old * initial_rho` and
+            // `randomness_new = randomness_old * initial_randomness` must still reject such proofs.
+            let mut rng = rand::thread_rng();
+
+            const NUM_GENS: usize = 1 << 13;
+            const L: usize = 64;
+            let (account_tree_params, account_comm_key, _) = setup_gens_new::<NUM_GENS>(b"testing");
+
+            let asset_id = 1;
+            let (sk, pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+            let balance = 1000;
+            let account = new_fee_account::<_, PallasA>(&mut rng, asset_id, pk, balance);
+            let account_comm = account.commit(&account_comm_key).unwrap();
+
+            let set = vec![account_comm.0];
+            let account_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
+                &set,
+                &account_tree_params,
+                Some(3),
+            );
+
+            let fee_amount = 10;
+            let nonce = b"a_txn_id,a_payee_id";
+            let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+            let root = account_tree.root_node();
+
+            let mut assert_rejected = |updated_account: FeeAccountState<PallasA>| {
+                let updated_account_comm = updated_account.commit(&account_comm_key).unwrap();
+                let (proof, nullifier) = FeePaymentProof::new::<_, PallasParams, VestaParams>(
+                    &mut rng,
+                    fee_amount,
+                    sk.0,
+                    &account,
+                    &updated_account,
+                    updated_account_comm,
+                    path.clone(),
+                    &root,
+                    nonce,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                )
+                .unwrap();
+
+                let verify_result = proof.verify(
+                    asset_id,
+                    fee_amount,
+                    updated_account_comm,
+                    nullifier,
+                    &root,
+                    nonce,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    &mut rng,
+                    None,
+                );
+                assert!(
+                    verify_result.is_err(),
+                    "proof opening the new commitment to a non-relation value must be rejected"
+                );
+
+                let mut rmc_0 = RandomizedMultChecker::new(F0::rand(&mut rng));
+                let mut rmc_1 = RandomizedMultChecker::new(F1::rand(&mut rng));
+                let verify_result = proof.verify(
+                    asset_id,
+                    fee_amount,
+                    updated_account_comm,
+                    nullifier,
+                    &root,
+                    nonce,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    &mut rng,
+                    Some((&mut rmc_0, &mut rmc_1)),
+                );
+                let rmc_result = verify_rmc(rmc_0, rmc_1);
+                assert!(verify_result.is_err() || rmc_result.is_err());
+            };
+
+            // rho_new != rho_old * initial_rho
+            let mut bad_rho = account.get_state_for_payment(fee_amount).unwrap();
+            bad_rho.rho += F0::from(1u8);
+            assert_rejected(bad_rho);
+
+            // randomness_new != randomness_old * initial_randomness
+            let mut bad_randomness = account.get_state_for_payment(fee_amount).unwrap();
+            bad_randomness.randomness += F0::from(1u8);
+            assert_rejected(bad_randomness);
+        }
+
+        #[test]
+        fn non_relation_rho_and_randomness_fail_in_topup_txn() {
+            // Same as above, for the topup verification path.
+            let mut rng = rand::thread_rng();
+
+            const NUM_GENS: usize = 1 << 13;
+            const L: usize = 64;
+            let (account_tree_params, account_comm_key, _) = setup_gens_new::<NUM_GENS>(b"testing");
+
+            let asset_id = 1;
+            let (sk_i, pk_i) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+            let balance = 1000;
+            let account = new_fee_account::<_, PallasA>(&mut rng, asset_id, pk_i, balance);
+            let account_comm = account.commit(&account_comm_key).unwrap();
+
+            let set = vec![account_comm.0];
+            let account_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
+                &set,
+                &account_tree_params,
+                Some(3),
+            );
+
+            let increase_bal_by = 10;
+            let nonce = b"test-nonce";
+            let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+            let root = account_tree.root_node();
+
+            let mut assert_rejected = |updated_account: FeeAccountState<PallasA>| {
+                let updated_account_comm = updated_account.commit(&account_comm_key).unwrap();
+                let (proof, nullifier) =
+                    FeeAccountTopupTxnProof::new::<_, PallasParams, VestaParams>(
+                        &mut rng,
+                        sk_i.0,
+                        increase_bal_by,
+                        &account,
+                        &updated_account,
+                        updated_account_comm,
+                        path.clone(),
+                        &root,
+                        nonce,
+                        &account_tree_params,
+                        account_comm_key.clone(),
+                    )
+                    .unwrap();
+
+                let verify_result = proof.verify(
+                    pk_i.0,
+                    asset_id,
+                    increase_bal_by,
+                    updated_account_comm,
+                    nullifier,
+                    &root,
+                    nonce,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    &mut rng,
+                    None,
+                );
+                assert!(
+                    verify_result.is_err(),
+                    "proof opening the new commitment to a non-relation value must be rejected"
+                );
+
+                let mut rmc_0 = RandomizedMultChecker::new(F0::rand(&mut rng));
+                let mut rmc_1 = RandomizedMultChecker::new(F1::rand(&mut rng));
+                let verify_result = proof.verify(
+                    pk_i.0,
+                    asset_id,
+                    increase_bal_by,
+                    updated_account_comm,
+                    nullifier,
+                    &root,
+                    nonce,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    &mut rng,
+                    Some((&mut rmc_0, &mut rmc_1)),
+                );
+                let rmc_result = verify_rmc(rmc_0, rmc_1);
+                assert!(verify_result.is_err() || rmc_result.is_err());
+            };
+
+            // rho_new != rho_old * initial_rho
+            let mut bad_rho = account.get_state_for_topup(increase_bal_by).unwrap();
+            bad_rho.rho += F0::from(1u8);
+            assert_rejected(bad_rho);
+
+            // randomness_new != randomness_old * initial_randomness
+            let mut bad_randomness = account.get_state_for_topup(increase_bal_by).unwrap();
+            bad_randomness.randomness += F0::from(1u8);
+            assert_rejected(bad_randomness);
+        }
+
+        #[test]
+        fn registration_rejects_rho_or_randomness_not_initial() {
+            // The registration proof opens `rho` and `initial_rho` with one response, and the same for
+            // the randomness, so a registered state with `rho != initial_rho` is rejected.
+            let mut rng = rand::thread_rng();
+            let account_comm_key = setup_comm_key(b"testing");
+            let asset_id = 1;
+            let balance = 1000;
+            let nonce = b"test-nonce";
+            let (sk, pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+
+            let mut bad_rho =
+                new_fee_account::<_, PallasA>(&mut rng, asset_id, pk.clone(), balance);
+            bad_rho.rho += F0::from(1u8);
+            let mut bad_randomness =
+                new_fee_account::<_, PallasA>(&mut rng, asset_id, pk.clone(), balance);
+            bad_randomness.randomness += F0::from(1u8);
+
+            for account in [bad_rho, bad_randomness] {
+                let comm = account.commit(&account_comm_key).unwrap();
+                let proof = RegTxnProof::new(
+                    &mut rng,
+                    sk.0,
+                    &account,
+                    comm.clone(),
+                    nonce,
+                    account_comm_key.clone(),
+                )
+                .unwrap();
+                assert!(
+                    proof
+                        .verify(
+                            &pk.0,
+                            balance,
+                            asset_id,
+                            &comm,
+                            nonce,
+                            account_comm_key.clone(),
+                            None,
+                        )
+                        .is_err()
+                );
+            }
+        }
+
         #[cfg(feature = "nightly_mocking_tests")]
         mod mocking_tests {
             use super::*;
@@ -5627,6 +6748,28 @@ pub mod tests {
             }
 
             #[test]
+            fn split_fee_payment_rejects_host_anchor_not_matching_new_commitment() {
+                // The host hashes the device's anchor `anchor_gen * (rand_new_comm + delta)` but its new
+                // commitment carries `-rand_new_comm`, so only the anchor relation fails.
+                let mut rng = rand::thread_rng();
+                for (delta, verifies) in [(F0::from(0u8), true), (F0::rand(&mut rng), false)] {
+                    init_host_rand_new_comm_anchor_protocol::<PallasA>.mock_safe(
+                        move |rand_new_comm, blinding, anchor_gen| {
+                            MockResult::Return((
+                                PokDiscreteLogProtocol::init(-rand_new_comm, blinding, &anchor_gen),
+                                (anchor_gen * (rand_new_comm + delta)).into_affine(),
+                            ))
+                        },
+                    );
+                    assert_eq!(
+                        split_payment_with_new_blinding_offset(delta),
+                        (verifies, verifies)
+                    );
+                    init_host_rand_new_comm_anchor_protocol::<PallasA>.clear_mock();
+                }
+            }
+
+            #[test]
             fn fee_account_topup_txn_with_mocked_rho_fails_verification() {
                 // Mock the topup nullifier proof to use a forged rho (so the published nullifier no longer matches the committed account's rho); the verifier must reject the proof.
                 let mut rng = rand::thread_rng();
@@ -5660,10 +6803,11 @@ pub mod tests {
                 let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
                 let root = account_tree.root_node();
 
-                let honest_nullifier = (account_comm_key.rho_gen() * account.rho).into_affine();
+                let honest_nullifier =
+                    (account_comm_key.current_rho_gen() * account.rho).into_affine();
                 let mocked_rho = F0::rand(&mut rng);
                 let expected_mocked_nullifier =
-                    (account_comm_key.rho_gen() * mocked_rho).into_affine();
+                    (account_comm_key.current_rho_gen() * mocked_rho).into_affine();
 
                 mock_nullifier_for_ck(&account_comm_key, expected_mocked_nullifier);
                 FeeAccountTopupTxnWithoutSkProtocol::<
@@ -5885,10 +7029,11 @@ pub mod tests {
                 let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
                 let root = account_tree.root_node();
 
-                let honest_nullifier = (account_comm_key.rho_gen() * account.rho).into_affine();
+                let honest_nullifier =
+                    (account_comm_key.current_rho_gen() * account.rho).into_affine();
                 let mocked_rho = F0::rand(&mut rng);
                 let expected_mocked_nullifier =
-                    (account_comm_key.rho_gen() * mocked_rho).into_affine();
+                    (account_comm_key.current_rho_gen() * mocked_rho).into_affine();
 
                 mock_nullifier_for_ck(&account_comm_key, expected_mocked_nullifier);
                 FeePaymentWithoutCommitmentsProtocol::<

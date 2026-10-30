@@ -655,23 +655,26 @@ where
         &self,
         account_comm_key: impl AccountCommitmentKeyTrait<G>,
     ) -> Result<AccountStateCommitment<G>> {
-        let comm = G::Group::msm(
-            &account_comm_key.as_gens_without_sk()[..],
-            &[
-                G::ScalarField::from(self.balance),
-                G::ScalarField::from(self.counter),
-                G::ScalarField::from(self.asset_id),
-                self.rho,
-                self.current_rho,
-                self.randomness,
-                self.current_randomness,
-                self.id,
-            ],
-        )
-        .map_err(Error::size_mismatch)?
+        let comm = G::Group::msm(&account_comm_key.as_gens_without_sk()[..], &self.openings())
+            .map_err(Error::size_mismatch)?
             + self.pk_aff
             + self.pk_enc;
         Ok(AccountStateCommitment(comm.into_affine()))
+    }
+
+    /// The opening of the account commitment over `as_gens_without_sk()`, i.e. without secret keys:
+    /// `[balance, counter, asset_id, rho, current_rho, randomness, current_randomness, id]`.
+    pub fn openings(&self) -> [G::ScalarField; NUM_GENERATORS - 2] {
+        [
+            G::ScalarField::from(self.balance),
+            G::ScalarField::from(self.counter),
+            G::ScalarField::from(self.asset_id),
+            self.rho,
+            self.current_rho,
+            self.randomness,
+            self.current_randomness,
+            self.id,
+        ]
     }
 }
 

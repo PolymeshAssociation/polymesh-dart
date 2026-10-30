@@ -1,14 +1,19 @@
 use crate::Error;
+use crate::account::state::{AccountCommitmentKeyTrait, NUM_GENERATORS};
 use crate::error::Result;
-use ark_ec::AffineRepr;
-use ark_ec::CurveGroup;
+#[cfg(not(feature = "ignore_prover_input_sanitation"))]
+use ark_ec::VariableBaseMSM;
+use ark_ec::{AffineRepr, CurveGroup};
 use ark_std::UniformRand;
 use ark_std::collections::BTreeMap;
+#[cfg(not(feature = "ignore_prover_input_sanitation"))]
+use ark_std::string::ToString;
 use ark_std::vec;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use rand_core::CryptoRngCore;
-use schnorr_pok::partial::PartialSchnorrResponse;
+use schnorr_pok::discrete_log::PokDiscreteLogProtocol;
+use schnorr_pok::partial::{PartialPokDiscreteLog, PartialSchnorrResponse};
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
 
 pub fn init_acc_comm_protocol<R: CryptoRngCore, G: AffineRepr>(
@@ -119,5 +124,71 @@ pub fn verify_acc_comm<G: AffineRepr>(
         challenge,
         missing_resps,
     );
+    Ok(())
+}
+
+/// Starts the proof of `rand_new_comm_anchor = anchor_gen * rand_new_comm` and returns it with
+/// `rand_new_comm_anchor`. Reuses the blinding of `rand_new_comm` in `proto_new`, so the proof shares
+/// the response for `rand_new_comm` in `resp_updated_account_commitment`.
+pub fn init_rand_new_comm_anchor_protocol<G: AffineRepr>(
+    rand_new_comm: G::ScalarField,
+    proto_new: &SchnorrCommitment<G>,
+    anchor_gen: G,
+    dst: &[u8],
+    transcript: &mut MerlinTranscript,
+) -> Result<(PokDiscreteLogProtocol<G>, G)> {
+    let rand_new_comm_anchor = (anchor_gen * rand_new_comm).into_affine();
+    let proto = PokDiscreteLogProtocol::init(rand_new_comm, proto_new.blindings[2], &anchor_gen);
+    proto.challenge_contribution(&anchor_gen, &rand_new_comm_anchor, dst, transcript)?;
+    Ok((proto, rand_new_comm_anchor))
+}
+
+/// Verifies `rand_new_comm_anchor = anchor_gen * rand_new_comm` using the response for
+/// `rand_new_comm` in `resp_updated_account_commitment`.
+pub fn verify_rand_new_comm_anchor<G: AffineRepr>(
+    rand_new_comm_anchor: G,
+    resp_rand_new_comm_anchor: &PartialPokDiscreteLog<G>,
+    resp_updated_account_commitment: &PartialSchnorrResponse<G>,
+    challenge: &G::ScalarField,
+    anchor_gen: G,
+    mut rmc: Option<&mut RandomizedMultChecker<G>>,
+) -> Result<()> {
+    let resp_rand_new_comm = resp_updated_account_commitment.get_response(2)?;
+    verify_or_rmc_2!(
+        rmc,
+        resp_rand_new_comm_anchor,
+        "rand_new_comm anchor proof is invalid",
+        rand_new_comm_anchor,
+        anchor_gen,
+        challenge,
+        resp_rand_new_comm,
+    );
+    Ok(())
+}
+
+/// Errors unless `updated_account_commitment = sk_gen * sk + sk_enc_gen * sk_enc + \sum_i{new_acc_openings[i] * as_gens_without_sk()[i]}`.
+/// `account_comm_key` must be the device's own copy of the system generators, not one supplied by
+/// the host.
+#[cfg_attr(feature = "ignore_prover_input_sanitation", allow(unused_variables))]
+pub fn ensure_correct_updated_account_commitment<G: AffineRepr>(
+    sk: G::ScalarField,
+    sk_enc: G::ScalarField,
+    updated_account_commitment: &G,
+    new_acc_openings: &[G::ScalarField; NUM_GENERATORS - 2],
+    account_comm_key: &impl AccountCommitmentKeyTrait<G>,
+) -> Result<()> {
+    #[cfg(not(feature = "ignore_prover_input_sanitation"))]
+    {
+        let pk = account_comm_key.sk_gen() * sk + account_comm_key.sk_enc_gen() * sk_enc;
+        let expected = G::Group::msm(&account_comm_key.as_gens_without_sk()[..], new_acc_openings)
+            .map_err(Error::size_mismatch)?
+            + pk;
+        if expected.into_affine() != *updated_account_commitment {
+            return Err(Error::ProofGenerationError(
+                "updated account commitment is not a canonical account commitment for the supplied openings"
+                    .to_string(),
+            ));
+        }
+    }
     Ok(())
 }

@@ -668,6 +668,7 @@ impl<
         account_comm_key: &impl AccountCommitmentKeyTrait<Affine<G0>>,
         enc_gen: Affine<G0>,
         B_blinding: Affine<G0>,
+        anchor_gen: Affine<G0>,
         even_verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
     ) -> Result<SplitStateChangeVerifier<L, F0, F1, G0, G1>> {
         self.pre_verify_checks_split(proof)?;
@@ -683,6 +684,7 @@ impl<
                 account_comm_key,
                 enc_gen,
                 B_blinding,
+                anchor_gen,
                 even_verifier,
             )?;
 
@@ -722,6 +724,7 @@ impl<
             account_tree_params,
             account_comm_key,
             enc_gen,
+            account_tree_params.even_parameters.pc_gens().B,
             rng,
             rmc,
         )
@@ -739,6 +742,7 @@ impl<
         account_tree_params: &SelRerandProofParametersNew<G0, G1, Parameters0, Parameters1>,
         account_comm_key: &impl AccountCommitmentKeyTrait<Affine<G0>>,
         enc_gen: Affine<G0>,
+        anchor_gen: Affine<G0>,
         rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
     ) -> Result<()> {
         verifier.verify_sigma_protocols(
@@ -749,6 +753,7 @@ impl<
             account_tree_params,
             account_comm_key,
             enc_gen,
+            anchor_gen,
             rmc,
         )
     }
@@ -1194,6 +1199,7 @@ impl<
         }
 
         let B_blinding = account_tree_params.even_parameters.pc_gens().B_blinding;
+        let anchor_gen = account_tree_params.even_parameters.pc_gens().B;
 
         // Per-account challenge contributions
         let mut split_verifiers = Vec::with_capacity(self.account_proofs.len());
@@ -1205,6 +1211,7 @@ impl<
                     account_comm_key,
                     enc_gen,
                     B_blinding,
+                    anchor_gen,
                     &mut even_verifier,
                 )?;
             split_verifiers.push(split_verifier);
@@ -1322,6 +1329,8 @@ impl<
             seen_nullifiers.push(verifier.nullifier);
         }
 
+        let anchor_gen = account_tree_params.even_parameters.pc_gens().B;
+
         // Verify sigma protocols per account
         for (i, (acct_verifier, split_verifier)) in account_verifiers
             .into_iter()
@@ -1339,6 +1348,7 @@ impl<
                 account_tree_params,
                 account_comm_key,
                 enc_gen,
+                anchor_gen,
                 rmc_i,
             )?;
         }
@@ -1536,11 +1546,13 @@ mod tests {
             auth_rand_new_comm,
             vec![], // no k_amounts
             vec![k_asset_id_1, k_asset_id_2],
+            carol_receives.openings(),
             vec![
                 LegProverConfig {
                     encryption: leg_enc_core_1.clone(),
                     party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk_1.clone()),
                     amount: alice_send_amount,
+                    asset_id,
                     has_balance_changed: false,
                     has_counter_decreased: Some(false),
                 },
@@ -1548,6 +1560,7 @@ mod tests {
                     encryption: leg_enc_core_2.clone(),
                     party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk_2.clone()),
                     amount: bob_send_amount,
+                    asset_id,
                     has_balance_changed: false,
                     has_counter_decreased: Some(false),
                 },
@@ -1559,10 +1572,10 @@ mod tests {
             &DeviceTxnType::DeviceAffirmation {
                 typ: DeviceAffirmationType::SenderAffirmation,
             },
-            account_comm_key.sk_gen(),
-            account_comm_key.sk_enc_gen(),
             b_blinding,
+            account_tree_params.even_parameters.pc_gens().B,
             enc_gen,
+            &account_comm_key,
         )
         .unwrap();
 
@@ -1623,6 +1636,7 @@ mod tests {
                 account_comm_key.sk_gen(),
                 account_comm_key.sk_enc_gen(),
                 b_blinding,
+                account_tree_params.even_parameters.pc_gens().B,
                 enc_gen,
                 None,
             )
@@ -1784,11 +1798,13 @@ mod tests {
             auth_rand_new_comm,
             vec![k_amount],
             vec![k_asset_id_1, k_asset_id_2],
+            alice_updated.openings(),
             vec![
                 LegProverConfig {
                     encryption: leg_enc_core_1.clone(),
                     party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk_s_1.clone()),
                     amount: alice_to_bob_amount,
+                    asset_id,
                     has_balance_changed: true,
                     has_counter_decreased: Some(false),
                 },
@@ -1796,6 +1812,7 @@ mod tests {
                     encryption: leg_enc_core_2.clone(),
                     party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk_r_2.clone()),
                     amount: carol_to_alice_amount,
+                    asset_id,
                     has_balance_changed: false,
                     has_counter_decreased: Some(false),
                 },
@@ -1807,10 +1824,10 @@ mod tests {
             &DeviceTxnType::DeviceAffirmation {
                 typ: DeviceAffirmationType::SenderAffirmation,
             },
-            account_comm_key.sk_gen(),
-            account_comm_key.sk_enc_gen(),
             b_blinding,
+            account_tree_params.even_parameters.pc_gens().B,
             enc_gen,
+            &account_comm_key,
         )
         .unwrap();
 
@@ -1871,6 +1888,7 @@ mod tests {
                 account_comm_key.sk_gen(),
                 account_comm_key.sk_enc_gen(),
                 b_blinding,
+                account_tree_params.even_parameters.pc_gens().B,
                 enc_gen,
                 None,
             )
@@ -2031,16 +2049,17 @@ mod tests {
             auth_rand_new_comm,
             k_amounts.to_vec(),
             k_asset_ids.to_vec(),
+            alice_updated.openings(),
             device_legs,
             &re_randomized_leaf,
             &alice_updated_comm.0,
             nullifier,
             nonce,
             &device_txn_type,
-            account_comm_key.sk_gen(),
-            account_comm_key.sk_enc_gen(),
             b_blinding,
+            account_tree_params.even_parameters.pc_gens().B,
             enc_gen,
+            &account_comm_key,
         )
         .unwrap();
 
@@ -2082,6 +2101,7 @@ mod tests {
                 account_comm_key.sk_gen(),
                 account_comm_key.sk_enc_gen(),
                 b_blinding,
+                account_tree_params.even_parameters.pc_gens().B,
                 enc_gen,
                 None,
             )
@@ -2269,11 +2289,13 @@ mod tests {
             auth_rand_new_comm,
             vec![k_amount],
             vec![],
+            alice_updated.openings(),
             vec![
                 LegProverConfig {
                     encryption: leg_enc_core_1.clone(),
                     party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk_s_1.clone()),
                     amount: alice_to_bob_amount,
+                    asset_id,
                     has_balance_changed: true,
                     has_counter_decreased: Some(false),
                 },
@@ -2281,6 +2303,7 @@ mod tests {
                     encryption: leg_enc_core_2.clone(),
                     party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk_r_2.clone()),
                     amount: carol_to_alice_amount,
+                    asset_id,
                     has_balance_changed: false,
                     has_counter_decreased: Some(false),
                 },
@@ -2292,10 +2315,10 @@ mod tests {
             &DeviceTxnType::DeviceAffirmation {
                 typ: DeviceAffirmationType::SenderAffirmation,
             },
-            account_comm_key.sk_gen(),
-            account_comm_key.sk_enc_gen(),
             b_blinding,
+            account_tree_params.even_parameters.pc_gens().B,
             enc_gen,
+            &account_comm_key,
         )
         .unwrap();
 
@@ -2344,6 +2367,7 @@ mod tests {
                 account_comm_key.sk_gen(),
                 account_comm_key.sk_enc_gen(),
                 b_blinding,
+                account_tree_params.even_parameters.pc_gens().B,
                 enc_gen,
                 None,
             )
@@ -2502,11 +2526,13 @@ mod tests {
             auth_rand_new_comm,
             vec![k_amount],
             vec![],
+            alice_updated.openings(),
             vec![
                 LegProverConfig {
                     encryption: leg_enc_core_1.clone(),
                     party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk_s_1.clone()),
                     amount: alice_to_bob_amount,
+                    asset_id: revealed_asset_id,
                     has_balance_changed: true,
                     has_counter_decreased: Some(false),
                 },
@@ -2514,6 +2540,7 @@ mod tests {
                     encryption: leg_enc_core_2.clone(),
                     party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk_r_2.clone()),
                     amount: carol_to_alice_amount,
+                    asset_id: hidden_asset_id,
                     has_balance_changed: false,
                     has_counter_decreased: Some(false),
                 },
@@ -2525,10 +2552,10 @@ mod tests {
             &DeviceTxnType::DeviceAffirmation {
                 typ: DeviceAffirmationType::SenderAffirmation,
             },
-            account_comm_key.sk_gen(),
-            account_comm_key.sk_enc_gen(),
             b_blinding,
+            account_tree_params.even_parameters.pc_gens().B,
             enc_gen,
+            &account_comm_key,
         )
         .unwrap();
 
@@ -2569,6 +2596,7 @@ mod tests {
             account_comm_key.sk_gen(),
             account_comm_key.sk_enc_gen(),
             b_blinding,
+            account_tree_params.even_parameters.pc_gens().B,
             enc_gen,
             None,
         );
@@ -2719,11 +2747,13 @@ mod tests {
             auth_rand_new_comm,
             vec![k_amount],
             vec![],
+            alice_updated.openings(),
             vec![
                 LegProverConfig {
                     encryption: leg_enc_core_1.clone(),
                     party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk_s_1.clone()),
                     amount: alice_to_bob_amount,
+                    asset_id: revealed_asset_id,
                     has_balance_changed: true,
                     has_counter_decreased: Some(false),
                 },
@@ -2731,6 +2761,7 @@ mod tests {
                     encryption: leg_enc_core_2.clone(),
                     party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk_r_2.clone()),
                     amount: carol_to_alice_amount,
+                    asset_id: hidden_asset_id,
                     has_balance_changed: false,
                     has_counter_decreased: Some(false),
                 },
@@ -2742,10 +2773,10 @@ mod tests {
             &DeviceTxnType::DeviceAffirmation {
                 typ: DeviceAffirmationType::SenderAffirmation,
             },
-            account_comm_key.sk_gen(),
-            account_comm_key.sk_enc_gen(),
             b_blinding,
+            account_tree_params.even_parameters.pc_gens().B,
             enc_gen,
+            &account_comm_key,
         )
         .unwrap();
 
@@ -2807,6 +2838,7 @@ mod tests {
             account_comm_key.sk_gen(),
             account_comm_key.sk_enc_gen(),
             b_blinding,
+            account_tree_params.even_parameters.pc_gens().B,
             enc_gen,
             None,
         );
@@ -2950,11 +2982,13 @@ mod tests {
             auth_rand_new_comm,
             vec![k_amount],
             vec![],
+            alice_updated.openings(),
             vec![
                 LegProverConfig {
                     encryption: leg_enc_core_1.clone(),
                     party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk_s_1.clone()),
                     amount: alice_to_bob_amount,
+                    asset_id: revealed_asset_id,
                     has_balance_changed: true,
                     has_counter_decreased: Some(false),
                 },
@@ -2962,6 +2996,7 @@ mod tests {
                     encryption: leg_enc_core_2.clone(),
                     party_eph_pk: PartyEphemeralPublicKey::Receiver(eph_pk_r_2.clone()),
                     amount: carol_to_alice_amount,
+                    asset_id: hidden_asset_id,
                     has_balance_changed: false,
                     has_counter_decreased: Some(false),
                 },
@@ -2973,10 +3008,10 @@ mod tests {
             &DeviceTxnType::DeviceAffirmation {
                 typ: DeviceAffirmationType::SenderAffirmation,
             },
-            account_comm_key.sk_gen(),
-            account_comm_key.sk_enc_gen(),
             b_blinding,
+            account_tree_params.even_parameters.pc_gens().B,
             enc_gen,
+            &account_comm_key,
         )
         .unwrap();
 
@@ -3039,6 +3074,7 @@ mod tests {
             account_comm_key.sk_gen(),
             account_comm_key.sk_enc_gen(),
             b_blinding,
+            account_tree_params.even_parameters.pc_gens().B,
             enc_gen,
             None,
         );
@@ -3253,12 +3289,14 @@ mod tests {
                 auth_rand_new_comm_1,
                 vec![k_amount_1],
                 k_asset_ids_1.clone(),
+                alice_account_1_updated.openings(),
                 vec![LegProverConfig {
                     encryption: leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
                     party_eph_pk: PartyEphemeralPublicKey::Sender(
                         leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
                     ),
                     amount: alice_send_amount,
+                    asset_id: asset_id_1,
                     has_balance_changed: true,
                     has_counter_decreased: Some(true),
                 }],
@@ -3269,10 +3307,10 @@ mod tests {
                 &DeviceTxnType::DeviceAffirmation {
                     typ: DeviceAffirmationType::SenderAffirmation,
                 },
-                account_comm_key.sk_gen(),
-                account_comm_key.sk_enc_gen(),
                 b_blinding,
+                account_tree_params.even_parameters.pc_gens().B,
                 enc_gen,
+                &account_comm_key,
                 &mut auth_transcript,
             )
             .unwrap();
@@ -3285,12 +3323,14 @@ mod tests {
                 auth_rand_new_comm_2,
                 vec![],
                 k_asset_ids_2.clone(),
+                alice_account_2_updated.openings(),
                 vec![LegProverConfig {
                     encryption: leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
                     party_eph_pk: PartyEphemeralPublicKey::Receiver(
                         leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
                     ),
                     amount: bob_send_amount,
+                    asset_id: asset_id_2,
                     has_balance_changed: false,
                     has_counter_decreased: Some(false),
                 }],
@@ -3301,10 +3341,10 @@ mod tests {
                 &DeviceTxnType::DeviceAffirmation {
                     typ: DeviceAffirmationType::ReceiverAffirmation,
                 },
-                account_comm_key.sk_gen(),
-                account_comm_key.sk_enc_gen(),
                 b_blinding,
+                account_tree_params.even_parameters.pc_gens().B,
                 enc_gen,
+                &account_comm_key,
                 &mut auth_transcript,
             )
             .unwrap();
@@ -3397,6 +3437,7 @@ mod tests {
                     account_comm_key.sk_gen(),
                     account_comm_key.sk_enc_gen(),
                     b_blinding,
+                    account_tree_params.even_parameters.pc_gens().B,
                     enc_gen,
                     &mut auth_verify_transcript,
                     None,
@@ -3425,6 +3466,7 @@ mod tests {
                     account_comm_key.sk_gen(),
                     account_comm_key.sk_enc_gen(),
                     b_blinding,
+                    account_tree_params.even_parameters.pc_gens().B,
                     enc_gen,
                     &mut auth_verify_transcript,
                     None,
@@ -3731,12 +3773,14 @@ mod tests {
                 alice_auth_rand_new_comm_1,
                 vec![k_amount_alice],
                 k_asset_ids_alice_1.clone(),
+                alice_account_1_updated.openings(),
                 vec![LegProverConfig {
                     encryption: leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
                     party_eph_pk: PartyEphemeralPublicKey::Sender(
                         leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
                     ),
                     amount: alice_send_amount,
+                    asset_id: asset_id_1,
                     has_balance_changed: true,
                     has_counter_decreased: Some(true),
                 }],
@@ -3747,10 +3791,10 @@ mod tests {
                 &DeviceTxnType::DeviceAffirmation {
                     typ: DeviceAffirmationType::SenderAffirmation,
                 },
-                account_comm_key.sk_gen(),
-                account_comm_key.sk_enc_gen(),
                 b_blinding,
+                account_tree_params.even_parameters.pc_gens().B,
                 enc_gen,
+                &account_comm_key,
                 &mut alice_auth_transcript,
             )
             .unwrap();
@@ -3763,12 +3807,14 @@ mod tests {
                 alice_auth_rand_new_comm_2,
                 vec![],
                 k_asset_ids_alice_2.clone(),
+                alice_account_2_updated.openings(),
                 vec![LegProverConfig {
                     encryption: leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
                     party_eph_pk: PartyEphemeralPublicKey::Receiver(
                         leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
                     ),
                     amount: bob_send_amount,
+                    asset_id: asset_id_2,
                     has_balance_changed: false,
                     has_counter_decreased: Some(false),
                 }],
@@ -3779,10 +3825,10 @@ mod tests {
                 &DeviceTxnType::DeviceAffirmation {
                     typ: DeviceAffirmationType::ReceiverAffirmation,
                 },
-                account_comm_key.sk_gen(),
-                account_comm_key.sk_enc_gen(),
                 b_blinding,
+                account_tree_params.even_parameters.pc_gens().B,
                 enc_gen,
+                &account_comm_key,
                 &mut alice_auth_transcript,
             )
             .unwrap();
@@ -3895,12 +3941,14 @@ mod tests {
                 bob_auth_rand_new_comm_1,
                 vec![],
                 k_asset_ids_bob_1.clone(),
+                bob_account_1_updated.openings(),
                 vec![LegProverConfig {
                     encryption: leg_enc_1.leg_enc_core_and_eph_keys.core.clone(),
                     party_eph_pk: PartyEphemeralPublicKey::Receiver(
                         leg_enc_1.leg_enc_core_and_eph_keys.eph_pk_r.clone(),
                     ),
                     amount: alice_send_amount,
+                    asset_id: asset_id_1,
                     has_balance_changed: false,
                     has_counter_decreased: Some(false),
                 }],
@@ -3911,10 +3959,10 @@ mod tests {
                 &DeviceTxnType::DeviceAffirmation {
                     typ: DeviceAffirmationType::ReceiverAffirmation,
                 },
-                account_comm_key.sk_gen(),
-                account_comm_key.sk_enc_gen(),
                 b_blinding,
+                account_tree_params.even_parameters.pc_gens().B,
                 enc_gen,
+                &account_comm_key,
                 &mut bob_auth_transcript,
             )
             .unwrap();
@@ -3927,12 +3975,14 @@ mod tests {
                 bob_auth_rand_new_comm_2,
                 vec![k_amount_bob],
                 k_asset_ids_bob_2.clone(),
+                bob_account_2_updated.openings(),
                 vec![LegProverConfig {
                     encryption: leg_enc_2.leg_enc_core_and_eph_keys.core.clone(),
                     party_eph_pk: PartyEphemeralPublicKey::Sender(
                         leg_enc_2.leg_enc_core_and_eph_keys.eph_pk_s.clone(),
                     ),
                     amount: bob_send_amount,
+                    asset_id: asset_id_2,
                     has_balance_changed: true,
                     has_counter_decreased: Some(true),
                 }],
@@ -3943,10 +3993,10 @@ mod tests {
                 &DeviceTxnType::DeviceAffirmation {
                     typ: DeviceAffirmationType::SenderAffirmation,
                 },
-                account_comm_key.sk_gen(),
-                account_comm_key.sk_enc_gen(),
                 b_blinding,
+                account_tree_params.even_parameters.pc_gens().B,
                 enc_gen,
+                &account_comm_key,
                 &mut bob_auth_transcript,
             )
             .unwrap();
@@ -4041,6 +4091,7 @@ mod tests {
                     account_comm_key.sk_gen(),
                     account_comm_key.sk_enc_gen(),
                     b_blinding,
+                    account_tree_params.even_parameters.pc_gens().B,
                     enc_gen,
                     &mut alice_auth_verify_transcript,
                     None,
@@ -4069,6 +4120,7 @@ mod tests {
                     account_comm_key.sk_gen(),
                     account_comm_key.sk_enc_gen(),
                     b_blinding,
+                    account_tree_params.even_parameters.pc_gens().B,
                     enc_gen,
                     &mut alice_auth_verify_transcript,
                     None,
@@ -4178,6 +4230,7 @@ mod tests {
                     account_comm_key.sk_gen(),
                     account_comm_key.sk_enc_gen(),
                     b_blinding,
+                    account_tree_params.even_parameters.pc_gens().B,
                     enc_gen,
                     &mut bob_auth_verify_transcript,
                     None,
@@ -4206,6 +4259,7 @@ mod tests {
                     account_comm_key.sk_gen(),
                     account_comm_key.sk_enc_gen(),
                     b_blinding,
+                    account_tree_params.even_parameters.pc_gens().B,
                     enc_gen,
                     &mut bob_auth_verify_transcript,
                     None,
@@ -4367,10 +4421,12 @@ mod tests {
             auth_rand_new_comm,
             vec![k_amount],
             vec![k_asset_id],
+            e_updated.openings(),
             vec![LegProverConfig {
                 encryption: leg_enc_core.clone(),
                 party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk_s.clone()),
                 amount,
+                asset_id,
                 has_balance_changed: true,
                 has_counter_decreased: Some(false),
             }],
@@ -4381,10 +4437,10 @@ mod tests {
             &DeviceTxnType::DeviceAffirmation {
                 typ: DeviceAffirmationType::SenderAffirmation,
             },
-            account_comm_key.sk_gen(),
-            account_comm_key.sk_enc_gen(),
             b_blinding,
+            account_tree_params.even_parameters.pc_gens().B,
             enc_gen,
+            &account_comm_key,
         )
         .unwrap();
         // Stop mocking before verification.
@@ -4430,6 +4486,7 @@ mod tests {
                 account_comm_key.sk_gen(),
                 account_comm_key.sk_enc_gen(),
                 b_blinding,
+                account_tree_params.even_parameters.pc_gens().B,
                 enc_gen,
                 None,
             )

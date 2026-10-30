@@ -69,7 +69,7 @@ impl FeeRegHostProtocol {
         pk: &AccountPublicKey,
         account_state: &FeeAccountAssetState,
         nonce: &[u8],
-    ) -> Result<(Self, FeeAccountDeviceRequest), Error> {
+    ) -> Result<(Self, FeeAccountRegistrationDeviceRequest), Error> {
         let pk_affine = pk.get_affine()?;
         let account_state = account_state.current_state.clone();
         let (account, commitment) = account_state.bp_state()?;
@@ -88,10 +88,13 @@ impl FeeRegHostProtocol {
         let challenge_h = transcript.challenge_scalar::<PallasScalar>(TXN_CHALLENGE_LABEL);
         let challenge_h_bytes = serialize_challenge(&challenge_h)?;
 
-        let device_request = FeeAccountDeviceRequest {
+        let device_request = FeeAccountRegistrationDeviceRequest {
             challenge_h_bytes,
             nonce: nonce.to_vec(),
             pk: CompressedAffine::try_from(pk_affine)?,
+            account_commitment: CompressedAffine::try_from(commitment.0)?,
+            initial_rho: WrappedCanonical::wrap(&account.initial_rho)?,
+            initial_randomness: WrappedCanonical::wrap(&account.initial_randomness)?,
             txn_type: DeviceTxnType::FeeAccountRegistration {
                 asset_id: account_state.asset_id,
                 balance: account_state.balance,
@@ -117,7 +120,7 @@ impl FeeRegHostProtocol {
         let challenge_h_final =
             append_auth_proof_and_get_challenge(&auth_proof, &mut self.transcript)?;
 
-        let partial = self.protocol.gen_proof(&challenge_h_final);
+        let partial = self.protocol.gen_proof(&challenge_h_final)?;
         let bp_proof = BPRegTxnProof {
             partial,
             auth_proof,

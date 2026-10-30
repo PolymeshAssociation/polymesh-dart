@@ -140,7 +140,11 @@ pub fn leg_action_tag(has_balance_changed: bool, has_counter_decreased: Option<b
 pub struct LegProverConfig<G: AffineRepr> {
     pub encryption: LegEncryptionCore<G>,
     pub party_eph_pk: PartyEphemeralPublicKey<G>,
+    /// Checked against `ct_amount` by the auth proof prover.
     pub amount: Balance,
+    /// Asset-id of the leg. Checked against `ct_asset_id`, or the revealed asset-id, by the auth
+    /// proof prover.
+    pub asset_id: AssetId,
     pub has_balance_changed: bool,
     /// `None` when the counter doesn't change on this leg.
     pub has_counter_decreased: Option<bool>,

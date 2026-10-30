@@ -18,7 +18,10 @@ use rand_core::{CryptoRng, RngCore, SeedableRng as _};
 
 use super::encode::*;
 use super::*;
-use crate::auth_proofs::{create_fee_account_auth_proof, create_fee_payment_auth_proof};
+use crate::auth_proofs::{
+    create_fee_account_auth_proof, create_fee_account_registration_auth_proof,
+    create_fee_payment_auth_proof,
+};
 use crate::fee_split::{FeeRegHostProtocol, FeeTopupHostProtocol};
 use crate::*;
 use dock_crypto_utils::randomized_mult_checker::{
@@ -82,7 +85,7 @@ impl FeeAccountState {
     pub fn nullifier(&self) -> Result<FeeAccountStateNullifier, Error> {
         let account_comm_key = dart_gens().account_comm_key();
         let rho = self.rho.decode()?;
-        let nullifier = (account_comm_key.rho_gen() * rho).into();
+        let nullifier = (account_comm_key.current_rho_gen() * rho).into();
         FeeAccountStateNullifier::from_affine(nullifier)
     }
 }
@@ -322,7 +325,7 @@ impl<T: DartLimits> FeeAccountRegistrationProof<T> {
         let (protocol, device_request) =
             FeeRegHostProtocol::init(rng, &key.public, &account_state, identity)?;
 
-        let device_response = create_fee_account_auth_proof(
+        let device_response = create_fee_account_registration_auth_proof(
             rng,
             key,
             &device_request,
@@ -929,7 +932,10 @@ impl<
             odd_gates,
             height % 2 != 0,
         );
-        let fixed_sigma_proofs_size = 622;
+        // Includes the payment sigma proofs (nullifier, BP balance, BP randomness relations),
+        // the account commitment proofs and the new-commitment anchor proofs. Calibrated to the
+        // encoded size of the current proof.
+        let fixed_sigma_proofs_size = 1032;
         let inner_size = path_size + even_proof_size + odd_proof_size + fixed_sigma_proofs_size + 1;
         let public_fields_size = AssetId::max_encoded_len()
             + Balance::max_encoded_len()
@@ -961,8 +967,8 @@ impl<
             key,
             &device_request,
             gens.account_comm_key().sk_gen(),
-            gens.account_comm_key().randomness_gen(),
             comm_re_rand_gen,
+            tree_params.even_parameters.sl_params.pc_gens().B,
         )?;
 
         let proof = protocol.finish(rng, &device_response, root_block, tree_params)?;
@@ -1009,13 +1015,8 @@ impl<
                     .collect();
 
                 let sk_gen = account_comm_key.sk_gen();
-                let randomness_gen = account_comm_key.randomness_gen();
-                let b_blinding = tree_roots
-                    .params()
-                    .even_parameters
-                    .sl_params
-                    .pc_gens()
-                    .B_blinding;
+                let pc_gens = tree_roots.params().even_parameters.sl_params.pc_gens();
+                let (b_blinding, anchor_gen) = (pc_gens.B_blinding, pc_gens.B);
 
                 let rerandomized_leaf = proof.partial.rerandomized_leaf()?;
                 proof.commitment_proof.auth_proof.verify(
@@ -1028,8 +1029,8 @@ impl<
                         amount: self.amount,
                     },
                     sk_gen,
-                    randomness_gen,
                     b_blinding,
+                    anchor_gen,
                     Some(even_rmc),
                 )?;
 

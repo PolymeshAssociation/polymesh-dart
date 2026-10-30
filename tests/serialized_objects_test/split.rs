@@ -6,7 +6,8 @@ use polymesh_dart::affirmation_proofs::{
     SenderCounterUpdateHostProtocol, SenderRevertAffirmationHostProtocol,
 };
 use polymesh_dart::auth_proofs::{
-    create_affirmation_auth_proof, create_fee_account_auth_proof, create_fee_payment_auth_proof,
+    create_affirmation_auth_proof, create_fee_account_auth_proof,
+    create_fee_account_registration_auth_proof, create_fee_payment_auth_proof,
     create_registration_auth_proof,
 };
 use polymesh_dart::curve_tree::{
@@ -16,8 +17,8 @@ use polymesh_dart::fee_split::{FeePaymentHostProtocol, FeeRegHostProtocol, FeeTo
 use polymesh_dart::mint_split::MintHostProtocol;
 use polymesh_dart::split_types::{
     AffirmationDeviceRequest, AffirmationDeviceResponse, FeeAccountDeviceRequest,
-    FeePaymentDeviceRequest, FeePaymentDeviceResponse, RegistrationDeviceRequest,
-    SingleSkDeviceResponse, TwoSksDeviceResponse,
+    FeeAccountRegistrationDeviceRequest, FeePaymentDeviceRequest, FeePaymentDeviceResponse,
+    RegistrationDeviceRequest, SingleSkDeviceResponse, TwoSksDeviceResponse,
 };
 use polymesh_dart::*;
 use polymesh_dart_bp::account::state::AccountCommitmentKeyTrait;
@@ -113,9 +114,8 @@ fn make_affirmation_device_response(
         &mut rng,
         keys,
         request,
-        gens.account_comm_key().sk_gen(),
-        gens.enc_key_gen(),
         comm_re_rand_gen,
+        tree.params().even_parameters.pc_gens().B,
         gens.leg_asset_value_gen(),
     )
     .unwrap()
@@ -162,8 +162,8 @@ pub fn gen_fee_reg_split() {
     save_scale_v1(FEE_REG_SPLIT_REQUEST, &device_request);
 
     // Device: receive request, create response, send back to host.
-    let req: FeeAccountDeviceRequest = load_scale_v1(FEE_REG_SPLIT_REQUEST);
-    let device_response = create_fee_account_auth_proof(
+    let req: FeeAccountRegistrationDeviceRequest = load_scale_v1(FEE_REG_SPLIT_REQUEST);
+    let device_response = create_fee_account_registration_auth_proof(
         &mut rng,
         &keys.acct,
         &req,
@@ -250,8 +250,8 @@ pub fn gen_fee_payment_split() {
         &keys.acct,
         &req,
         gens.account_comm_key().sk_gen(),
-        gens.account_comm_key().randomness_gen(),
         comm_re_rand_gen,
+        tree_params.even_parameters.sl_params.pc_gens().B,
     )
     .unwrap();
     save_scale_v1(FEE_PAYMENT_SPLIT_RESPONSE, &device_response);

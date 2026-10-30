@@ -156,6 +156,7 @@ macro_rules! with_balance {
                             eph_pk.clone(),
                         ),
                         amount,
+                        asset_id: state_change.current_state.asset_id,
                         has_balance_changed: true,
                         has_counter_decreased: $hcd,
                     };
@@ -167,6 +168,12 @@ macro_rules! with_balance {
                     auth_rand_new_comm: WrappedCanonical::wrap(&protocol.auth_rand_new_comm())?,
                     rerandomized_leaf: CompressedAffine::try_from(protocol.rerandomized_leaf())?,
                     updated_account_commitment: updated_commitment.into(),
+                    new_acc_openings: state_change
+                        .new_state
+                        .openings()
+                        .iter()
+                        .map(WrappedCanonical::wrap)
+                        .collect::<Result<Vec<_>, _>>()?,
                     nullifier: CompressedAffine::try_from(nullifier)?,
                     k_amounts: vec![WrappedCanonical::wrap(&k_amount)?],
                     k_asset_ids: match k_asset_id {
@@ -266,6 +273,7 @@ macro_rules! with_balance {
             ) -> Result<Self, Error> {
                 let gens = dart_gens();
                 let comm_re_rand_gen = tree_lookup.params().even_parameters.pc_gens().B_blinding;
+                let anchor_gen = tree_lookup.params().even_parameters.pc_gens().B;
 
                 let (protocol, device_request) =
                     $HostProto::init(rng, account_asset, leg_ref, leg_enc, amount, &tree_lookup)?;
@@ -274,9 +282,8 @@ macro_rules! with_balance {
                     rng,
                     keys,
                     &device_request,
-                    gens.account_comm_key().sk_gen(),
-                    gens.enc_key_gen(),
                     comm_re_rand_gen,
+                    anchor_gen,
                     gens.leg_asset_value_gen(),
                 )?;
 
@@ -386,6 +393,7 @@ macro_rules! with_balance {
                             sk_gen,
                             sk_enc_gen,
                             C::parameters().even_parameters.pc_gens().B_blinding,
+                            C::parameters().even_parameters.pc_gens().B,
                             enc_gen,
                             Some(even_rmc),
                         )?;
@@ -532,6 +540,7 @@ macro_rules! no_balance {
                             eph_pk.clone(),
                         ),
                         amount,
+                        asset_id: state_change.current_state.asset_id,
                         has_balance_changed: false,
                         has_counter_decreased: $hcd,
                     };
@@ -543,6 +552,12 @@ macro_rules! no_balance {
                     auth_rand_new_comm: WrappedCanonical::wrap(&protocol.auth_rand_new_comm())?,
                     rerandomized_leaf: CompressedAffine::try_from(protocol.rerandomized_leaf())?,
                     updated_account_commitment: updated_commitment.into(),
+                    new_acc_openings: state_change
+                        .new_state
+                        .openings()
+                        .iter()
+                        .map(WrappedCanonical::wrap)
+                        .collect::<Result<Vec<_>, _>>()?,
                     nullifier: CompressedAffine::try_from(nullifier)?,
                     // No balance change: no ct_amount relation, so no k_amount is needed.
                     k_amounts: vec![],
@@ -643,6 +658,7 @@ macro_rules! no_balance {
             ) -> Result<Self, Error> {
                 let gens = dart_gens();
                 let comm_re_rand_gen = tree_lookup.params().even_parameters.pc_gens().B_blinding;
+                let anchor_gen = tree_lookup.params().even_parameters.pc_gens().B;
 
                 let (protocol, device_request) =
                     $HostProto::init(rng, account_asset, leg_ref, leg_enc, amount, &tree_lookup)?;
@@ -651,9 +667,8 @@ macro_rules! no_balance {
                     rng,
                     keys,
                     &device_request,
-                    gens.account_comm_key().sk_gen(),
-                    gens.enc_key_gen(),
                     comm_re_rand_gen,
+                    anchor_gen,
                     gens.leg_asset_value_gen(),
                 )?;
 
@@ -763,6 +778,7 @@ macro_rules! no_balance {
                             sk_gen,
                             sk_enc_gen,
                             C::parameters().even_parameters.pc_gens().B_blinding,
+                            C::parameters().even_parameters.pc_gens().B,
                             enc_gen,
                             Some(even_rmc),
                         )?;

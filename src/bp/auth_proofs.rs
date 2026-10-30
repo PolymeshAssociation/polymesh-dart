@@ -1,14 +1,16 @@
-use ark_std::vec::Vec;
-use rand_core::{CryptoRng, RngCore};
-
+use super::split_types::*;
+use super::*;
+use crate::Error;
+use ark_std::{format, string::ToString, vec::Vec};
+use polymesh_dart_bp::account::state::NUM_GENERATORS;
 use polymesh_dart_bp::auth_proofs::{
     self, account::AuthProofAffirmation as BPAuthProofAffirmation,
     fee_account::AuthProofFeePayment as BPAuthProofFeePayment,
 };
-
-use super::split_types::*;
-use super::*;
-use crate::Error;
+use polymesh_dart_bp::fee_account::{
+    PALLAS_FR_SMOOTH_ORDER, ensure_valid_fee_registration_opening,
+};
+use rand_core::{CryptoRng, RngCore};
 
 pub type BPAuthProofOnlySks = auth_proofs::AuthProofOnlySks<PallasA>;
 pub type BPAuthProofOnlySk = auth_proofs::AuthProofOnlySk<PallasA>;
@@ -35,6 +37,49 @@ pub fn create_fee_account_auth_proof<R: RngCore + CryptoRng>(
         rng,
         key.secret.0.0,
         pk,
+        &nonce,
+        &request.txn_type.into(),
+        &sk_gen,
+    )?;
+
+    Ok(SingleSkDeviceResponse(WrappedCanonical::wrap(&proof)?))
+}
+
+/// Create `AuthProofOnlySk` for fee account registration. Rejects a commitment that doesn't open
+/// to the request's opening, or an `initial_rho` of small order.
+pub fn create_fee_account_registration_auth_proof<R: RngCore + CryptoRng>(
+    rng: &mut R,
+    key: &AccountKeyPair,
+    request: &FeeAccountRegistrationDeviceRequest,
+    sk_gen: PallasA,
+) -> Result<SingleSkDeviceResponse, Error> {
+    let DeviceTxnType::FeeAccountRegistration { asset_id, balance } = request.txn_type else {
+        return Err(Error::ProofGenerationError(
+            "Expected a fee account registration txn type".to_string(),
+        ));
+    };
+    let nonce = ledger_nonce(&request.challenge_h_bytes, &request.nonce);
+    let pk = PallasA::try_from(&request.pk)?;
+    let account_commitment = PallasA::try_from(&request.account_commitment)?;
+    let initial_rho: PallasScalar = request.initial_rho.decode()?;
+    let initial_randomness: PallasScalar = request.initial_randomness.decode()?;
+
+    ensure_valid_fee_registration_opening(
+        &polymesh_dart_bp::fee_account::FeeAccountStateCommitment(account_commitment),
+        &pk,
+        asset_id,
+        balance,
+        initial_rho,
+        initial_randomness,
+        &PALLAS_FR_SMOOTH_ORDER,
+        &dart_gens().account_comm_key(),
+    )?;
+
+    let proof = BPAuthProofOnlySk::new_with_account_commitment(
+        rng,
+        key.secret.0.0,
+        pk,
+        &account_commitment,
         &nonce,
         &request.txn_type.into(),
         &sk_gen,
@@ -76,8 +121,8 @@ pub fn create_fee_payment_auth_proof<R: RngCore + CryptoRng>(
     key: &AccountKeyPair,
     request: &FeePaymentDeviceRequest,
     sk_gen: PallasA,
-    randomness_gen: PallasA,
     comm_re_rand_gen: PallasA,
+    anchor_gen: PallasA,
 ) -> Result<FeePaymentDeviceResponse, Error> {
     let nonce = ledger_nonce(&request.challenge_h_bytes, &request.nonce);
     let rerandomized_leaf = PallasA::try_from(&request.rerandomized_leaf)?;
@@ -97,8 +142,8 @@ pub fn create_fee_payment_auth_proof<R: RngCore + CryptoRng>(
         &nonce,
         &request.txn_type.into(),
         sk_gen,
-        randomness_gen,
         comm_re_rand_gen,
+        anchor_gen,
     )?;
 
     Ok(FeePaymentDeviceResponse(WrappedCanonical::wrap(&proof)?))
@@ -109,9 +154,8 @@ pub fn create_affirmation_auth_proof<R: RngCore + CryptoRng>(
     rng: &mut R,
     keys: &AccountKeys,
     request: &AffirmationDeviceRequest,
-    sk_gen: PallasA,
-    enc_key_gen: PallasA,
     comm_re_rand_gen: PallasA,
+    anchor_gen: PallasA,
     enc_gen: PallasA,
 ) -> Result<AffirmationDeviceResponse, Error> {
     let nonce = ledger_nonce(&request.challenge_h_bytes, &request.nonce);
@@ -132,6 +176,20 @@ pub fn create_affirmation_auth_proof<R: RngCore + CryptoRng>(
         .map(|k| k.decode())
         .collect::<Result<_, _>>()?;
 
+    let new_acc_openings: [PallasScalar; NUM_GENERATORS - 2] = request
+        .new_acc_openings
+        .iter()
+        .map(|o| o.decode())
+        .collect::<Result<Vec<_>, _>>()?
+        .try_into()
+        .map_err(|v: Vec<PallasScalar>| {
+            Error::ProofGenerationError(format!(
+                "Expected {} new_acc_openings but got {}",
+                NUM_GENERATORS - 2,
+                v.len()
+            ))
+        })?;
+
     let leg_prover_configs = request
         .leg_prover_configs
         .iter()
@@ -146,16 +204,17 @@ pub fn create_affirmation_auth_proof<R: RngCore + CryptoRng>(
         auth_rand_new_comm,
         k_amounts,
         k_asset_ids,
+        new_acc_openings,
         leg_prover_configs,
         &rerandomized_leaf,
         &updated_commitment,
         nullifier,
         &nonce,
         &request.txn_type.into(),
-        sk_gen,
-        enc_key_gen,
         comm_re_rand_gen,
+        anchor_gen,
         enc_gen,
+        &dart_gens().account_comm_key(),
     )?;
 
     Ok(AffirmationDeviceResponse(WrappedCanonical::wrap(&proof)?))

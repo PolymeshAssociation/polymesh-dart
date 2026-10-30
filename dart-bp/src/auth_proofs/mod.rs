@@ -4,7 +4,8 @@ pub mod helpers;
 pub mod transparent;
 
 use crate::{
-    NONCE_LABEL, PK_ENC_LABEL, PK_LABEL, TXN_CHALLENGE_LABEL, add_to_transcript, dst, error::Result,
+    ACCOUNT_COMMITMENT_LABEL, NONCE_LABEL, PK_ENC_LABEL, PK_LABEL, TXN_CHALLENGE_LABEL,
+    add_to_transcript, dst, error::Result,
 };
 use ark_ec::AffineRepr;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
@@ -337,6 +338,38 @@ impl<G: AffineRepr> AuthProofOnlySk<G> {
     ) -> Result<Self> {
         let mut transcript = MerlinTranscript::new(AUTH_TXN_LABEL);
         add_to_transcript!(transcript, NONCE_LABEL, nonce);
+        Self::new_with_given_transcript(rng, sk, pk, txn_type, sk_gen, transcript)
+    }
+
+    /// Same as `Self::new` but also binds `account_commitment`, the commitment the device checked.
+    pub fn new_with_account_commitment<R: CryptoRngCore>(
+        rng: &mut R,
+        sk: G::ScalarField,
+        pk: G,
+        account_commitment: &G,
+        nonce: &[u8],
+        txn_type: &DeviceTxnType,
+        sk_gen: &G,
+    ) -> Result<Self> {
+        let mut transcript = MerlinTranscript::new(AUTH_TXN_LABEL);
+        add_to_transcript!(
+            transcript,
+            NONCE_LABEL,
+            nonce,
+            ACCOUNT_COMMITMENT_LABEL,
+            account_commitment
+        );
+        Self::new_with_given_transcript(rng, sk, pk, txn_type, sk_gen, transcript)
+    }
+
+    fn new_with_given_transcript<R: CryptoRngCore>(
+        rng: &mut R,
+        sk: G::ScalarField,
+        pk: G,
+        txn_type: &DeviceTxnType,
+        sk_gen: &G,
+        mut transcript: MerlinTranscript,
+    ) -> Result<Self> {
         txn_type.add_to_transcript(&mut transcript)?;
         let proto = AuthProofOnlySkProtocol::init(rng, sk, &pk, sk_gen, &mut transcript)?;
         let challenge = transcript.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
@@ -353,6 +386,38 @@ impl<G: AffineRepr> AuthProofOnlySk<G> {
     ) -> Result<()> {
         let mut transcript = MerlinTranscript::new(AUTH_TXN_LABEL);
         add_to_transcript!(transcript, NONCE_LABEL, nonce);
+        self.verify_with_given_transcript(pk, txn_type, sk_gen, transcript, rmc)
+    }
+
+    /// Verifies a proof created by `Self::new_with_account_commitment`.
+    pub fn verify_with_account_commitment(
+        &self,
+        pk: G,
+        account_commitment: &G,
+        nonce: &[u8],
+        txn_type: &DeviceTxnType,
+        sk_gen: &G,
+        rmc: Option<&mut RandomizedMultChecker<G>>,
+    ) -> Result<()> {
+        let mut transcript = MerlinTranscript::new(AUTH_TXN_LABEL);
+        add_to_transcript!(
+            transcript,
+            NONCE_LABEL,
+            nonce,
+            ACCOUNT_COMMITMENT_LABEL,
+            account_commitment
+        );
+        self.verify_with_given_transcript(pk, txn_type, sk_gen, transcript, rmc)
+    }
+
+    fn verify_with_given_transcript(
+        &self,
+        pk: G,
+        txn_type: &DeviceTxnType,
+        sk_gen: &G,
+        mut transcript: MerlinTranscript,
+        rmc: Option<&mut RandomizedMultChecker<G>>,
+    ) -> Result<()> {
         txn_type.add_to_transcript(&mut transcript)?;
         self.challenge_contribution(&pk, sk_gen, &mut transcript)?;
         let challenge = transcript.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
@@ -528,7 +593,7 @@ pub mod tests {
 
         let host_commitment_new = (updated_account_comm.0
             - pk_s.0
-            - (account_comm_key.current_randomness_gen() * rand_1_new))
+            - (account_tree_params.even_parameters.pc_gens().B_blinding * rand_1_new))
             .into_affine();
 
         // Creating random nullifier for testing, in practice this should come from host
@@ -552,8 +617,8 @@ pub mod tests {
                 amount: fee_amount,
             },
             account_comm_key.sk_gen(),
-            account_comm_key.current_randomness_gen(),
             account_tree_params.even_parameters.pc_gens().B_blinding,
+            account_tree_params.even_parameters.pc_gens().B,
         )
         .unwrap();
 
@@ -568,8 +633,8 @@ pub mod tests {
                     amount: fee_amount,
                 },
                 account_comm_key.sk_gen(),
-                account_comm_key.current_randomness_gen(),
                 account_tree_params.even_parameters.pc_gens().B_blinding,
+                account_tree_params.even_parameters.pc_gens().B,
                 None,
             )
             .unwrap();
@@ -597,8 +662,8 @@ pub mod tests {
                         amount: fee_amount,
                     },
                     account_comm_key.sk_gen(),
-                    account_comm_key.current_randomness_gen(),
                     account_tree_params.even_parameters.pc_gens().B_blinding,
+                    account_tree_params.even_parameters.pc_gens().B,
                     None,
                 )
                 .is_err()
@@ -616,8 +681,8 @@ pub mod tests {
                         amount: fee_amount,
                     },
                     account_comm_key.sk_gen(),
-                    account_comm_key.current_randomness_gen(),
                     account_tree_params.even_parameters.pc_gens().B_blinding,
+                    account_tree_params.even_parameters.pc_gens().B,
                     None,
                 )
                 .is_err()
@@ -636,8 +701,8 @@ pub mod tests {
                         amount: fee_amount,
                     },
                     account_comm_key.sk_gen(),
-                    account_comm_key.current_randomness_gen(),
                     account_tree_params.even_parameters.pc_gens().B_blinding,
+                    account_tree_params.even_parameters.pc_gens().B,
                     None,
                 )
                 .is_err()
@@ -656,8 +721,8 @@ pub mod tests {
                         amount: fee_amount,
                     },
                     account_comm_key.sk_gen(),
-                    account_comm_key.current_randomness_gen(),
                     account_tree_params.even_parameters.pc_gens().B_blinding,
+                    account_tree_params.even_parameters.pc_gens().B,
                     None,
                 )
                 .is_err()
@@ -675,8 +740,8 @@ pub mod tests {
                         amount: 11,
                     },
                     account_comm_key.sk_gen(),
-                    account_comm_key.current_randomness_gen(),
                     account_tree_params.even_parameters.pc_gens().B_blinding,
+                    account_tree_params.even_parameters.pc_gens().B,
                     None,
                 )
                 .is_err()
@@ -694,8 +759,8 @@ pub mod tests {
                         amount: fee_amount,
                     },
                     account_comm_key.sk_gen(),
-                    account_comm_key.current_randomness_gen(),
                     account_tree_params.even_parameters.pc_gens().B_blinding,
+                    account_tree_params.even_parameters.pc_gens().B,
                     None,
                 )
                 .is_err()
@@ -713,8 +778,8 @@ pub mod tests {
                         amount: fee_amount,
                     },
                     account_comm_key.sk_gen(),
-                    account_comm_key.current_randomness_gen(),
                     account_tree_params.even_parameters.pc_gens().B_blinding,
+                    account_tree_params.even_parameters.pc_gens().B,
                     None,
                 )
                 .is_err()
@@ -773,15 +838,16 @@ pub mod tests {
             sk_enc.0,
             rand_part_old_comm,
             rand_new_comm,
+            updated_account.openings(),
             &re_randomized_account_commitment,
             &updated_account_comm.0,
             nullifier,
             auditor_pubkeys.clone(),
             nonce,
             &txn_type,
-            account_comm_key.sk_gen(),
-            enc_key_gen,
             b_blinding,
+            pc_gens.B,
+            &account_comm_key,
         )
         .unwrap();
 
@@ -796,6 +862,7 @@ pub mod tests {
                 account_comm_key.sk_gen(),
                 enc_key_gen,
                 b_blinding,
+                pc_gens.B,
                 None,
             )
             .unwrap();
@@ -831,6 +898,7 @@ pub mod tests {
                 account_comm_key.sk_gen(),
                 enc_key_gen,
                 b_blinding,
+                pc_gens.B,
                 None,
             ),
             Error::SchnorrError(_)
@@ -847,6 +915,7 @@ pub mod tests {
                 account_comm_key.sk_gen(),
                 enc_key_gen,
                 b_blinding,
+                pc_gens.B,
                 None,
             ),
             Error::SchnorrError(_)
@@ -864,6 +933,7 @@ pub mod tests {
                 account_comm_key.sk_gen(),
                 enc_key_gen,
                 b_blinding,
+                pc_gens.B,
                 None,
             ),
             Error::SchnorrError(_)
@@ -881,6 +951,7 @@ pub mod tests {
                 account_comm_key.sk_gen(),
                 enc_key_gen,
                 b_blinding,
+                pc_gens.B,
                 None,
             ),
             Error::SchnorrError(_)
@@ -900,6 +971,7 @@ pub mod tests {
                 account_comm_key.sk_gen(),
                 enc_key_gen,
                 b_blinding,
+                pc_gens.B,
                 None,
             ),
             Error::SchnorrError(_)
@@ -919,6 +991,7 @@ pub mod tests {
                 account_comm_key.sk_gen(),
                 enc_key_gen,
                 b_blinding,
+                pc_gens.B,
                 None,
             ),
             Error::SchnorrError(_)
@@ -995,6 +1068,7 @@ pub mod tests {
             encryption: leg_enc_core.clone(),
             party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk.clone()),
             amount,
+            asset_id,
             has_balance_changed: true,
             has_counter_decreased: None,
         }];
@@ -1007,6 +1081,7 @@ pub mod tests {
             rand_new_comm,
             vec![k_1],
             vec![k_2],
+            updated_account.openings(),
             legs_prover,
             &re_randomized_account_commitment,
             &updated_account_comm.0,
@@ -1015,10 +1090,10 @@ pub mod tests {
             &DeviceTxnType::DeviceAffirmation {
                 typ: DeviceAffirmationType::SenderAffirmation,
             },
-            account_comm_key.sk_gen(),
-            enc_key_gen,
             b_blinding,
+            account_tree_params.even_parameters.pc_gens().B,
             enc_gen,
+            &account_comm_key,
         )
         .unwrap();
 
@@ -1042,6 +1117,7 @@ pub mod tests {
                 account_comm_key.sk_gen(),
                 enc_key_gen,
                 b_blinding,
+                account_tree_params.even_parameters.pc_gens().B,
                 enc_gen,
                 None,
             )
@@ -1078,6 +1154,7 @@ pub mod tests {
                 account_comm_key.sk_gen(),
                 enc_key_gen,
                 b_blinding,
+                account_tree_params.even_parameters.pc_gens().B,
                 enc_gen,
                 None,
             ),
@@ -1097,6 +1174,7 @@ pub mod tests {
                 account_comm_key.sk_gen(),
                 enc_key_gen,
                 b_blinding,
+                account_tree_params.even_parameters.pc_gens().B,
                 enc_gen,
                 None,
             ),
@@ -1117,6 +1195,7 @@ pub mod tests {
                 account_comm_key.sk_gen(),
                 enc_key_gen,
                 b_blinding,
+                account_tree_params.even_parameters.pc_gens().B,
                 enc_gen,
                 None,
             ),
@@ -1137,6 +1216,7 @@ pub mod tests {
                 account_comm_key.sk_gen(),
                 enc_key_gen,
                 b_blinding,
+                account_tree_params.even_parameters.pc_gens().B,
                 enc_gen,
                 None,
             ),
@@ -1162,6 +1242,7 @@ pub mod tests {
                 account_comm_key.sk_gen(),
                 enc_key_gen,
                 b_blinding,
+                account_tree_params.even_parameters.pc_gens().B,
                 enc_gen,
                 None,
             ),
@@ -1208,6 +1289,7 @@ pub mod tests {
                 account_comm_key.sk_gen(),
                 enc_key_gen,
                 b_blinding,
+                account_tree_params.even_parameters.pc_gens().B,
                 enc_gen,
                 None,
             ),
@@ -1229,6 +1311,7 @@ pub mod tests {
                 account_comm_key.sk_gen(),
                 enc_key_gen,
                 b_blinding,
+                account_tree_params.even_parameters.pc_gens().B,
                 enc_gen,
                 None,
             ),
@@ -1251,6 +1334,7 @@ pub mod tests {
                 account_comm_key.sk_gen(),
                 enc_key_gen,
                 b_blinding,
+                account_tree_params.even_parameters.pc_gens().B,
                 enc_gen,
                 None,
             ),
@@ -1280,6 +1364,7 @@ pub mod tests {
                 account_comm_key.sk_gen(),
                 enc_key_gen,
                 b_blinding,
+                account_tree_params.even_parameters.pc_gens().B,
                 enc_gen,
                 None,
             ),
@@ -1300,6 +1385,7 @@ pub mod tests {
                 account_comm_key.sk_gen(),
                 enc_key_gen,
                 b_blinding,
+                account_tree_params.even_parameters.pc_gens().B,
                 enc_gen,
                 None,
             ),
@@ -1317,6 +1403,7 @@ pub mod tests {
                 account_comm_key.sk_gen(),
                 enc_key_gen,
                 b_blinding,
+                account_tree_params.even_parameters.pc_gens().B,
                 enc_gen,
                 None,
             ),
@@ -1380,6 +1467,7 @@ pub mod tests {
             encryption: leg_enc_core.clone(),
             party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk.clone()),
             amount,
+            asset_id,
             has_balance_changed: false,
             has_counter_decreased: None,
         }];
@@ -1392,6 +1480,7 @@ pub mod tests {
             rand_new_comm,
             vec![],
             vec![k_asset_id],
+            updated_account.openings(),
             legs_prover,
             &re_randomized_account_commitment,
             &updated_account_comm.0,
@@ -1400,10 +1489,10 @@ pub mod tests {
             &DeviceTxnType::DeviceAffirmation {
                 typ: DeviceAffirmationType::SenderAffirmation,
             },
-            account_comm_key.sk_gen(),
-            enc_key_gen,
             b_blinding,
+            account_tree_params.even_parameters.pc_gens().B,
             enc_gen,
+            &account_comm_key,
         )
         .unwrap();
 
@@ -1432,6 +1521,7 @@ pub mod tests {
                     account_comm_key.sk_gen(),
                     enc_key_gen,
                     b_blinding,
+                    account_tree_params.even_parameters.pc_gens().B,
                     enc_gen,
                     None,
                 )
@@ -1499,10 +1589,12 @@ pub mod tests {
                 rand_new_comm,
                 k_amounts,
                 k_asset_ids,
+                updated_account.openings(),
                 vec![LegProverConfig {
                     encryption: core.clone(),
                     party_eph_pk: PartyEphemeralPublicKey::Sender(eph_pk.clone()),
                     amount,
+                    asset_id,
                     has_balance_changed: balance,
                     has_counter_decreased: None,
                 }],
@@ -1513,10 +1605,10 @@ pub mod tests {
                 &DeviceTxnType::DeviceAffirmation {
                     typ: DeviceAffirmationType::SenderAffirmation,
                 },
-                account_comm_key.sk_gen(),
-                enc_key_gen,
                 b_blinding,
+                account_tree_params.even_parameters.pc_gens().B,
                 enc_gen,
+                &account_comm_key,
             )
             .unwrap();
             let verifier_leg = LegVerifierConfig {
@@ -1542,6 +1634,7 @@ pub mod tests {
                 account_comm_key.sk_gen(),
                 enc_key_gen,
                 b_blinding,
+                account_tree_params.even_parameters.pc_gens().B,
                 enc_gen,
                 None,
             )
