@@ -18,9 +18,10 @@ use polymesh_dart::fee_split::{FeePaymentHostProtocol, FeeRegHostProtocol, FeeTo
 use polymesh_dart::mint_split::MintHostProtocol;
 use polymesh_dart::split_types::{
     AccountRegistrationDeviceResponse, AffirmationDeviceRequest, AffirmationDeviceResponse,
-    AssetMintingDeviceResponse, FeeAccountDeviceRequest, FeeAccountRegistrationDeviceRequest,
-    FeePaymentDeviceRequest, FeePaymentDeviceResponse, MintDeviceRequest,
-    RegistrationDeviceRequest, SingleSkDeviceResponse,
+    AssetMintingDeviceResponse, FeeAccountDeviceRequest, FeeAccountPaymentDeviceResponse,
+    FeeAccountRegistrationDeviceRequest, FeeAccountRegistrationDeviceResponse,
+    FeeAccountTopupDeviceResponse, FeePaymentDeviceRequest, MintDeviceRequest,
+    RegistrationDeviceRequest,
 };
 use polymesh_dart::*;
 use polymesh_dart_common::NullifierSkGenCounter;
@@ -165,7 +166,7 @@ pub fn gen_fee_reg_split() {
     save_scale_v1(FEE_REG_SPLIT_RESPONSE, &device_response);
 
     // Host: receive response, finish proof.
-    let res: SingleSkDeviceResponse = load_scale_v1(FEE_REG_SPLIT_RESPONSE);
+    let res: FeeAccountRegistrationDeviceResponse = load_scale_v1(FEE_REG_SPLIT_RESPONSE);
     let proof = protocol.finish::<()>(&res).unwrap();
     save_scale_v1(FEE_REG_SPLIT_PROOF, &proof);
 }
@@ -202,7 +203,7 @@ pub fn gen_fee_topup_split() {
     .unwrap();
     save_scale_v1(FEE_TOPUP_SPLIT_RESPONSE, &device_response);
 
-    let res: SingleSkDeviceResponse = load_scale_v1(FEE_TOPUP_SPLIT_RESPONSE);
+    let res: FeeAccountTopupDeviceResponse = load_scale_v1(FEE_TOPUP_SPLIT_RESPONSE);
     let proof = protocol
         .finish::<_, ()>(&mut rng, &res, FeeAccountTreeConfig::parameters())
         .unwrap();
@@ -244,7 +245,7 @@ pub fn gen_fee_payment_split() {
         create_fee_payment_auth_proof(&mut rng, &(&keys.acct).into(), &req, &gens).unwrap();
     save_scale_v1(FEE_PAYMENT_SPLIT_RESPONSE, &device_response);
 
-    let res: FeePaymentDeviceResponse = load_scale_v1(FEE_PAYMENT_SPLIT_RESPONSE);
+    let res: FeeAccountPaymentDeviceResponse = load_scale_v1(FEE_PAYMENT_SPLIT_RESPONSE);
     let root_block = tree.get_block_number().unwrap();
     let proof = protocol
         .finish::<_, ()>(

@@ -11,6 +11,8 @@ use bounded_collections::BoundedVec;
 use rand_core::{CryptoRng, RngCore};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
+use polymesh_dart_bp::auth_proofs::keys::FEE_ACCOUNT_RANDOMNESS_DST;
+use polymesh_dart_bp::keys::ACCOUNT_RANDOMNESS_DST;
 use polymesh_dart_bp::{account_registration::MasterSeed as BPMasterSeed, keys as bp_keys};
 use polymesh_dart_common::NullifierSkGenCounter;
 
@@ -229,6 +231,46 @@ impl AccountKeyPair {
         asset_id: AssetId,
         counter: NullifierSkGenCounter,
     ) -> (PallasScalar, PallasScalar) {
+        self.derive_randomness(ACCOUNT_RANDOMNESS_DST, identity, asset_id, counter)
+    }
+
+    /// Derives fee account `(initial_rho, initial_randomness)` from the same input as
+    /// `derive_account_randomness` under a separate domain.
+    pub fn derive_fee_account_randomness(
+        &self,
+        identity: &[u8],
+        asset_id: AssetId,
+        counter: NullifierSkGenCounter,
+    ) -> (PallasScalar, PallasScalar) {
+        self.derive_randomness(FEE_ACCOUNT_RANDOMNESS_DST, identity, asset_id, counter)
+    }
+
+    /// Creates a fee account state from `derive_fee_account_randomness`.
+    pub fn fee_account_state(
+        &self,
+        asset_id: AssetId,
+        balance: Balance,
+        counter: NullifierSkGenCounter,
+        identity: &[u8],
+    ) -> Result<FeeAccountAssetState, Error> {
+        let (initial_rho, initial_randomness) =
+            self.derive_fee_account_randomness(identity, asset_id, counter);
+        FeeAccountAssetState::new_given_randomness(
+            &self.public,
+            asset_id,
+            balance,
+            initial_rho,
+            initial_randomness,
+        )
+    }
+
+    fn derive_randomness(
+        &self,
+        dst: &[u8],
+        identity: &[u8],
+        asset_id: AssetId,
+        counter: NullifierSkGenCounter,
+    ) -> (PallasScalar, PallasScalar) {
         // For creating randomness, use `secret_key//identity//asset_id//counter_n`
         let mut extended_seed = self.secret.encode();
         extended_seed.extend(DERIVE_SEPARATOR);
@@ -238,9 +280,7 @@ impl AccountKeyPair {
         extended_seed.extend(DERIVE_SEPARATOR);
         extended_seed.extend(counter.to_le_bytes());
         // Need two independent field elements, `randomness`, `rho_randomness`
-        let hasher = <DefaultFieldHasher<Blake2b512> as HashToField<PallasScalar>>::new(
-            b"commitment and rho randomness",
-        );
+        let hasher = <DefaultFieldHasher<Blake2b512> as HashToField<PallasScalar>>::new(dst);
         let [randomness, rho_randomness]: [PallasScalar; 2] = hasher.hash_to_field(&extended_seed);
         extended_seed.zeroize();
         (randomness, rho_randomness)

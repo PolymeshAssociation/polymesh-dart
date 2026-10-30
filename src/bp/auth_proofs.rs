@@ -82,13 +82,18 @@ impl From<&AccountKeyPair> for AuthSigningKey {
     }
 }
 
-/// Create `AuthProofOnlySk` for fee registration and fee topup proofs (1 key).
+/// Create `AuthProofOnlySk` for fee topup proofs (1 key).
 pub fn create_fee_account_auth_proof<R: RngCore + CryptoRng>(
     rng: &mut R,
     key: &AuthSigningKey,
     request: &FeeAccountDeviceRequest,
     gens: &DeviceGenerators,
-) -> Result<SingleSkDeviceResponse, Error> {
+) -> Result<FeeAccountTopupDeviceResponse, Error> {
+    if !matches!(request.txn_type, DeviceTxnType::FeeAccountTopup { .. }) {
+        return Err(Error::ProofGenerationError(
+            "Expected a fee account topup txn type".to_string(),
+        ));
+    }
     let nonce = ledger_nonce(&request.challenge_h_bytes, &request.nonce);
     let pk = PallasA::try_from(&request.pk)?;
 
@@ -101,7 +106,9 @@ pub fn create_fee_account_auth_proof<R: RngCore + CryptoRng>(
         &gens.sig_key_gen(),
     )?;
 
-    Ok(SingleSkDeviceResponse(WrappedCanonical::wrap(&proof)?))
+    Ok(FeeAccountTopupDeviceResponse(SingleSkDeviceResponse(
+        WrappedCanonical::wrap(&proof)?,
+    )))
 }
 
 /// Create `AuthProofOnlySk` for fee account registration. Rejects a commitment that doesn't open
@@ -111,7 +118,7 @@ pub fn create_fee_account_registration_auth_proof<R: RngCore + CryptoRng>(
     key: &AuthSigningKey,
     request: &FeeAccountRegistrationDeviceRequest,
     gens: &DeviceGenerators,
-) -> Result<SingleSkDeviceResponse, Error> {
+) -> Result<FeeAccountRegistrationDeviceResponse, Error> {
     let DeviceTxnType::FeeAccountRegistration { asset_id, balance } = request.txn_type else {
         return Err(Error::ProofGenerationError(
             "Expected a fee account registration txn type".to_string(),
@@ -144,7 +151,9 @@ pub fn create_fee_account_registration_auth_proof<R: RngCore + CryptoRng>(
         &gens.sig_key_gen(),
     )?;
 
-    Ok(SingleSkDeviceResponse(WrappedCanonical::wrap(&proof)?))
+    Ok(FeeAccountRegistrationDeviceResponse(
+        SingleSkDeviceResponse(WrappedCanonical::wrap(&proof)?),
+    ))
 }
 
 /// The 2-secret-key proof shared by registration and mint.
@@ -248,7 +257,12 @@ pub fn create_fee_payment_auth_proof<R: RngCore + CryptoRng>(
     key: &AuthSigningKey,
     request: &FeePaymentDeviceRequest,
     gens: &DeviceGenerators,
-) -> Result<FeePaymentDeviceResponse, Error> {
+) -> Result<FeeAccountPaymentDeviceResponse, Error> {
+    if !matches!(request.txn_type, DeviceTxnType::FeePayment { .. }) {
+        return Err(Error::ProofGenerationError(
+            "Expected a fee payment txn type".to_string(),
+        ));
+    }
     let nonce = ledger_nonce(&request.challenge_h_bytes, &request.nonce);
     let rerandomized_leaf = PallasA::try_from(&request.rerandomized_leaf)?;
     let updated_commitment = PallasA::try_from(&request.updated_account_commitment)?;
@@ -271,7 +285,9 @@ pub fn create_fee_payment_auth_proof<R: RngCore + CryptoRng>(
         gens.anchor_gen,
     )?;
 
-    Ok(FeePaymentDeviceResponse(WrappedCanonical::wrap(&proof)?))
+    Ok(FeeAccountPaymentDeviceResponse(FeePaymentDeviceResponse(
+        WrappedCanonical::wrap(&proof)?,
+    )))
 }
 
 /// Create `AuthProofAffirmation` for affirmation/claim/reversal/counter-update proofs.
@@ -347,6 +363,7 @@ pub fn create_affirmation_auth_proof<R: RngCore + CryptoRng>(
 mod tests {
     use super::*;
     use ark_serialize::CanonicalSerialize;
+    use ark_std::vec;
 
     /// Pins the seed-to-key derivation the Ledger app uses for its account keys.
     #[test]
@@ -405,5 +422,39 @@ mod tests {
             txn_type: DeviceTxnType::AccountRegistration { asset_id: 1 },
         };
         assert!(create_mint_auth_proof(&mut rng, &keys, &mint, &g).is_err());
+    }
+
+    #[test]
+    fn fee_proofs_reject_wrong_txn_type() {
+        let mut rng = rng_from_seed([0u8; 32]);
+        let g = DeviceGenerators::new().unwrap();
+        let key = AuthSigningKey {
+            sk: PallasScalar::from(5u64),
+        };
+        let pk = CompressedAffine::try_from(g.sig_key_gen()).unwrap();
+        let wrong_txn_type = DeviceTxnType::FeeAccountRegistration {
+            asset_id: 0,
+            balance: 1,
+        };
+
+        let topup = FeeAccountDeviceRequest {
+            challenge_h_bytes: Vec::new(),
+            nonce: Vec::new(),
+            pk: pk.clone(),
+            txn_type: wrong_txn_type,
+        };
+        assert!(create_fee_account_auth_proof(&mut rng, &key, &topup, &g).is_err());
+
+        let payment = FeePaymentDeviceRequest {
+            challenge_h_bytes: Vec::new(),
+            nonce: Vec::new(),
+            auth_rerandomization: WrappedCanonical::wrap(&PallasScalar::from(1u64)).unwrap(),
+            auth_new_randomness: WrappedCanonical::wrap(&PallasScalar::from(1u64)).unwrap(),
+            rerandomized_leaf: pk.clone(),
+            updated_account_commitment: pk.clone(),
+            nullifier: pk,
+            txn_type: wrong_txn_type,
+        };
+        assert!(create_fee_payment_auth_proof(&mut rng, &key, &payment, &g).is_err());
     }
 }

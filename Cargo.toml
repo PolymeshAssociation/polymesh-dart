@@ -339,6 +339,7 @@ std = [
 
 # Temporary PoC device sealing: compile the fixed sealing key into the enclave image. Off, the
 # device seals via KMS. Expected to fold into a `dev` feature later.
+# Rejected in release build.
 hardcoded-key = ["dep:hex-literal"]
 
 # Turn on this feature for faster proof verification.

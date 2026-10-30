@@ -91,22 +91,32 @@ impl<G: AffineRepr> FeeAccountState<G> {
         balance: Balance,
         asset_id: AssetId,
     ) -> Result<Self> {
+        let rho = G::ScalarField::rand(rng);
+        let randomness = G::ScalarField::rand(rng);
+        Self::new_given_randomness(pk, balance, asset_id, rho, randomness)
+    }
+
+    /// Registered state with `rho = initial_rho` and `randomness = initial_randomness`.
+    pub fn new_given_randomness(
+        pk: G,
+        balance: Balance,
+        asset_id: AssetId,
+        initial_rho: G::ScalarField,
+        initial_randomness: G::ScalarField,
+    ) -> Result<Self> {
         #[cfg(not(feature = "ignore_prover_input_sanitation"))]
         if balance > MAX_FEE_BALANCE {
             return Err(Error::AmountTooLarge(balance));
         }
 
-        let rho = G::ScalarField::rand(rng);
-        let randomness = G::ScalarField::rand(rng);
-
         Ok(Self {
             pk,
             balance,
             asset_id,
-            initial_rho: rho,
-            initial_randomness: randomness,
-            rho,
-            randomness,
+            initial_rho,
+            initial_randomness,
+            rho: initial_rho,
+            randomness: initial_randomness,
         })
     }
 

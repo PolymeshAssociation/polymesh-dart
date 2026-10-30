@@ -57,18 +57,22 @@ proptest = { version = "1", default-features = false, features = ["std"] }
 [[bench]]
 name = "affirmation_proofs"
 harness = false
+required-features = ["host_proofs"]
 
 [[bench]]
 name = "fee_account_proofs"
 harness = false
+required-features = ["host_proofs"]
 
 [[bench]]
 name = "settlement_proofs"
 harness = false
+required-features = ["host_proofs"]
 
 [[bench]]
 name = "batch_decrypt"
 harness = false
+required-features = ["host_proofs"]
 
 [features]
 default = ["std", "asm", "parallel", "host_proofs"]

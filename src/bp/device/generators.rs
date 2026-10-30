@@ -140,6 +140,17 @@ impl DeviceGenerators {
         Self::from_host_given_pc_gens(AccountTreeConfig::parameters().even_parameters.pc_gens())
     }
 
+    /// Generators from `dart_gens()` and the compiled-in `pc_gens` points.
+    pub fn from_dart_gens() -> Result<Self, Error> {
+        let gens = crate::dart_gens();
+        Ok(Self {
+            account_comm_key: gens.account_comm_key().as_gens(),
+            comm_re_rand_gen: decode(&COMM_RE_RAND_GEN)?,
+            anchor_gen: decode(&ANCHOR_GEN)?,
+            leg_asset_value_gen: gens.leg_asset_value_gen(),
+        })
+    }
+
     /// Generators from `dart_gens()` and `pc_gens`.
     pub fn from_host_given_pc_gens(pc_gens: &bulletproofs::PedersenGens<PallasA>) -> Self {
         let gens = crate::dart_gens();

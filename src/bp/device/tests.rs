@@ -1,6 +1,6 @@
 use super::{
     AuthDevice, Device, DeviceRequest, DeviceResponse, StreamDevice, account_state_from_pubkeys,
-    run_register_mint_affirm, serve,
+    run_fee_register_topup_pay, run_register_mint_affirm, serve,
 };
 use crate::AssetPkTLookup;
 use crate::Error;
@@ -62,6 +62,29 @@ fn register_mint_affirm_over_tcp() {
 
     let mut device = StreamDevice::new(TcpStream::connect(addr).unwrap());
     run_register_mint_affirm(&mut device);
+    drop(device);
+    server.join().unwrap();
+}
+
+#[test]
+fn fee_register_topup_pay_via_device() {
+    let mut device = InMemoryDevice::new(StdRng::seed_from_u64(0));
+    run_fee_register_topup_pay(&mut device);
+}
+
+#[test]
+fn fee_register_topup_pay_over_tcp() {
+    let listener = bind_local_listener();
+    let addr = listener.local_addr().unwrap();
+    let server = std::thread::spawn(move || {
+        let mut device = Device::new();
+        let mut rng = StdRng::seed_from_u64(0);
+        let (stream, _) = listener.accept().unwrap();
+        serve(stream, &mut device, &mut rng).unwrap();
+    });
+
+    let mut device = StreamDevice::new(TcpStream::connect(addr).unwrap());
+    run_fee_register_topup_pay(&mut device);
     drop(device);
     server.join().unwrap();
 }

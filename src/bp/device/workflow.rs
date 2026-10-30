@@ -2,13 +2,17 @@ use super::{AuthDevice, account_state_from_pubkeys};
 use crate::AssetPkTLookup;
 use crate::account_reg_split::AccountRegHostProtocol;
 use crate::affirmation_proofs::SenderAffirmationHostProtocol;
-use crate::curve_tree::{AccountTreeConfig, CurveTreeConfig, CurveTreeLookup, ProverCurveTree};
+use crate::curve_tree::{
+    AccountTreeConfig, CurveTreeConfig, CurveTreeLookup, FeeAccountTreeConfig, ProverCurveTree,
+};
+use crate::fee_split::{FeePaymentHostProtocol, FeeRegHostProtocol, FeeTopupHostProtocol};
 use crate::key_reg_split::KeyRegistrationDeviceRequest;
 use crate::mint_split::MintHostProtocol;
 use crate::{
     ACCOUNT_TREE_HEIGHT, ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountKeys, AccountPublicKey,
-    AccountPublicKeys, AccountStateCommitment, AssetId, Balance, EncryptionPublicKey, Leg,
-    LegConfig, LegEncrypted, LegRef, PallasA, SettlementRef, dart_gens,
+    AccountPublicKeys, AccountStateCommitment, AssetId, Balance, EncryptionPublicKey,
+    FEE_ACCOUNT_TREE_HEIGHT, FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, FEE_ASSET_ID,
+    FeeAccountAssetState, Leg, LegConfig, LegEncrypted, LegRef, PallasA, SettlementRef, dart_gens,
 };
 use codec::Encode;
 use polymesh_dart_common::NullifierSkGenCounter;
@@ -183,4 +187,78 @@ pub fn run_register_mint_affirm<D: AuthDevice>(device: &mut D) {
     let affirm_proof = protocol.finish::<_, ()>(&mut rng, &response).unwrap();
     let root = account_tree.root().unwrap();
     affirm_proof.verify(&leg_enc, &root, &mut rng).unwrap();
+}
+
+/// Runs the fee account registration -> topup -> payment workflow against `device`, verifying each
+/// proof.
+pub fn run_fee_register_topup_pay<D: AuthDevice>(device: &mut D) {
+    let mut rng = ChaCha20Rng::seed_from_u64(0);
+    let identity: &[u8] = b"test";
+    let tree_params = FeeAccountTreeConfig::parameters();
+
+    let (pubkeys, _) = device.generate_keys().unwrap();
+    let pk = AccountPublicKey::from_affine(PallasA::try_from(&pubkeys.pk_aff).unwrap()).unwrap();
+
+    // Registration
+    let mut fee_state = FeeAccountAssetState::new(&mut rng, &pk, FEE_ASSET_ID, 1000).unwrap();
+    let (protocol, request) =
+        FeeRegHostProtocol::init(&mut rng, &pk, &fee_state, identity).unwrap();
+    let response = device.fee_registration_proof(request).unwrap();
+    let reg_proof = protocol.finish::<()>(&response).unwrap();
+    reg_proof.verify(identity).unwrap();
+
+    let mut fee_tree =
+        ProverCurveTree::<FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, FeeAccountTreeConfig>::new(
+            FEE_ACCOUNT_TREE_HEIGHT,
+        )
+        .unwrap();
+    fee_tree
+        .insert(reg_proof.account_state_commitment.as_leaf_value().unwrap())
+        .unwrap();
+    fee_tree.store_root().unwrap();
+
+    // Topup
+    let (protocol, request) = FeeTopupHostProtocol::<FeeAccountTreeConfig>::init(
+        &mut rng,
+        &pk,
+        &mut fee_state,
+        500,
+        identity,
+        &fee_tree,
+    )
+    .unwrap();
+    let response = device.fee_topup_proof(request).unwrap();
+    let topup_proof = protocol
+        .finish::<_, ()>(&mut rng, &response, tree_params)
+        .unwrap();
+    let root = fee_tree.root().unwrap().root_node().unwrap();
+    topup_proof.verify(&mut rng, identity, &root).unwrap();
+    fee_state.commit_pending_state().unwrap();
+    fee_tree
+        .insert(
+            topup_proof
+                .updated_account_state_commitment
+                .as_leaf_value()
+                .unwrap(),
+        )
+        .unwrap();
+    fee_tree.store_root().unwrap();
+
+    // Payment
+    let (protocol, request) = FeePaymentHostProtocol::<FeeAccountTreeConfig>::init(
+        &mut rng,
+        &mut fee_state,
+        100,
+        identity,
+        &fee_tree,
+    )
+    .unwrap();
+    let response = device.fee_payment_proof(request).unwrap();
+    let root_block = fee_tree.get_block_number().unwrap();
+    let payment_proof = protocol
+        .finish::<_, ()>(&mut rng, &response, root_block, tree_params)
+        .unwrap();
+    payment_proof
+        .verify(&mut rng, identity, fee_tree.root().unwrap())
+        .unwrap();
 }

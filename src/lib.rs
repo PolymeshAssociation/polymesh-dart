@@ -1,5 +1,11 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
+// The sealing key is public because its test only. Prevent shipping a release build that seals with it.
+#[cfg(all(feature = "hardcoded-key", not(debug_assertions)))]
+compile_error!(
+    "The feature `hardcoded-key` is for testing only and must not be enabled in release builds."
+);
+
 #[cfg(feature = "backend_bp")]
 mod bp;
 #[cfg(feature = "backend_bp")]

@@ -113,9 +113,9 @@ impl FeeRegHostProtocol {
 
     pub fn finish<T: DartLimits>(
         mut self,
-        device_response: &SingleSkDeviceResponse,
+        device_response: &FeeAccountRegistrationDeviceResponse,
     ) -> Result<FeeAccountRegistrationProof<T>, Error> {
-        let auth_proof = device_response.0.decode()?;
+        let auth_proof = device_response.0.0.decode()?;
 
         let challenge_h_final =
             append_auth_proof_and_get_challenge(&auth_proof, &mut self.transcript)?;
@@ -223,10 +223,10 @@ impl<
     pub fn finish<R: RngCore + CryptoRng, T: DartLimits>(
         mut self,
         rng: &mut R,
-        device_response: &SingleSkDeviceResponse,
+        device_response: &FeeAccountTopupDeviceResponse,
         tree_params: &CurveTreeParameters<C>,
     ) -> Result<FeeAccountTopupProof<T, C>, Error> {
-        let auth_proof = device_response.0.decode()?;
+        let auth_proof = device_response.0.0.decode()?;
 
         let challenge_h_final =
             append_auth_proof_and_get_challenge(&auth_proof, self.even_prover.transcript())?;
@@ -348,11 +348,11 @@ impl<
     pub fn finish<R: RngCore + CryptoRng, T: DartLimits>(
         mut self,
         rng: &mut R,
-        device_response: &FeePaymentDeviceResponse,
+        device_response: &FeeAccountPaymentDeviceResponse,
         root_block: BlockNumber,
         tree_params: &CurveTreeParameters<C>,
     ) -> Result<FeeAccountPaymentProof<T, C>, Error> {
-        let auth_proof = device_response.0.decode()?;
+        let auth_proof = device_response.0.0.decode()?;
 
         let challenge_h_final =
             append_auth_proof_and_get_challenge(&auth_proof, self.even_prover.transcript())?;

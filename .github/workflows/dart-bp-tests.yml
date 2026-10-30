@@ -51,6 +51,8 @@ jobs:
         run: cargo fmt --package polymesh-dart -- --check
 
       - name: Run tests for polymesh-dart crate
+        env:
+          CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS: true
         run: cargo nextest run --release --package polymesh-dart --features hardcoded-key
 
       - name: Build dart-testing-cli on its own

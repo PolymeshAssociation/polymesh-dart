@@ -5,13 +5,17 @@ use polymesh_dart_bp::auth_proofs::keys::{keygen_enc, keygen_sig};
 
 use super::CompressedAffine;
 use super::auth_proofs::{
-    AuthSigningKeys, create_affirmation_auth_proof, create_key_registration_auth_proof,
-    create_mint_auth_proof, create_registration_auth_proof,
+    AuthSigningKey, AuthSigningKeys, create_affirmation_auth_proof, create_fee_account_auth_proof,
+    create_fee_account_registration_auth_proof, create_fee_payment_auth_proof,
+    create_key_registration_auth_proof, create_mint_auth_proof, create_registration_auth_proof,
 };
 use super::key_reg_split::{KeyRegistrationDeviceRequest, KeyRegistrationDeviceResponse};
 use super::split_types::{
     AccountRegistrationDeviceResponse, AffirmationDeviceRequest, AffirmationDeviceResponse,
-    AssetMintingDeviceResponse, MintDeviceRequest, RegistrationDeviceRequest,
+    AssetMintingDeviceResponse, FeeAccountDeviceRequest, FeeAccountPaymentDeviceResponse,
+    FeeAccountRegistrationDeviceRequest, FeeAccountRegistrationDeviceResponse,
+    FeeAccountTopupDeviceResponse, FeePaymentDeviceRequest, MintDeviceRequest,
+    RegistrationDeviceRequest,
 };
 use crate::Error;
 use ark_std::string::String;
@@ -27,11 +31,11 @@ use polymesh_dart_bp::account::state::AccountState as BPAccountState;
 use polymesh_dart_common::{AssetId, NullifierSkGenCounter};
 
 mod generators;
-#[cfg(all(test, feature = "host_proofs"))]
+#[cfg(all(test, feature = "std", feature = "host_proofs"))]
 mod ledger_tests;
 #[cfg(feature = "std")]
 mod sealing;
-#[cfg(all(test, feature = "host_proofs"))]
+#[cfg(all(test, feature = "std", feature = "host_proofs"))]
 mod speculos_tests;
 #[cfg(all(test, feature = "host_proofs", feature = "hardcoded-key"))]
 mod tests;
@@ -48,7 +52,7 @@ pub use sealing::{DataKey, DataKeyProvider};
 #[cfg(feature = "std")]
 pub use transport::{MAX_FRAME_LEN, StreamDevice, read_frame, serve, write_frame};
 #[cfg(all(feature = "std", feature = "host_proofs"))]
-pub use workflow::run_register_mint_affirm;
+pub use workflow::{run_fee_register_topup_pay, run_register_mint_affirm};
 
 #[derive(Clone, Debug, Encode, Decode)]
 pub struct PubKeys {
@@ -64,6 +68,9 @@ pub enum DeviceRequest {
     RegistrationProof(RegistrationDeviceRequest),
     MintProof(MintDeviceRequest),
     Affirm(AffirmationDeviceRequest),
+    FeeRegistrationProof(FeeAccountRegistrationDeviceRequest),
+    FeeTopupProof(FeeAccountDeviceRequest),
+    FeePaymentProof(FeePaymentDeviceRequest),
 }
 
 #[derive(Clone, Encode, Decode)]
@@ -79,6 +86,9 @@ pub enum DeviceResponse {
     Mint(AssetMintingDeviceResponse),
     Affirmation(AffirmationDeviceResponse),
     Err(String),
+    FeeRegistration(FeeAccountRegistrationDeviceResponse),
+    FeeTopup(FeeAccountTopupDeviceResponse),
+    FeePayment(FeeAccountPaymentDeviceResponse),
 }
 
 /// Holds the secret keys. This is what runs inside the enclave.
@@ -177,6 +187,24 @@ impl Device {
                 let response = create_affirmation_auth_proof(rng, keys, &request, &g)?;
                 Ok(DeviceResponse::Affirmation(response))
             }
+            DeviceRequest::FeeRegistrationProof(request) => {
+                let g = self.gens()?;
+                let key = self.fee_signing_key()?;
+                let response = create_fee_account_registration_auth_proof(rng, &key, &request, &g)?;
+                Ok(DeviceResponse::FeeRegistration(response))
+            }
+            DeviceRequest::FeeTopupProof(request) => {
+                let g = self.gens()?;
+                let key = self.fee_signing_key()?;
+                let response = create_fee_account_auth_proof(rng, &key, &request, &g)?;
+                Ok(DeviceResponse::FeeTopup(response))
+            }
+            DeviceRequest::FeePaymentProof(request) => {
+                let g = self.gens()?;
+                let key = self.fee_signing_key()?;
+                let response = create_fee_payment_auth_proof(rng, &key, &request, &g)?;
+                Ok(DeviceResponse::FeePayment(response))
+            }
         }
     }
 
@@ -193,6 +221,13 @@ impl Device {
         self.keys
             .as_ref()
             .ok_or_else(|| Error::Device("keys not generated".into()))
+    }
+
+    /// Fee accounts are keyed by `sk_aff`.
+    fn fee_signing_key(&self) -> Result<AuthSigningKey, Error> {
+        Ok(AuthSigningKey {
+            sk: self.signing_keys()?.sk_aff,
+        })
     }
 
     // Sealing runs only under std (AEAD). The no-std stubs exist so `Device` compiles for embedded
@@ -294,6 +329,39 @@ pub trait AuthDevice {
     ) -> Result<AffirmationDeviceResponse, Error> {
         match self.send(DeviceRequest::Affirm(request))? {
             DeviceResponse::Affirmation(response) => Ok(response),
+            DeviceResponse::Err(message) => Err(Error::Device(message)),
+            _ => Err(Error::Device("unexpected response".into())),
+        }
+    }
+
+    fn fee_registration_proof(
+        &mut self,
+        request: FeeAccountRegistrationDeviceRequest,
+    ) -> Result<FeeAccountRegistrationDeviceResponse, Error> {
+        match self.send(DeviceRequest::FeeRegistrationProof(request))? {
+            DeviceResponse::FeeRegistration(response) => Ok(response),
+            DeviceResponse::Err(message) => Err(Error::Device(message)),
+            _ => Err(Error::Device("unexpected response".into())),
+        }
+    }
+
+    fn fee_topup_proof(
+        &mut self,
+        request: FeeAccountDeviceRequest,
+    ) -> Result<FeeAccountTopupDeviceResponse, Error> {
+        match self.send(DeviceRequest::FeeTopupProof(request))? {
+            DeviceResponse::FeeTopup(response) => Ok(response),
+            DeviceResponse::Err(message) => Err(Error::Device(message)),
+            _ => Err(Error::Device("unexpected response".into())),
+        }
+    }
+
+    fn fee_payment_proof(
+        &mut self,
+        request: FeePaymentDeviceRequest,
+    ) -> Result<FeeAccountPaymentDeviceResponse, Error> {
+        match self.send(DeviceRequest::FeePaymentProof(request))? {
+            DeviceResponse::FeePayment(response) => Ok(response),
             DeviceResponse::Err(message) => Err(Error::Device(message)),
             _ => Err(Error::Device("unexpected response".into())),
         }

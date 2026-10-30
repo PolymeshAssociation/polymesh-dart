@@ -47,11 +47,12 @@ pub fn serve<S: Read + Write, R: CryptoRngCore>(
             Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Ok(()),
             Err(e) => return Err(e),
         };
-        let request = DeviceRequest::decode_all(&mut &bytes[..])
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "bad request"))?;
-        let response = device
-            .handle(request, rng)
-            .unwrap_or_else(|e| DeviceResponse::Err(format!("{e}")));
+        let response = match DeviceRequest::decode_all(&mut &bytes[..]) {
+            Ok(request) => device
+                .handle(request, rng)
+                .unwrap_or_else(|e| DeviceResponse::Err(format!("{e}"))),
+            Err(_) => DeviceResponse::Err("bad request".into()),
+        };
         write_frame(&mut stream, &response.encode())?;
     }
 }
@@ -80,6 +81,7 @@ impl<S: Read + Write> AuthDevice for StreamDevice<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::device::DataKeyProvider;
 
     #[test]
     fn frame_length_capped() {
@@ -94,5 +96,61 @@ mod tests {
         let mut buf = Vec::new();
         write_frame(&mut buf, &[1, 2, 3]).unwrap();
         assert_eq!(read_frame(&mut &buf[..]).unwrap(), vec![1, 2, 3]);
+    }
+
+    struct NoKeyProvider;
+
+    impl DataKeyProvider for NoKeyProvider {
+        fn fresh_data_key(&mut self) -> Result<(super::super::DataKey, Vec<u8>), Error> {
+            Err(Error::Device("no key".into()))
+        }
+
+        fn unwrap_data_key(&self, _wrapped: &[u8]) -> Result<super::super::DataKey, Error> {
+            Err(Error::Device("no key".into()))
+        }
+    }
+
+    /// Input frames and the responses written back.
+    struct Stream {
+        input: io::Cursor<Vec<u8>>,
+        output: Vec<u8>,
+    }
+
+    impl Read for Stream {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            self.input.read(buf)
+        }
+    }
+
+    impl Write for Stream {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.output.write(buf)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn serve_answers_malformed_request_and_continues() {
+        let mut input = Vec::new();
+        write_frame(&mut input, &[0xff, 0xff, 0xff]).unwrap();
+        write_frame(&mut input, &DeviceRequest::LoadKeys(vec![0u8; 4]).encode()).unwrap();
+        let mut stream = Stream {
+            input: io::Cursor::new(input),
+            output: Vec::new(),
+        };
+        let mut device = Device::with_provider(Box::new(NoKeyProvider));
+        let mut rng = rand::thread_rng();
+        serve(&mut stream, &mut device, &mut rng).unwrap();
+
+        let mut output = &stream.output[..];
+        for _ in 0..2 {
+            let bytes = read_frame(&mut output).unwrap();
+            let response = DeviceResponse::decode_all(&mut &bytes[..]).unwrap();
+            assert!(matches!(response, DeviceResponse::Err(_)));
+        }
+        assert!(output.is_empty());
     }
 }

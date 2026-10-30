@@ -64,6 +64,23 @@ impl FeeAccountState {
         bp_state.try_into()
     }
 
+    pub fn new_given_randomness(
+        account: &AccountPublicKey,
+        asset_id: AssetId,
+        balance: Balance,
+        initial_rho: PallasScalar,
+        initial_randomness: PallasScalar,
+    ) -> Result<Self, Error> {
+        let bp_state = BPFeeAccountState::new_given_randomness(
+            account.get_affine()?,
+            balance,
+            asset_id,
+            initial_rho,
+            initial_randomness,
+        )?;
+        bp_state.try_into()
+    }
+
     pub fn bp_state(&self) -> Result<(BPFeeAccountState, BPFeeAccountStateCommitment), Error> {
         let state = BPFeeAccountState {
             pk: self.pk.get_affine()?,
@@ -238,6 +255,26 @@ impl FeeAccountAssetState {
         })
     }
 
+    pub fn new_given_randomness(
+        account: &AccountPublicKey,
+        asset_id: AssetId,
+        balance: Balance,
+        initial_rho: PallasScalar,
+        initial_randomness: PallasScalar,
+    ) -> Result<Self, Error> {
+        let current_state = FeeAccountState::new_given_randomness(
+            account,
+            asset_id,
+            balance,
+            initial_rho,
+            initial_randomness,
+        )?;
+        Ok(Self {
+            current_state,
+            pending_state: None,
+        })
+    }
+
     pub fn current_commitment(&self) -> Result<FeeAccountStateCommitment, Error> {
         self.current_state.commitment()
     }
@@ -321,19 +358,28 @@ impl<T: DartLimits> FeeAccountRegistrationProof<T> {
         identity: &[u8],
     ) -> Result<(Self, FeeAccountAssetState), Error> {
         let account_state = FeeAccountAssetState::new(rng, &key.public, asset_id, balance)?;
+        let proof = Self::new_given_state(rng, key, &account_state, identity)?;
+        Ok((proof, account_state))
+    }
 
+    /// Registration proof for `account_state`, e.g. from `AccountKeyPair::fee_account_state`.
+    pub fn new_given_state<R: RngCore + CryptoRng>(
+        rng: &mut R,
+        key: &AccountKeyPair,
+        account_state: &FeeAccountAssetState,
+        identity: &[u8],
+    ) -> Result<Self, Error> {
         let (protocol, device_request) =
-            FeeRegHostProtocol::init(rng, &key.public, &account_state, identity)?;
+            FeeRegHostProtocol::init(rng, &key.public, account_state, identity)?;
 
         let device_response = create_fee_account_registration_auth_proof(
             rng,
             &key.into(),
             &device_request,
-            &DeviceGenerators::from_host(),
+            &DeviceGenerators::from_dart_gens()?,
         )?;
 
-        let proof = protocol.finish(&device_response)?;
-        Ok((proof, account_state))
+        protocol.finish(&device_response)
     }
 
     /// Verifies the account asset registration proof against the provided public key, asset ID, and account state commitment.
@@ -511,7 +557,7 @@ impl<
             rng,
             &key.into(),
             &device_request,
-            &DeviceGenerators::from_host(),
+            &DeviceGenerators::from_dart_gens()?,
         )?;
 
         let proof = protocol.finish(rng, &device_response, tree_lookup.params())?;
@@ -1151,6 +1197,57 @@ mod tests {
                 "fee account leaf proof path at height {height}",
             );
         }
+    }
+
+    #[test]
+    fn fee_account_state_derived_from_key() {
+        let mut rng = rand_chacha::ChaCha20Rng::from_seed([7; 32]);
+        let keys = AccountKeys::rand(&mut rng).unwrap();
+        let ctx = b"fee-derived-state";
+        let (asset_id, balance, counter) = (FEE_ASSET_ID, 1000, 0);
+
+        let state = keys
+            .acct
+            .fee_account_state(asset_id, balance, counter, ctx)
+            .unwrap();
+        let again = keys
+            .acct
+            .fee_account_state(asset_id, balance, counter, ctx)
+            .unwrap();
+        assert_eq!(state.current_state, again.current_state);
+
+        let (initial_rho, initial_randomness) = keys
+            .acct
+            .derive_fee_account_randomness(ctx, asset_id, counter);
+        assert_eq!(
+            state.current_state.initial_rho.decode().unwrap(),
+            initial_rho
+        );
+        assert_eq!(
+            state.current_state.initial_randomness.decode().unwrap(),
+            initial_randomness
+        );
+
+        // Same input as a regular account yields unrelated values.
+        let (randomness, rho_randomness) =
+            keys.acct.derive_account_randomness(ctx, asset_id, counter);
+        assert_ne!(initial_randomness, randomness);
+        assert_ne!(initial_rho, rho_randomness);
+
+        let next = keys
+            .acct
+            .fee_account_state(asset_id, balance, counter + 1, ctx)
+            .unwrap();
+        assert_ne!(state.current_state, next.current_state);
+
+        let proof =
+            FeeAccountRegistrationProof::<()>::new_given_state(&mut rng, &keys.acct, &state, ctx)
+                .unwrap();
+        assert_eq!(
+            proof.account_state_commitment,
+            state.current_commitment().unwrap()
+        );
+        proof.verify(ctx).unwrap();
     }
 }
 
