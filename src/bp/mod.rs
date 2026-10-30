@@ -2307,7 +2307,8 @@ mod tests {
         let keys = [
             AccountKeys::rand(&mut rng).unwrap(),
             AccountKeys::from_seed("seed").unwrap(),
-            MasterSeed::from_seed("master-seed")
+            MasterSeed::from_seed("master-seed-master-seed-master-seed")
+                .unwrap()
                 .derive_account_keys("seed/0")
                 .unwrap(),
         ];
@@ -2318,12 +2319,21 @@ mod tests {
             assert!(proof.verify(b"other-identity").is_err());
         }
 
-        let a = MasterSeed::from_seed("master-seed")
+        let a = MasterSeed::from_seed("master-seed-master-seed-master-seed")
+            .unwrap()
             .derive_account_keys("seed/0")
             .unwrap();
-        let b = MasterSeed::from_seed("master-seed")
+        let b = MasterSeed::from_seed("master-seed-master-seed-master-seed")
+            .unwrap()
             .derive_account_keys("seed/0")
             .unwrap();
         assert_eq!(a.public_keys(), b.public_keys());
+        assert!(
+            MasterSeed::from_seed("master-seed")
+                .unwrap()
+                .derive_account_keys("seed/0")
+                .is_err()
+        );
+        assert!(MasterSeed::from_seed("0x0g").is_err());
     }
 }

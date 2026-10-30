@@ -2178,7 +2178,6 @@ pub mod tests {
     //     fields::fp::{AllocatedFp, FpVar},
     // };
     use ark_std::UniformRand;
-    use blake2::Blake2b512;
     use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
     use bulletproofs::r1cs::{
         add_verification_tuples_to_rmc, batch_verify, verify_given_verification_tuple,
@@ -2365,28 +2364,29 @@ pub mod tests {
         let counter_s = 1;
         let counter_n = 1;
 
-        let seed1 = MasterSeed::new(b"test_seed".to_vec());
+        let seed1 = MasterSeed::new([1u8; 32].to_vec());
 
         let j = PallasA::rand(&mut rng);
         let g = PallasA::rand(&mut rng);
 
         let params = test_params_for_poseidon2();
 
-        let result1 = seed1.derive_keys::<PallasA, Blake2b512>(b"path", counter_s, j, g);
-        let result3 = seed1.derive_keys::<PallasA, Blake2b512>(b"path1", counter_s, j, g);
+        let result1 = seed1
+            .derive_keys::<PallasA>(b"path", counter_s, j, g)
+            .unwrap();
+        let result3 = seed1
+            .derive_keys::<PallasA>(b"path1", counter_s, j, g)
+            .unwrap();
 
-        let rand1 = seed1.derive_account_randomness::<PallasA, Blake2b512>(
-            b"path", counter_s, asset_id, counter_n,
-        );
-        let rand2 = seed1.derive_account_randomness::<PallasA, Blake2b512>(
-            b"path", counter_s, asset_id, counter_n,
-        );
-        let rand3 = seed1.derive_account_randomness::<PallasA, Blake2b512>(
-            b"path",
-            counter_s,
-            asset_id,
-            counter_n + 1,
-        );
+        let rand1 = seed1
+            .derive_account_randomness::<PallasA>(b"path", counter_s, asset_id, counter_n)
+            .unwrap();
+        let rand2 = seed1
+            .derive_account_randomness::<PallasA>(b"path", counter_s, asset_id, counter_n)
+            .unwrap();
+        let rand3 = seed1
+            .derive_account_randomness::<PallasA>(b"path", counter_s, asset_id, counter_n + 1)
+            .unwrap();
 
         let pk1 = result1.0.1.0;
         let pk1_enc = result1.1.1.0;

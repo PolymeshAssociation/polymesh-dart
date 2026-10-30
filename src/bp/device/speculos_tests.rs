@@ -10,29 +10,38 @@
 //! status word is separate from the length). Proof-handler responses carry the app's `[len: u8]`
 //! prefix inside `data`; `GetPubkey` returns 64 raw bytes.
 
-use super::account_state_from_pubkeys;
 use super::ledger_tests::{
-    ASSET_ID, COUNTER, IDENTITY, INS_ASSET_REG, INS_GET_RESPONSE_CHUNK, INS_KEY_REG, INS_MINT,
-    affirm_apdus, affirm_leg_and_tree, apdu_data, full_apdu, getpubkey_apdu,
+    ASSET_ID, COUNTER, IDENTITY, INS_ACCOUNT_RANDOMNESS, INS_ASSET_REG, INS_FEE_PAYMENT,
+    INS_FEE_REG, INS_FEE_TOPUP, INS_GET_RESPONSE_CHUNK, INS_KEY_REG, INS_MINT, affirm_apdus,
+    affirm_leg_and_tree, apdu_data, chunked_apdus, full_apdu, full_apdu_with_p1, getpubkey_apdu,
 };
+use super::{account_state_from_pubkeys, fee_account_state_from_pubkey_given_randomness};
 use crate::AssetPkTLookup;
 use crate::account_reg_split::AccountRegHostProtocol;
 use crate::affirmation_proofs::{
     ReceiverAffirmationHostProtocol, ReceiverClaimHostProtocol, SenderAffirmationHostProtocol,
     SenderCounterUpdateHostProtocol,
 };
-use crate::curve_tree::{AccountTreeConfig, CurveTreeConfig, CurveTreeLookup, ProverCurveTree};
+use crate::curve_tree::{
+    AccountTreeConfig, CurveTreeConfig, CurveTreeLookup, FeeAccountTreeConfig, ProverCurveTree,
+};
+use crate::fee_split::{FeePaymentHostProtocol, FeeRegHostProtocol, FeeTopupHostProtocol};
 use crate::key_reg_split::{KeyRegistrationDeviceRequest, KeyRegistrationDeviceResponse};
 use crate::mint_split::MintHostProtocol;
 use crate::split_types::{
+    AccountRandomnessDeviceRequest, AccountRandomnessDeviceResponse,
     AccountRegistrationDeviceResponse, AffirmationDeviceRequest, AffirmationDeviceResponse,
-    AssetMintingDeviceResponse,
+    AssetMintingDeviceResponse, FeeAccountPaymentDeviceResponse,
+    FeeAccountRandomnessDeviceResponse, FeeAccountRegistrationDeviceResponse,
+    FeeAccountTopupDeviceResponse,
 };
 use crate::{
     ACCOUNT_TREE_HEIGHT, ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountKeys, AccountPublicKey,
-    AccountPublicKeys, CompressedAffine, EncryptionPublicKey, PallasA, dart_gens,
+    AccountPublicKeys, AssetId, CompressedAffine, EncryptionPublicKey, FEE_ACCOUNT_TREE_HEIGHT,
+    FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, FEE_ASSET_ID, PallasA, dart_gens,
 };
 use codec::{Decode, Encode};
+use polymesh_dart_common::NullifierSkGenCounter;
 use rand::rngs::StdRng;
 use rand_core::SeedableRng;
 use std::io::{Read, Write};
@@ -100,8 +109,15 @@ fn affirm_exchange(
     dev: &mut Speculos,
     request: &AffirmationDeviceRequest,
 ) -> AffirmationDeviceResponse {
+    let bytes = chunked_exchange(dev, affirm_apdus(&request.encode()));
+    AffirmationDeviceResponse::decode(&mut &bytes[..])
+        .expect("decodes as AffirmationDeviceResponse")
+}
+
+/// Send a chunked request's `apdus` and reassemble the chunked response, as in `affirm_exchange`.
+fn chunked_exchange(dev: &mut Speculos, apdus: Vec<String>) -> Vec<u8> {
     let mut data = Vec::new();
-    for apdu in affirm_apdus(&request.encode()) {
+    for apdu in apdus {
         data = dev.send(&apdu);
     }
     let mut bytes = Vec::new();
@@ -114,8 +130,124 @@ fn affirm_exchange(
         }
         data = dev.send(&full_apdu(INS_GET_RESPONSE_CHUNK, &[]));
     }
-    AffirmationDeviceResponse::decode(&mut &bytes[..])
-        .expect("decodes as AffirmationDeviceResponse")
+    bytes
+}
+
+/// Request account randomness (INS 13). `fee` sets P1 = 1.
+fn account_randomness_bytes(
+    dev: &mut Speculos,
+    fee: bool,
+    asset_id: AssetId,
+    counter: NullifierSkGenCounter,
+) -> Vec<u8> {
+    let request = AccountRandomnessDeviceRequest { asset_id, counter };
+    payload(&dev.send(&full_apdu_with_p1(
+        INS_ACCOUNT_RANDOMNESS,
+        fee as u8,
+        &apdu_data(&request.encode()),
+    )))
+}
+
+#[test]
+#[ignore]
+fn speculos_account_randomness() {
+    let mut dev = Speculos::connect();
+    let account = account_randomness_bytes(&mut dev, false, ASSET_ID, COUNTER);
+    AccountRandomnessDeviceResponse::decode(&mut &account[..]).unwrap();
+    assert_eq!(
+        account,
+        account_randomness_bytes(&mut dev, false, ASSET_ID, COUNTER)
+    );
+    assert_ne!(
+        account,
+        account_randomness_bytes(&mut dev, false, ASSET_ID, COUNTER + 1)
+    );
+
+    let fee = account_randomness_bytes(&mut dev, true, ASSET_ID, COUNTER);
+    FeeAccountRandomnessDeviceResponse::decode(&mut &fee[..]).unwrap();
+    assert_ne!(account, fee);
+}
+
+#[test]
+#[ignore]
+fn speculos_fee_register_topup_pay() {
+    let mut dev = Speculos::connect();
+    let mut rng = StdRng::seed_from_u64(0);
+    let tree_params = FeeAccountTreeConfig::parameters();
+    let (pk_aff, _) = get_pubkeys(&mut dev);
+    let pk = AccountPublicKey::from_affine(pk_aff).unwrap();
+
+    // Registration, with the fee account randomness derived on the device.
+    let randomness = FeeAccountRandomnessDeviceResponse::decode(
+        &mut &account_randomness_bytes(&mut dev, true, FEE_ASSET_ID, COUNTER)[..],
+    )
+    .unwrap();
+    let mut fee_state =
+        fee_account_state_from_pubkey_given_randomness(&pk, FEE_ASSET_ID, 1000, &randomness)
+            .unwrap();
+    let (protocol, request) =
+        FeeRegHostProtocol::init(&mut rng, &pk, &fee_state, IDENTITY).unwrap();
+    let data = dev.send(&full_apdu(INS_FEE_REG, &apdu_data(&request.encode())));
+    let response = FeeAccountRegistrationDeviceResponse::decode(&mut &payload(&data)[..]).unwrap();
+    let reg_proof = protocol.finish::<()>(&response).unwrap();
+    reg_proof.verify(IDENTITY).unwrap();
+
+    let mut fee_tree =
+        ProverCurveTree::<FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, FeeAccountTreeConfig>::new(
+            FEE_ACCOUNT_TREE_HEIGHT,
+        )
+        .unwrap();
+    fee_tree
+        .insert(reg_proof.account_state_commitment.as_leaf_value().unwrap())
+        .unwrap();
+    fee_tree.store_root().unwrap();
+
+    // Topup
+    let (protocol, request) = FeeTopupHostProtocol::<FeeAccountTreeConfig>::init(
+        &mut rng,
+        &pk,
+        &mut fee_state,
+        500,
+        IDENTITY,
+        &fee_tree,
+    )
+    .unwrap();
+    let data = dev.send(&full_apdu(INS_FEE_TOPUP, &apdu_data(&request.encode())));
+    let response = FeeAccountTopupDeviceResponse::decode(&mut &payload(&data)[..]).unwrap();
+    let topup_proof = protocol
+        .finish::<_, ()>(&mut rng, &response, tree_params)
+        .unwrap();
+    let root = fee_tree.root().unwrap().root_node().unwrap();
+    topup_proof.verify(&mut rng, IDENTITY, &root).unwrap();
+    fee_state.commit_pending_state().unwrap();
+    fee_tree
+        .insert(
+            topup_proof
+                .updated_account_state_commitment
+                .as_leaf_value()
+                .unwrap(),
+        )
+        .unwrap();
+    fee_tree.store_root().unwrap();
+
+    // Payment, chunked both ways.
+    let (protocol, request) = FeePaymentHostProtocol::<FeeAccountTreeConfig>::init(
+        &mut rng,
+        &mut fee_state,
+        100,
+        IDENTITY,
+        &fee_tree,
+    )
+    .unwrap();
+    let bytes = chunked_exchange(&mut dev, chunked_apdus(INS_FEE_PAYMENT, &request.encode()));
+    let response = FeeAccountPaymentDeviceResponse::decode(&mut &bytes[..]).unwrap();
+    let root_block = fee_tree.get_block_number().unwrap();
+    let payment_proof = protocol
+        .finish::<_, ()>(&mut rng, &response, root_block, tree_params)
+        .unwrap();
+    payment_proof
+        .verify(&mut rng, IDENTITY, fee_tree.root().unwrap())
+        .unwrap();
 }
 
 #[test]
