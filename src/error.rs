@@ -18,6 +18,7 @@ pub enum Error {
     ProofGenerationError(String),
 
     /// Curve tree error.
+    #[cfg(feature = "host_proofs")]
     #[error("Curve tree error: {0:?}")]
     CurveTreeError(#[from] curve_tree_relations::error::Error),
 
@@ -38,6 +39,7 @@ pub enum Error {
     BoundedContainerSizeLimitExceeded,
 
     /// Bulletproof r1cs error.
+    #[cfg(feature = "host_proofs")]
     #[error("Bulletproof r1cs error: {0:?}")]
     BulletproofR1CSError(#[from] bulletproofs::errors::R1CSError),
 
@@ -144,6 +146,10 @@ pub enum Error {
     /// The proof doesn't match the leg's asset-id kind.
     #[error("The proof doesn't match the leg's asset-id kind")]
     InvalidProofType,
+
+    /// Device protocol error.
+    #[error("Device error: {0}")]
+    Device(String),
 
     /// Unsupported number of legs
     #[error("Unsupported number of legs: {0}")]

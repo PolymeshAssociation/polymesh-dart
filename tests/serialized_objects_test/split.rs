@@ -8,20 +8,22 @@ use polymesh_dart::affirmation_proofs::{
 use polymesh_dart::auth_proofs::{
     create_affirmation_auth_proof, create_fee_account_auth_proof,
     create_fee_account_registration_auth_proof, create_fee_payment_auth_proof,
-    create_registration_auth_proof,
+    create_mint_auth_proof, create_registration_auth_proof,
 };
 use polymesh_dart::curve_tree::{
     AccountTreeConfig, CurveTreeConfig, CurveTreeLookup, FeeAccountTreeConfig, ProverCurveTree,
 };
+use polymesh_dart::device::DeviceGenerators;
 use polymesh_dart::fee_split::{FeePaymentHostProtocol, FeeRegHostProtocol, FeeTopupHostProtocol};
 use polymesh_dart::mint_split::MintHostProtocol;
 use polymesh_dart::split_types::{
-    AffirmationDeviceRequest, AffirmationDeviceResponse, FeeAccountDeviceRequest,
-    FeeAccountRegistrationDeviceRequest, FeePaymentDeviceRequest, FeePaymentDeviceResponse,
-    RegistrationDeviceRequest, SingleSkDeviceResponse, TwoSksDeviceResponse,
+    AccountRegistrationDeviceResponse, AffirmationDeviceRequest, AffirmationDeviceResponse,
+    AssetMintingDeviceResponse, FeeAccountDeviceRequest, FeeAccountPaymentDeviceResponse,
+    FeeAccountRegistrationDeviceRequest, FeeAccountRegistrationDeviceResponse,
+    FeeAccountTopupDeviceResponse, FeePaymentDeviceRequest, MintDeviceRequest,
+    RegistrationDeviceRequest,
 };
 use polymesh_dart::*;
-use polymesh_dart_bp::account::state::AccountCommitmentKeyTrait;
 use polymesh_dart_common::NullifierSkGenCounter;
 
 use crate::constants::*;
@@ -108,17 +110,8 @@ fn make_affirmation_device_response(
     tree: &AccountProverTree,
 ) -> AffirmationDeviceResponse {
     let mut rng = default_rng();
-    let gens = dart_gens();
-    let comm_re_rand_gen = tree.params().even_parameters.pc_gens().B_blinding;
-    create_affirmation_auth_proof(
-        &mut rng,
-        keys,
-        request,
-        comm_re_rand_gen,
-        tree.params().even_parameters.pc_gens().B,
-        gens.leg_asset_value_gen(),
-    )
-    .unwrap()
+    let gens = DeviceGenerators::from_host_given_pc_gens(tree.params().even_parameters.pc_gens());
+    create_affirmation_auth_proof(&mut rng, &keys.into(), request, &gens).unwrap()
 }
 
 /// Simulates the full W3 wire protocol for affirmation proofs:
@@ -165,15 +158,15 @@ pub fn gen_fee_reg_split() {
     let req: FeeAccountRegistrationDeviceRequest = load_scale_v1(FEE_REG_SPLIT_REQUEST);
     let device_response = create_fee_account_registration_auth_proof(
         &mut rng,
-        &keys.acct,
+        &(&keys.acct).into(),
         &req,
-        dart_gens().account_comm_key().sk_gen(),
+        &DeviceGenerators::from_host(),
     )
     .unwrap();
     save_scale_v1(FEE_REG_SPLIT_RESPONSE, &device_response);
 
     // Host: receive response, finish proof.
-    let res: SingleSkDeviceResponse = load_scale_v1(FEE_REG_SPLIT_RESPONSE);
+    let res: FeeAccountRegistrationDeviceResponse = load_scale_v1(FEE_REG_SPLIT_RESPONSE);
     let proof = protocol.finish::<()>(&res).unwrap();
     save_scale_v1(FEE_REG_SPLIT_PROOF, &proof);
 }
@@ -203,14 +196,14 @@ pub fn gen_fee_topup_split() {
     let req: FeeAccountDeviceRequest = load_scale_v1(FEE_TOPUP_SPLIT_REQUEST);
     let device_response = create_fee_account_auth_proof(
         &mut rng,
-        &keys.acct,
+        &(&keys.acct).into(),
         &req,
-        dart_gens().account_comm_key().sk_gen(),
+        &DeviceGenerators::from_host(),
     )
     .unwrap();
     save_scale_v1(FEE_TOPUP_SPLIT_RESPONSE, &device_response);
 
-    let res: SingleSkDeviceResponse = load_scale_v1(FEE_TOPUP_SPLIT_RESPONSE);
+    let res: FeeAccountTopupDeviceResponse = load_scale_v1(FEE_TOPUP_SPLIT_RESPONSE);
     let proof = protocol
         .finish::<_, ()>(&mut rng, &res, FeeAccountTreeConfig::parameters())
         .unwrap();
@@ -230,9 +223,12 @@ pub fn gen_fee_payment_split() {
     let mut rng = default_rng();
     let keys = alice_keys();
     let (tree, mut fee_state) = make_fee_state_and_tree_after_topup(&keys);
-    let gens = dart_gens();
-    let tree_params = FeeAccountTreeConfig::parameters();
-    let comm_re_rand_gen = tree_params.even_parameters.sl_params.pc_gens().B_blinding;
+    let gens = DeviceGenerators::from_host_given_pc_gens(
+        FeeAccountTreeConfig::parameters()
+            .even_parameters
+            .sl_params
+            .pc_gens(),
+    );
 
     let (protocol, device_request) = FeePaymentHostProtocol::<FeeAccountTreeConfig>::init(
         &mut rng,
@@ -245,18 +241,11 @@ pub fn gen_fee_payment_split() {
     save_scale_v1(FEE_PAYMENT_SPLIT_REQUEST, &device_request);
 
     let req: FeePaymentDeviceRequest = load_scale_v1(FEE_PAYMENT_SPLIT_REQUEST);
-    let device_response = create_fee_payment_auth_proof(
-        &mut rng,
-        &keys.acct,
-        &req,
-        gens.account_comm_key().sk_gen(),
-        comm_re_rand_gen,
-        tree_params.even_parameters.sl_params.pc_gens().B,
-    )
-    .unwrap();
+    let device_response =
+        create_fee_payment_auth_proof(&mut rng, &(&keys.acct).into(), &req, &gens).unwrap();
     save_scale_v1(FEE_PAYMENT_SPLIT_RESPONSE, &device_response);
 
-    let res: FeePaymentDeviceResponse = load_scale_v1(FEE_PAYMENT_SPLIT_RESPONSE);
+    let res: FeeAccountPaymentDeviceResponse = load_scale_v1(FEE_PAYMENT_SPLIT_RESPONSE);
     let root_block = tree.get_block_number().unwrap();
     let proof = protocol
         .finish::<_, ()>(
@@ -286,7 +275,7 @@ pub fn gen_account_reg_split() {
     let (account_state, rho_randomness) = keys
         .init_asset_state(ASSET_ID_1, counter, IDENTITY)
         .unwrap();
-    let gens = dart_gens();
+    let gens = DeviceGenerators::from_host();
 
     let (protocol, device_request) = AccountRegHostProtocol::init(
         &mut rng,
@@ -300,17 +289,11 @@ pub fn gen_account_reg_split() {
     save_scale_v1(ACCOUNT_REG_SPLIT_REQUEST, &device_request);
 
     let req: RegistrationDeviceRequest = load_scale_v1(ACCOUNT_REG_SPLIT_REQUEST);
-    let device_response = create_registration_auth_proof(
-        &mut rng,
-        &keys,
-        &req,
-        gens.account_comm_key().sk_gen(),
-        gens.account_comm_key().sk_enc_gen(),
-    )
-    .unwrap();
+    let device_response =
+        create_registration_auth_proof(&mut rng, &(&keys).into(), &req, &gens).unwrap();
     save_scale_v1(ACCOUNT_REG_SPLIT_RESPONSE, &device_response);
 
-    let res: TwoSksDeviceResponse = load_scale_v1(ACCOUNT_REG_SPLIT_RESPONSE);
+    let res: AccountRegistrationDeviceResponse = load_scale_v1(ACCOUNT_REG_SPLIT_RESPONSE);
     let proof = protocol
         .finish::<_, ()>(&mut rng, &res, counter, AccountTreeConfig::parameters())
         .unwrap();
@@ -340,7 +323,7 @@ pub fn gen_mint_split() {
         .init_asset_state(ASSET_ID_1, counter, IDENTITY)
         .unwrap();
     let tree = make_account_tree(account_state.current_commitment().unwrap());
-    let gens = dart_gens();
+    let gens = DeviceGenerators::from_host();
 
     let (protocol, device_request) = MintHostProtocol::<AccountTreeConfig>::init(
         &mut rng,
@@ -353,18 +336,11 @@ pub fn gen_mint_split() {
     .unwrap();
     save_scale_v1(MINT_SPLIT_REQUEST, &device_request);
 
-    let req: RegistrationDeviceRequest = load_scale_v1(MINT_SPLIT_REQUEST);
-    let device_response = create_registration_auth_proof(
-        &mut rng,
-        &keys,
-        &req,
-        gens.account_comm_key().sk_gen(),
-        gens.account_comm_key().sk_enc_gen(),
-    )
-    .unwrap();
+    let req: MintDeviceRequest = load_scale_v1(MINT_SPLIT_REQUEST);
+    let device_response = create_mint_auth_proof(&mut rng, &(&keys).into(), &req, &gens).unwrap();
     save_scale_v1(MINT_SPLIT_RESPONSE, &device_response);
 
-    let res: TwoSksDeviceResponse = load_scale_v1(MINT_SPLIT_RESPONSE);
+    let res: AssetMintingDeviceResponse = load_scale_v1(MINT_SPLIT_RESPONSE);
     let root_block = tree.get_block_number().unwrap();
     let proof = protocol
         .finish::<_, ()>(&mut rng, &res, root_block, AccountTreeConfig::parameters())

@@ -27,7 +27,7 @@ pub fn solve_discrete_log_precomputed_batch<G: CurveGroup + Send + Sync + 'stati
     solve_discrete_log_bsgs_precomputed_batch(max, 0, base, targets)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "host_proofs"))]
 mod tests {
     use super::*;
     use ark_pallas::Projective;

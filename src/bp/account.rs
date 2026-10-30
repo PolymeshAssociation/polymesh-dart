@@ -30,6 +30,7 @@ use polymesh_dart_common::NullifierSkGenCounter;
 use super::*;
 use crate::account_reg_split::AccountRegHostProtocol;
 use crate::auth_proofs::create_registration_auth_proof;
+use crate::device::DeviceGenerators;
 use crate::encode::BoundedCanonical;
 use crate::*;
 
@@ -587,7 +588,6 @@ impl<T: DartLimits> AccountAssetRegistrationProof<T> {
         tree_params: &CurveTreeParameters<AccountTreeConfig>,
         pk_t: Option<EncryptionPublicKey>,
     ) -> Result<(Self, AccountAssetState), Error> {
-        let gens = dart_gens();
         let (account_state, rho_randomness) = keys.init_asset_state(asset_id, counter, identity)?;
 
         let (protocol, device_request) = AccountRegHostProtocol::init(
@@ -601,10 +601,9 @@ impl<T: DartLimits> AccountAssetRegistrationProof<T> {
 
         let device_response = create_registration_auth_proof(
             rng,
-            keys,
+            &keys.into(),
             &device_request,
-            gens.account_comm_key().sk_gen(),
-            gens.account_comm_key().sk_enc_gen(),
+            &DeviceGenerators::from_host_given_pc_gens(tree_params.even_parameters.pc_gens()),
         )?;
 
         let proof = protocol.finish(rng, &device_response, counter, tree_params)?;

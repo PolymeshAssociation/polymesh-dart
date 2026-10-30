@@ -14,7 +14,7 @@ use bounded_collections::BoundedVec;
 use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
 use scale_info::TypeInfo;
 
-use rand_core::{CryptoRng, RngCore, SeedableRng as _};
+use rand_core::{CryptoRng, RngCore};
 
 use super::encode::*;
 use super::*;
@@ -22,6 +22,7 @@ use crate::auth_proofs::{
     create_fee_account_auth_proof, create_fee_account_registration_auth_proof,
     create_fee_payment_auth_proof,
 };
+use crate::device::DeviceGenerators;
 use crate::fee_split::{FeeRegHostProtocol, FeeTopupHostProtocol};
 use crate::*;
 use dock_crypto_utils::randomized_mult_checker::{
@@ -60,6 +61,23 @@ impl FeeAccountState {
         balance: Balance,
     ) -> Result<Self, Error> {
         let bp_state = BPFeeAccountState::new(rng, account.get_affine()?, balance, asset_id)?;
+        bp_state.try_into()
+    }
+
+    pub fn new_given_randomness(
+        account: &AccountPublicKey,
+        asset_id: AssetId,
+        balance: Balance,
+        initial_rho: PallasScalar,
+        initial_randomness: PallasScalar,
+    ) -> Result<Self, Error> {
+        let bp_state = BPFeeAccountState::new_given_randomness(
+            account.get_affine()?,
+            balance,
+            asset_id,
+            initial_rho,
+            initial_randomness,
+        )?;
         bp_state.try_into()
     }
 
@@ -237,6 +255,26 @@ impl FeeAccountAssetState {
         })
     }
 
+    pub fn new_given_randomness(
+        account: &AccountPublicKey,
+        asset_id: AssetId,
+        balance: Balance,
+        initial_rho: PallasScalar,
+        initial_randomness: PallasScalar,
+    ) -> Result<Self, Error> {
+        let current_state = FeeAccountState::new_given_randomness(
+            account,
+            asset_id,
+            balance,
+            initial_rho,
+            initial_randomness,
+        )?;
+        Ok(Self {
+            current_state,
+            pending_state: None,
+        })
+    }
+
     pub fn current_commitment(&self) -> Result<FeeAccountStateCommitment, Error> {
         self.current_state.commitment()
     }
@@ -319,21 +357,29 @@ impl<T: DartLimits> FeeAccountRegistrationProof<T> {
         balance: Balance,
         identity: &[u8],
     ) -> Result<(Self, FeeAccountAssetState), Error> {
-        let gens = dart_gens();
         let account_state = FeeAccountAssetState::new(rng, &key.public, asset_id, balance)?;
+        let proof = Self::new_given_state(rng, key, &account_state, identity)?;
+        Ok((proof, account_state))
+    }
 
+    /// Registration proof for `account_state`, e.g. from `AccountKeyPair::fee_account_state`.
+    pub fn new_given_state<R: RngCore + CryptoRng>(
+        rng: &mut R,
+        key: &AccountKeyPair,
+        account_state: &FeeAccountAssetState,
+        identity: &[u8],
+    ) -> Result<Self, Error> {
         let (protocol, device_request) =
-            FeeRegHostProtocol::init(rng, &key.public, &account_state, identity)?;
+            FeeRegHostProtocol::init(rng, &key.public, account_state, identity)?;
 
         let device_response = create_fee_account_registration_auth_proof(
             rng,
-            key,
+            &key.into(),
             &device_request,
-            gens.account_comm_key().sk_gen(),
+            &DeviceGenerators::from_dart_gens()?,
         )?;
 
-        let proof = protocol.finish(&device_response)?;
-        Ok((proof, account_state))
+        protocol.finish(&device_response)
     }
 
     /// Verifies the account asset registration proof against the provided public key, asset ID, and account state commitment.
@@ -380,7 +426,7 @@ impl<T: DartLimits> BatchedFeeAccountRegistrationProof<T> {
             .into_par_iter()
             .zip(seeds)
             .map(|((account, asset_id, balance), seed)| {
-                let mut rng = rand_chacha::ChaCha20Rng::from_seed(seed);
+                let mut rng = rng_from_seed(seed);
                 FeeAccountRegistrationProof::new(&mut rng, account, *asset_id, *balance, identity)
             })
             .collect::<Result<Vec<_>, Error>>()?;
@@ -411,7 +457,7 @@ impl<T: DartLimits> BatchedFeeAccountRegistrationProof<T> {
         for (account, asset_id, balance) in registrations {
             let mut seed = [0u8; 32];
             rng.fill_bytes(&mut seed);
-            let mut rng = rand_chacha::ChaCha20Rng::from_seed(seed);
+            let mut rng = rng_from_seed(seed);
             let (proof, state) =
                 FeeAccountRegistrationProof::new(&mut rng, account, *asset_id, *balance, identity)?;
             proofs
@@ -509,9 +555,9 @@ impl<
 
         let device_response = create_fee_account_auth_proof(
             rng,
-            key,
+            &key.into(),
             &device_request,
-            dart_gens().account_comm_key().sk_gen(),
+            &DeviceGenerators::from_dart_gens()?,
         )?;
 
         let proof = protocol.finish(rng, &device_response, tree_lookup.params())?;
@@ -626,7 +672,7 @@ impl<
             .par_iter_mut()
             .zip(seeds)
             .map(|((key, amount, account_state), seed)| {
-                let mut rng = rand_chacha::ChaCha20Rng::from_seed(seed);
+                let mut rng = rng_from_seed(seed);
                 FeeAccountTopupProof::new(&mut rng, key, account_state, *amount, ctx, &tree_lookup)
             })
             .collect::<Result<Vec<_>, Error>>()?;
@@ -959,16 +1005,14 @@ impl<
         let (protocol, device_request) =
             FeePaymentHostProtocol::<C>::init(rng, account_state, amount, ctx, &tree_lookup)?;
 
-        let gens = dart_gens();
         let tree_params = tree_lookup.params();
-        let comm_re_rand_gen = tree_params.even_parameters.sl_params.pc_gens().B_blinding;
         let device_response = create_fee_payment_auth_proof(
             rng,
-            key,
+            &key.into(),
             &device_request,
-            gens.account_comm_key().sk_gen(),
-            comm_re_rand_gen,
-            tree_params.even_parameters.sl_params.pc_gens().B,
+            &DeviceGenerators::from_host_given_pc_gens(
+                tree_params.even_parameters.sl_params.pc_gens(),
+            ),
         )?;
 
         let proof = protocol.finish(rng, &device_response, root_block, tree_params)?;
@@ -1104,6 +1148,7 @@ pub const FEE_PAYMENT_BATCH_BROADCAST_CTX: &[u8] = b"FeePaymentBatchBroadcast";
 mod tests {
     use super::*;
     use crate::curve_tree::ProverCurveTree;
+    use rand_core::SeedableRng;
 
     #[test]
     fn fee_payment_encoded_size_by_tree_height() {
@@ -1152,6 +1197,57 @@ mod tests {
                 "fee account leaf proof path at height {height}",
             );
         }
+    }
+
+    #[test]
+    fn fee_account_state_derived_from_key() {
+        let mut rng = rand_chacha::ChaCha20Rng::from_seed([7; 32]);
+        let keys = AccountKeys::rand(&mut rng).unwrap();
+        let ctx = b"fee-derived-state";
+        let (asset_id, balance, counter) = (FEE_ASSET_ID, 1000, 0);
+
+        let state = keys
+            .acct
+            .fee_account_state(asset_id, balance, counter, ctx)
+            .unwrap();
+        let again = keys
+            .acct
+            .fee_account_state(asset_id, balance, counter, ctx)
+            .unwrap();
+        assert_eq!(state.current_state, again.current_state);
+
+        let (initial_rho, initial_randomness) = keys
+            .acct
+            .derive_fee_account_randomness(ctx, asset_id, counter);
+        assert_eq!(
+            state.current_state.initial_rho.decode().unwrap(),
+            initial_rho
+        );
+        assert_eq!(
+            state.current_state.initial_randomness.decode().unwrap(),
+            initial_randomness
+        );
+
+        // Same input as a regular account yields unrelated values.
+        let (randomness, rho_randomness) =
+            keys.acct.derive_account_randomness(ctx, asset_id, counter);
+        assert_ne!(initial_randomness, randomness);
+        assert_ne!(initial_rho, rho_randomness);
+
+        let next = keys
+            .acct
+            .fee_account_state(asset_id, balance, counter + 1, ctx)
+            .unwrap();
+        assert_ne!(state.current_state, next.current_state);
+
+        let proof =
+            FeeAccountRegistrationProof::<()>::new_given_state(&mut rng, &keys.acct, &state, ctx)
+                .unwrap();
+        assert_eq!(
+            proof.account_state_commitment,
+            state.current_commitment().unwrap()
+        );
+        proof.verify(ctx).unwrap();
     }
 }
 

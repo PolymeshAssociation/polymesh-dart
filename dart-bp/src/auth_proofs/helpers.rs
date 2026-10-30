@@ -1,5 +1,5 @@
 use crate::Error;
-use crate::account::state::{AccountCommitmentKeyTrait, NUM_GENERATORS};
+use crate::auth_proofs::account_comm_key::{AccountCommitmentKeyTrait, NUM_GENERATORS};
 use crate::error::Result;
 #[cfg(not(feature = "ignore_prover_input_sanitation"))]
 use ark_ec::VariableBaseMSM;

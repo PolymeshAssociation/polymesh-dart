@@ -1,10 +1,11 @@
-use crate::account::common::leg_link::ensure_expected_leg_link_responses;
-use crate::account::state::NUM_GENERATORS;
-use crate::account::{AccountCommitmentKeyTrait, LegProverConfig, LegVerifierConfig};
+use crate::auth_proofs::account_comm_key::{AccountCommitmentKeyTrait, NUM_GENERATORS};
 use crate::auth_proofs::helpers::{
     ensure_correct_updated_account_commitment, init_acc_comm_protocol,
     init_rand_new_comm_anchor_protocol, resp_acc_comm, verify_acc_comm,
     verify_rand_new_comm_anchor,
+};
+use crate::auth_proofs::leg::{
+    LegProverConfig, LegVerifierConfig, ensure_expected_leg_link_responses,
 };
 use crate::auth_proofs::{AUTH_TXN_LABEL, DeviceTxnType, NULLIFIER_LABEL};
 use crate::{
@@ -1068,7 +1069,7 @@ mod serialization {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "host_proofs"))]
 mod tests {
     use super::*;
     use crate::account::{AccountState, AccountStateCommitment, PartyEphemeralPublicKey};

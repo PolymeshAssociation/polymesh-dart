@@ -36,19 +36,28 @@ macro_rules! assert_err {
     };
 }
 
+#[cfg(feature = "host_proofs")]
 use crate::leg::{
     AssetIdEncryption, EphemeralPublicKey, Leg, LegEncCoreAndEphKeys, LegEncryption,
     LegEncryptionCore, LegEncryptionRandomness, ReceiverEphemeralPublicKey,
     SenderEphemeralPublicKey,
 };
+#[cfg(feature = "host_proofs")]
 use ark_ec::CurveGroup;
+#[cfg(feature = "host_proofs")]
 use ark_ff::Field;
+#[cfg(feature = "host_proofs")]
 use ark_pallas::{Affine as PallasA, Fr as PallasFr};
+#[cfg(feature = "host_proofs")]
 use ark_std::UniformRand;
+#[cfg(feature = "host_proofs")]
 use ark_std::{vec, vec::Vec};
+#[cfg(feature = "host_proofs")]
 use polymesh_dart_common::{AssetId, Balance};
+#[cfg(feature = "host_proofs")]
 use rand_core::CryptoRngCore;
 
+#[cfg(feature = "host_proofs")]
 /// Leg encryption with sender point `p_s`, receiver point `p_r`, full visibility, auditor keys
 /// `auditors` and no mediators. The asset-id is revealed when `rand.r4` is `None`.
 pub(crate) fn leg_encryption_with_party_points(
@@ -107,6 +116,7 @@ pub(crate) fn leg_encryption_with_party_points(
     }
 }
 
+#[cfg(feature = "host_proofs")]
 /// Leg whose sender (resp. receiver) point is `P = ek + enc_gen * (sk_enc * delta)` with
 /// `ek = enc_key_gen * sk_enc`, and whose randomness `r_1` (resp. `r_2`) is `sk_enc`. `sk_enc` opens
 /// the participant ciphertext to `ek`, the amount to `opened_amount` and the asset-id to

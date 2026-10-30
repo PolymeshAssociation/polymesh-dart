@@ -15,6 +15,7 @@ use ark_std::{format, string::String, vec::Vec};
 
 use crate::*;
 
+#[cfg(feature = "host_proofs")]
 macro_rules! impl_scale_and_type_info {
      ( $type:ident as $as_type:ident $( < $($trailing:tt)* )? ) => {
         impl_scale_and_type_info!(@impl_ {
@@ -354,6 +355,7 @@ impl<'a, P: SWCurveConfig> EncodeAsRef<'a, Affine<P>> for CompressedAffine {
     type RefType = CompressedAffine;
 }
 
+#[cfg(feature = "host_proofs")]
 impl TypeInfo for DartBPGenerators {
     type Identity = Self;
 
@@ -371,6 +373,7 @@ impl TypeInfo for DartBPGenerators {
     }
 }
 
+#[cfg(feature = "host_proofs")]
 impl TypeInfo for AccountCommitmentKey {
     type Identity = Self;
 
@@ -394,9 +397,11 @@ impl TypeInfo for AccountCommitmentKey {
 }
 
 // TypeInfo, SCALE encoding and decoding for `AccountSecretKey`.
+#[cfg(feature = "host_proofs")]
 impl_scale_and_type_info!(AccountSecretKey as Array32);
 
 // TypeInfo, SCALE encoding and decoding for `EncryptionSecretKey`.
+#[cfg(feature = "host_proofs")]
 impl_scale_and_type_info!(EncryptionSecretKey as Array32);
 
 /// Deserialize a type `T` object from given bytes. Error if the bytes cannot be deserialized

@@ -7,13 +7,12 @@ use scale_info::TypeInfo;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::{string::String, vec::Vec};
 
-use blake2::Blake2s256;
-
 use bounded_collections::BoundedVec;
-use digest::Digest;
-use rand_core::{CryptoRng, RngCore, SeedableRng as _};
+use rand_core::{CryptoRng, RngCore};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
+use polymesh_dart_bp::auth_proofs::keys::FEE_ACCOUNT_RANDOMNESS_DST;
+use polymesh_dart_bp::keys::ACCOUNT_RANDOMNESS_DST;
 use polymesh_dart_bp::{account_registration::MasterSeed as BPMasterSeed, keys as bp_keys};
 use polymesh_dart_common::NullifierSkGenCounter;
 
@@ -232,6 +231,46 @@ impl AccountKeyPair {
         asset_id: AssetId,
         counter: NullifierSkGenCounter,
     ) -> (PallasScalar, PallasScalar) {
+        self.derive_randomness(ACCOUNT_RANDOMNESS_DST, identity, asset_id, counter)
+    }
+
+    /// Derives fee account `(initial_rho, initial_randomness)` from the same input as
+    /// `derive_account_randomness` under a separate domain.
+    pub fn derive_fee_account_randomness(
+        &self,
+        identity: &[u8],
+        asset_id: AssetId,
+        counter: NullifierSkGenCounter,
+    ) -> (PallasScalar, PallasScalar) {
+        self.derive_randomness(FEE_ACCOUNT_RANDOMNESS_DST, identity, asset_id, counter)
+    }
+
+    /// Creates a fee account state from `derive_fee_account_randomness`.
+    pub fn fee_account_state(
+        &self,
+        asset_id: AssetId,
+        balance: Balance,
+        counter: NullifierSkGenCounter,
+        identity: &[u8],
+    ) -> Result<FeeAccountAssetState, Error> {
+        let (initial_rho, initial_randomness) =
+            self.derive_fee_account_randomness(identity, asset_id, counter);
+        FeeAccountAssetState::new_given_randomness(
+            &self.public,
+            asset_id,
+            balance,
+            initial_rho,
+            initial_randomness,
+        )
+    }
+
+    fn derive_randomness(
+        &self,
+        dst: &[u8],
+        identity: &[u8],
+        asset_id: AssetId,
+        counter: NullifierSkGenCounter,
+    ) -> (PallasScalar, PallasScalar) {
         // For creating randomness, use `secret_key//identity//asset_id//counter_n`
         let mut extended_seed = self.secret.encode();
         extended_seed.extend(DERIVE_SEPARATOR);
@@ -241,9 +280,7 @@ impl AccountKeyPair {
         extended_seed.extend(DERIVE_SEPARATOR);
         extended_seed.extend(counter.to_le_bytes());
         // Need two independent field elements, `randomness`, `rho_randomness`
-        let hasher = <DefaultFieldHasher<Blake2b512> as HashToField<PallasScalar>>::new(
-            b"commitment and rho randomness",
-        );
+        let hasher = <DefaultFieldHasher<Blake2b512> as HashToField<PallasScalar>>::new(dst);
         let [randomness, rho_randomness]: [PallasScalar; 2] = hasher.hash_to_field(&extended_seed);
         extended_seed.zeroize();
         (randomness, rho_randomness)
@@ -298,7 +335,7 @@ pub struct AccountPublicKeys {
 }
 
 /// MasterSeed for generating account keys
-#[derive(Clone, Debug, Zeroize, ZeroizeOnDrop)]
+#[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub struct MasterSeed(BPMasterSeed);
 
 impl MasterSeed {
@@ -350,10 +387,9 @@ impl AccountKeys {
         Ok(Self { enc, acct })
     }
 
-    /// Genreates a new set of account keys using the provided string as a seed.
+    /// Generates a new set of account keys using the provided string as a seed.
     pub fn from_seed(seed: &str) -> Result<Self, Error> {
-        let mut rng =
-            rand_chacha::ChaCha20Rng::from_seed(Blake2s256::digest(seed.as_bytes()).into());
+        let mut rng = rng_from_seed_str(seed);
         Self::rand(&mut rng)
     }
 
@@ -434,6 +470,27 @@ impl<T: DartLimits> AccountRegistrationProof<T> {
         })
     }
 
+    /// Assemble the proof from a device response. The host holds no secret key.
+    /// Carries the same public keys as [`Self::new`].
+    pub fn assemble(
+        response: super::key_reg_split::KeyRegistrationDeviceResponse,
+    ) -> Result<Self, Error> {
+        let mut bounded_accounts = BoundedVec::with_bounded_capacity(response.accounts.len());
+        for (acct, enc) in &response.accounts {
+            bounded_accounts
+                .try_push(AccountPublicKeys {
+                    acct: AccountPublicKey(*acct),
+                    enc: EncryptionPublicKey(*enc),
+                })
+                .map_err(|_| Error::TooManyPublicInputsInProof)?;
+        }
+        let proof = response.inner.decode()?;
+        Ok(Self {
+            accounts: bounded_accounts,
+            inner: BoundedCanonical::wrap(&proof)?,
+        })
+    }
+
     /// Verify the account registration proof.
     pub fn verify(&self, identity: &[u8]) -> Result<(), Error> {
         let proof = self.inner.decode()?;
@@ -490,6 +547,24 @@ impl<T: DartLimits> EncryptionKeyRegistrationProof<T> {
         let proof =
             bp_keys::AudMedRegProof::new(rng, key_pairs, identity, dart_gens().enc_key_gen())?;
 
+        Ok(Self {
+            keys: bounded_keys,
+            inner: BoundedCanonical::wrap(&proof)?,
+        })
+    }
+
+    /// Assemble the proof from a device response. The host holds no secret key.
+    /// Carries the same public keys as [`Self::new`].
+    pub fn assemble(
+        response: key_reg_split::EncryptionKeyRegistrationDeviceResponse,
+    ) -> Result<Self, Error> {
+        let mut bounded_keys = BoundedVec::with_bounded_capacity(response.keys.len());
+        for enc in &response.keys {
+            bounded_keys
+                .try_push(EncryptionPublicKey(*enc))
+                .map_err(|_| Error::TooManyPublicInputsInProof)?;
+        }
+        let proof = response.inner.decode()?;
         Ok(Self {
             keys: bounded_keys,
             inner: BoundedCanonical::wrap(&proof)?,

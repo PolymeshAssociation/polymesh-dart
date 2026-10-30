@@ -1,3 +1,5 @@
+use crate::Error;
+use crate::auth_proofs::account_comm_key::AccountCommitmentKeyTrait;
 use crate::auth_proofs::{AUTH_TXN_LABEL, DeviceTxnType, NULLIFIER_LABEL};
 use crate::{
     ACCOUNT_COMMITMENT_LABEL, NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL, TXN_CHALLENGE_LABEL,
@@ -7,9 +9,11 @@ use ark_ec::AffineRepr;
 use ark_ec::CurveGroup;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::UniformRand;
+use ark_std::string::ToString;
 use ark_std::vec::Vec;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
+use polymesh_dart_common::{AssetId, Balance};
 use rand_core::CryptoRngCore;
 use schnorr_pok::discrete_log::{
     PokDiscreteLogProtocol, PokPedersenCommitment, PokPedersenCommitmentProtocol,
@@ -261,5 +265,74 @@ impl<G: AffineRepr> AuthProofFeePayment<G> {
         let challenge = transcript.challenge_scalar::<G::ScalarField>(TXN_CHALLENGE_LABEL);
 
         self.verify_given_challenge(&sk_gen, &comm_re_rand_gen, &anchor_gen, &challenge, rmc)
+    }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]
+pub struct FeeAccountStateCommitment<G: AffineRepr>(pub G);
+
+/// Generators `(g_rho + g_current_rho, g_randomness + g_current_randomness)` of the registration proof.
+pub(crate) fn reg_comm_gens<G: AffineRepr>(
+    account_comm_key: &impl AccountCommitmentKeyTrait<G>,
+) -> (G, G) {
+    (
+        (account_comm_key.rho_gen().into_group() + account_comm_key.current_rho_gen())
+            .into_affine(),
+        (account_comm_key.randomness_gen().into_group()
+            + account_comm_key.current_randomness_gen())
+        .into_affine(),
+    )
+}
+
+/// The largest divisor of `p - 1` with all prime factors below `10^7`, for the Pallas scalar field `p`.
+/// `p - 1 = 2^32 * 3^2 * 1709 * 24859 * T` where `T` has no prime factor below `10^7`.
+pub const PALLAS_FR_SMOOTH_ORDER: [u64; 1] = [0x16ca4b3700000000];
+
+/// Device check for a split fee account registration. Rejects unless
+/// `account_commitment = pk + g_balance * balance + g_asset_id * asset_id + (g_rho + g_current_rho) * initial_rho + (g_randomness + g_current_randomness) * initial_randomness`,
+/// `initial_rho^smooth_order != 1` and `initial_randomness != 0`. With `smooth_order` the smooth
+/// part of `p - 1`, the order of `initial_rho` has a prime factor outside it, so the nullifiers
+/// `g_current_rho * initial_rho^k` don't repeat within that many state changes.
+pub fn ensure_valid_fee_registration_opening<G: AffineRepr>(
+    account_commitment: &FeeAccountStateCommitment<G>,
+    pk: &G,
+    asset_id: AssetId,
+    balance: Balance,
+    initial_rho: G::ScalarField,
+    initial_randomness: G::ScalarField,
+    smooth_order: &[u64],
+    account_comm_key: &impl AccountCommitmentKeyTrait<G>,
+) -> Result<()> {
+    #[cfg(feature = "ignore_prover_input_sanitation")]
+    {
+        return Ok(());
+    }
+
+    #[cfg(not(feature = "ignore_prover_input_sanitation"))]
+    {
+        use ark_ff::Field;
+        use ark_std::{One, Zero};
+        if initial_rho.is_zero() || initial_rho.pow(smooth_order).is_one() {
+            return Err(Error::ProofGenerationError(
+                "initial_rho has small multiplicative order".to_string(),
+            ));
+        }
+        if initial_randomness.is_zero() {
+            return Err(Error::ProofGenerationError(
+                "initial_randomness is zero".to_string(),
+            ));
+        }
+        let (rho_gen, randomness_gen) = reg_comm_gens(account_comm_key);
+        let expected = pk.into_group()
+            + account_comm_key.balance_gen() * G::ScalarField::from(balance)
+            + account_comm_key.asset_id_gen() * G::ScalarField::from(asset_id)
+            + rho_gen * initial_rho
+            + randomness_gen * initial_randomness;
+        if expected.into_affine() != account_commitment.0 {
+            return Err(Error::ProofGenerationError(
+                "Fee account commitment does not match the registration opening".to_string(),
+            ));
+        }
+        Ok(())
     }
 }

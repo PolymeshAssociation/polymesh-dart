@@ -1,7 +1,7 @@
 use crate::error::{Error, Result};
-use crate::util::add_slice_to_transcript;
 use crate::{NONCE_LABEL, TXN_CHALLENGE_LABEL, add_to_transcript};
 use ark_ec::{AffineRepr, CurveGroup, VariableBaseMSM};
+use ark_ff::field_hashers::{DefaultFieldHasher, HashToField};
 use ark_ff::{One, Zero};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::{
@@ -10,12 +10,36 @@ use ark_std::{
     {vec, vec::Vec},
 };
 use core::ops::Neg;
+use dock_crypto_utils::aliases::FullDigest;
+use dock_crypto_utils::hashing_utils::hash_to_field;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
+use polymesh_dart_common::{AssetId, NullifierSkGenCounter, SkGenCounter};
 use rand_core::CryptoRngCore;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 pub const T_SIG_KEY: &'static [u8; 9] = b"t_sig_key";
 pub const T_ENC_KEY: &'static [u8; 9] = b"t_enc_key";
+
+/// Add a slice to transcript by first writing the slice length (as index) and then each element
+fn add_slice_to_transcript<T: CanonicalSerialize>(
+    transcript: &mut MerlinTranscript,
+    label: &'static [u8],
+    slice: &[T],
+) -> Result<()> {
+    let l = slice.len() as u32;
+    transcript.append(label, &l.to_le_bytes());
+
+    let mut buf = vec![];
+    for (i, item) in slice.iter().enumerate() {
+        // Write the index and then the item
+        buf.extend_from_slice(&(i as u32).to_le_bytes());
+        item.serialize_compressed(&mut buf)?;
+        transcript.append(label, &buf);
+        buf.clear()
+    }
+
+    Ok(())
+}
 
 #[derive(Copy, Clone, Debug, CanonicalSerialize, CanonicalDeserialize, PartialEq, Eq, Hash)]
 pub struct VerKey<PK: AffineRepr>(pub PK);
@@ -49,14 +73,20 @@ pub struct EncKey<PK: AffineRepr>(pub PK);
 )]
 pub struct DecKey<PK: AffineRepr>(pub PK::ScalarField);
 
+pub fn rand_non_zero<F: Zero + UniformRand, R: CryptoRngCore>(rng: &mut R) -> F {
+    loop {
+        let f = F::rand(rng);
+        if !f.is_zero() {
+            return f;
+        }
+    }
+}
+
 pub fn keygen_sig<R: CryptoRngCore, PK: AffineRepr>(
     rng: &mut R,
     j: PK,
 ) -> (SigKey<PK>, VerKey<PK>) {
-    let mut s = PK::ScalarField::rand(rng);
-    while s.is_zero() {
-        s = PK::ScalarField::rand(rng);
-    }
+    let s = rand_non_zero::<PK::ScalarField, R>(rng);
     keygen_sig_given_sk(s, j)
 }
 
@@ -70,10 +100,7 @@ pub fn keygen_enc<R: CryptoRngCore, PK: AffineRepr>(
     rng: &mut R,
     g: PK,
 ) -> (DecKey<PK>, EncKey<PK>) {
-    let mut s = PK::ScalarField::rand(rng);
-    while s.is_zero() {
-        s = PK::ScalarField::rand(rng);
-    }
+    let s = rand_non_zero::<PK::ScalarField, R>(rng);
     keygen_enc_given_sk(s, g)
 }
 
@@ -320,17 +347,119 @@ impl<G: AffineRepr> AudMedRegProof<G> {
     }
 }
 
+const SEPARATOR: &[u8; 2] = b"//";
+
+/// Hash-to-field domain for non-fee account `(initial_rho, initial_randomness)`.
+pub const ACCOUNT_RANDOMNESS_DST: &[u8] = b"commitment and rho randomness";
+
+/// Hash-to-field domain for fee account `(initial_rho, initial_randomness)`.
+pub const FEE_ACCOUNT_RANDOMNESS_DST: &[u8] = b"fee account rho and commitment randomness";
+
+/// Seed a Ledger-class device derives account keys and per-account randomness from, so the device
+/// never has to persist secret keys.
+#[derive(Clone, CanonicalSerialize, CanonicalDeserialize, Zeroize, ZeroizeOnDrop)]
+pub struct MasterSeed(Vec<u8>);
+
+impl MasterSeed {
+    pub fn new(seed: Vec<u8>) -> Self {
+        Self(seed)
+    }
+
+    /// Doesn't include asset-id to allow accounts to share secret keys
+    pub fn derive_keys<G: AffineRepr, D: FullDigest>(
+        &self,
+        path: &[u8],
+        counter: SkGenCounter,
+        j: G,
+        g: G,
+    ) -> ((SigKey<G>, VerKey<G>), (DecKey<G>, EncKey<G>)) {
+        // For creating secret keys, use `seed//path//counter`
+        let mut extended_seed = self.0.to_vec();
+        extended_seed.extend(SEPARATOR);
+        extended_seed.extend_from_slice(path);
+        extended_seed.extend(SEPARATOR);
+        extended_seed.extend(counter.to_le_bytes());
+
+        let sig_sk = hash_to_field::<G::ScalarField, D>(b"Signing key", &extended_seed);
+        let enc_sk = hash_to_field::<G::ScalarField, D>(b"Encryption key", &extended_seed);
+
+        let (sk, vk) = keygen_sig_given_sk(sig_sk, j);
+        let (dk, ek) = keygen_enc_given_sk(enc_sk, g);
+
+        extended_seed.zeroize();
+        ((sk, vk), (dk, ek))
+    }
+
+    /// Returns `(randomness, rho_randomness)` where `randomness` is for the account commitment
+    /// and `rho_randomness` is used to derive `rho`
+    pub fn derive_account_randomness<G: AffineRepr, D: FullDigest>(
+        &self,
+        path: &[u8],
+        counter_s: SkGenCounter,
+        asset_id: AssetId,
+        counter: NullifierSkGenCounter,
+    ) -> (G::ScalarField, G::ScalarField) {
+        self.derive_randomness::<G, D>(ACCOUNT_RANDOMNESS_DST, path, counter_s, asset_id, counter)
+    }
+
+    /// Returns `(initial_rho, initial_randomness)` for a fee account, from the same input as
+    /// `derive_account_randomness` under a separate domain.
+    pub fn derive_fee_account_randomness<G: AffineRepr, D: FullDigest>(
+        &self,
+        path: &[u8],
+        counter_s: SkGenCounter,
+        asset_id: AssetId,
+        counter: NullifierSkGenCounter,
+    ) -> (G::ScalarField, G::ScalarField) {
+        self.derive_randomness::<G, D>(
+            FEE_ACCOUNT_RANDOMNESS_DST,
+            path,
+            counter_s,
+            asset_id,
+            counter,
+        )
+    }
+
+    fn derive_randomness<G: AffineRepr, D: FullDigest>(
+        &self,
+        dst: &[u8],
+        path: &[u8],
+        counter_s: SkGenCounter,
+        asset_id: AssetId,
+        counter: NullifierSkGenCounter,
+    ) -> (G::ScalarField, G::ScalarField) {
+        // For creating randomness, use `seed//path//counter_s//asset_id//counter_n`
+        let mut extended_seed = self.0.to_vec();
+        extended_seed.extend(SEPARATOR);
+        extended_seed.extend_from_slice(path);
+        extended_seed.extend(SEPARATOR);
+        extended_seed.extend(counter_s.to_le_bytes());
+        extended_seed.extend(SEPARATOR);
+        extended_seed.extend(asset_id.to_le_bytes().as_slice());
+        extended_seed.extend(SEPARATOR);
+        extended_seed.extend(counter.to_le_bytes());
+        // Need two independent field elements, `randomness`, `rho_randomness`
+        let hasher = <DefaultFieldHasher<D> as HashToField<G::ScalarField>>::new(dst);
+        let [randomness, rho_randomness]: [G::ScalarField; 2] =
+            hasher.hash_to_field(&extended_seed);
+        extended_seed.zeroize();
+        (randomness, rho_randomness)
+    }
+}
+
 #[cfg(test)]
 pub mod tests {
     use super::*;
     use crate::keys::{keygen_enc, keygen_sig};
+    use ark_std::rand::{SeedableRng, rngs::StdRng};
+    use blake2::Blake2b512;
 
     type PallasA = ark_pallas::Affine;
 
     #[test]
     fn investor_key_reg_proof() {
         // Happy path for the investor (sig+enc) key-registration proof, plus rejection when given too few keys, a wrong pubkey, or swapped generators.
-        let mut rng = rand::thread_rng();
+        let mut rng = StdRng::seed_from_u64(0);
 
         let num_investors = 5;
 
@@ -375,7 +504,7 @@ pub mod tests {
     #[test]
     fn investor_key_reg_proof_order() {
         // Like investor_key_reg_proof but checks the proof binds the ORDER of the keys: swapping two pubkeys, or duplicating one, must fail verification.
-        let mut rng = rand::thread_rng();
+        let mut rng = StdRng::seed_from_u64(0);
         let nonce = b"test_nonce_1";
 
         for _ in 0..5 {
@@ -416,7 +545,7 @@ pub mod tests {
     #[test]
     fn aud_med_key_reg_proof() {
         // Happy path for the auditor/mediator (enc-key-only) registration proof, plus rejection on too few keys, a wrong pubkey, or a wrong generator.
-        let mut rng = rand::thread_rng();
+        let mut rng = StdRng::seed_from_u64(0);
 
         let num_aud_med = 5;
 
@@ -457,7 +586,7 @@ pub mod tests {
     #[test]
     fn aud_med_key_reg_proof_order() {
         // Like aud_med_key_reg_proof but checks the proof binds key ORDER: swapping two pubkeys, or duplicating one, must fail verification.
-        let mut rng = rand::thread_rng();
+        let mut rng = StdRng::seed_from_u64(0);
         let nonce = b"test_nonce_3";
 
         for _ in 0..5 {
@@ -487,5 +616,96 @@ pub mod tests {
             let result = proof.verify(duplicated_public_keys, nonce, enc_key_gen);
             assert!(result.is_err());
         }
+    }
+
+    #[test]
+    fn master_seed_derivation_deterministic_and_domain_separated() {
+        // Seed-derived keys/randomness are deterministic: same (seed,path,counter) reproduces identical output, and changing seed, path,
+        // or counter yields different keys/randomness — domain separation across the derivation inputs.
+        let mut rng = StdRng::seed_from_u64(0);
+
+        let asset_id = 1;
+        let counter_s = 1;
+        let counter_n = 1;
+
+        let seed1 = MasterSeed::new(b"test_seed".to_vec());
+        let seed2 = MasterSeed::new(b"different_seed".to_vec());
+
+        let j = PallasA::rand(&mut rng);
+        let g = PallasA::rand(&mut rng);
+
+        let result1 = seed1.derive_keys::<PallasA, Blake2b512>(b"path", counter_s, j, g);
+        let result2 = seed1.derive_keys::<PallasA, Blake2b512>(b"path", counter_s, j, g);
+        assert_eq!(result1, result2);
+
+        // Same seed, different path
+        let result3 = seed1.derive_keys::<PallasA, Blake2b512>(b"path1", counter_s, j, g);
+        assert_ne!(result1, result3);
+
+        // Same seed, same path, different counter
+        let result4 = seed1.derive_keys::<PallasA, Blake2b512>(b"path", counter_s + 1, j, g);
+        assert_ne!(result1, result4);
+
+        // Different seed, same path and counter
+        let result5 = seed2.derive_keys::<PallasA, Blake2b512>(b"path", counter_s, j, g);
+        assert_ne!(result1, result5);
+
+        // Returns (randomness, rho_randomness) tuple
+        let rand1 = seed1.derive_account_randomness::<PallasA, Blake2b512>(
+            b"path", counter_s, asset_id, counter_n,
+        );
+        let rand2 = seed1.derive_account_randomness::<PallasA, Blake2b512>(
+            b"path", counter_s, asset_id, counter_n,
+        );
+        assert_eq!(rand1, rand2);
+
+        // Different counter
+        let rand3 = seed1.derive_account_randomness::<PallasA, Blake2b512>(
+            b"path",
+            counter_s,
+            asset_id,
+            counter_n + 1,
+        );
+        assert_ne!(rand1, rand3);
+
+        let rand4 = seed1.derive_account_randomness::<PallasA, Blake2b512>(
+            b"path",
+            counter_s + 1,
+            asset_id,
+            counter_n,
+        );
+        assert_ne!(rand1, rand4);
+
+        let rand5 = seed1.derive_account_randomness::<PallasA, Blake2b512>(
+            b"path1", counter_s, asset_id, counter_n,
+        );
+        assert_ne!(rand1, rand5);
+
+        let rand6 = seed2.derive_account_randomness::<PallasA, Blake2b512>(
+            b"path", counter_s, asset_id, counter_n,
+        );
+        assert_ne!(rand1, rand6);
+
+        let fee1 = seed1.derive_fee_account_randomness::<PallasA, Blake2b512>(
+            b"path", counter_s, asset_id, counter_n,
+        );
+        let fee2 = seed1.derive_fee_account_randomness::<PallasA, Blake2b512>(
+            b"path", counter_s, asset_id, counter_n,
+        );
+        assert_eq!(fee1, fee2);
+
+        // Same input as `derive_account_randomness`, separate domain
+        assert_ne!(fee1.0, rand1.0);
+        assert_ne!(fee1.0, rand1.1);
+        assert_ne!(fee1.1, rand1.0);
+        assert_ne!(fee1.1, rand1.1);
+
+        let fee3 = seed1.derive_fee_account_randomness::<PallasA, Blake2b512>(
+            b"path",
+            counter_s,
+            asset_id,
+            counter_n + 1,
+        );
+        assert_ne!(fee1, fee3);
     }
 }

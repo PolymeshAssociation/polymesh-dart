@@ -51,7 +51,12 @@ jobs:
         run: cargo fmt --package polymesh-dart -- --check
 
       - name: Run tests for polymesh-dart crate
-        run: cargo nextest run --release --package polymesh-dart
+        env:
+          CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS: true
+        run: cargo nextest run --release --package polymesh-dart --features hardcoded-key
+
+      - name: Build dart-testing-cli on its own
+        run: cargo build --package dart-testing-cli
 
       - name: Install nightly toolchain
         uses: dtolnay/rust-toolchain@nightly
@@ -84,4 +89,71 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Build for WASM
-        run: cargo build --package polymesh-dart-bp --target wasm32-unknown-unknown --no-default-features
+        run: cargo build --package polymesh-dart-bp --target wasm32-unknown-unknown --no-default-features --features host_proofs
+
+      - name: Build polymesh-dart for WASM
+        run: cargo build --package polymesh-dart --target wasm32-unknown-unknown --no-default-features --features host_proofs
+
+  # The sigma-only auth proofs (`host_proofs` off).
+  embedded-thumbv7em:
+    name: Build auth proofs for thumbv7em-none-eabi (Ledger)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv7em-none-eabi
+
+      - name: Cache cargo registry
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-thumbv7em-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Build auth proofs for thumbv7em-none-eabi
+        run: cargo build --package polymesh-dart-bp --no-default-features --target thumbv7em-none-eabi
+
+      - name: Build device API for thumbv7em-none-eabi
+        run: cargo build --package polymesh-dart --no-default-features --features backend_bp --target thumbv7em-none-eabi
+
+  tee-musl:
+    name: Build auth proofs for ${{ matrix.target }} (TEE)
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [x86_64-unknown-linux-musl, aarch64-unknown-linux-musl]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo registry
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Build auth proofs for ${{ matrix.target }}
+        run: cargo build --package polymesh-dart-bp --no-default-features --features std,asm,parallel --target ${{ matrix.target }}
+
+      - name: Build device API for ${{ matrix.target }}
+        run: cargo build --package polymesh-dart --no-default-features --features std,backend_bp --target ${{ matrix.target }}

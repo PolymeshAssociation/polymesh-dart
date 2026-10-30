@@ -1,11 +1,11 @@
 use crate::account::common::balance::BalanceChangeProof;
 use crate::account::common::balance::BalanceChangeSplitProof;
-use crate::account::common::leg_link::LegVerifierConfig;
 use crate::account::state::{
     ASSET_ID_GEN_INDEX, BALANCE_GEN_INDEX, COUNTER_GEN_INDEX, CURRENT_RANDOMNESS_GEN_INDEX,
     CURRENT_RHO_GEN_INDEX, ID_GEN_INDEX, NUM_GENERATORS, RANDOMNESS_GEN_INDEX, RHO_GEN_INDEX,
 };
 use crate::account::{AccountCommitmentKeyTrait, AccountStateCommitment, CommonStateChangeProof};
+use crate::auth_proofs::leg::LegVerifierConfig;
 use crate::util::{
     bp_gens_vec_for_randomness_relations, enforce_balance_change_verifier,
     enforce_constraints_and_take_challenge_contrib_of_sigma_t_values_for_common_state_change,
