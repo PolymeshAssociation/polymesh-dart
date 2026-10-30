@@ -44,25 +44,54 @@ pub struct AuthSigningKey {
 }
 
 impl AuthSigningKeys {
-    /// Keys `MasterSeed::derive_keys` derives from `seed`, `path` and `counter` with `Blake2b512`.
+    /// Keys `MasterSeed::derive_keys` derives from `seed`, `path` and `counter`.
     /// Equal to the host's `MasterSeed::derive_account_keys(path)` at `counter = 0`.
     pub fn from_master_seed(
         seed: &BPMasterSeed,
         path: &[u8],
         counter: SkGenCounter,
-        gens: &DeviceGenerators,
-    ) -> Self {
-        let ((sk_aff, _), (sk_enc, _)) = seed.derive_keys::<PallasA, blake2::Blake2b512>(
-            path,
-            counter,
-            gens.sig_key_gen(),
-            gens.enc_key_gen(),
-        );
-        Self {
-            sk_aff: sk_aff.0,
-            sk_enc: sk_enc.0,
-        }
+    ) -> Result<Self, Error> {
+        let (sk_aff, sk_enc) = seed.derive_secret_keys::<PallasScalar>(path, counter)?;
+        Ok(Self { sk_aff, sk_enc })
     }
+}
+
+/// `MasterSeed::derive_account_randomness` from `seed`, `path` and `counter_s`.
+pub fn derive_account_randomness(
+    seed: &BPMasterSeed,
+    path: &[u8],
+    counter_s: SkGenCounter,
+    request: &AccountRandomnessDeviceRequest,
+) -> Result<AccountRandomnessDeviceResponse, Error> {
+    let (randomness, rho_randomness) = seed.derive_account_randomness::<PallasA>(
+        path,
+        counter_s,
+        request.asset_id,
+        request.counter,
+    )?;
+    Ok(AccountRandomnessDeviceResponse {
+        randomness: WrappedCanonical::wrap(&randomness)?,
+        rho_randomness: WrappedCanonical::wrap(&rho_randomness)?,
+    })
+}
+
+/// `MasterSeed::derive_fee_account_randomness` from `seed`, `path` and `counter_s`.
+pub fn derive_fee_account_randomness(
+    seed: &BPMasterSeed,
+    path: &[u8],
+    counter_s: SkGenCounter,
+    request: &AccountRandomnessDeviceRequest,
+) -> Result<FeeAccountRandomnessDeviceResponse, Error> {
+    let (initial_rho, initial_randomness) = seed.derive_fee_account_randomness::<PallasA>(
+        path,
+        counter_s,
+        request.asset_id,
+        request.counter,
+    )?;
+    Ok(FeeAccountRandomnessDeviceResponse {
+        initial_rho: WrappedCanonical::wrap(&initial_rho)?,
+        initial_randomness: WrappedCanonical::wrap(&initial_randomness)?,
+    })
 }
 
 #[cfg(feature = "host_proofs")]
@@ -369,27 +398,47 @@ mod tests {
     #[test]
     fn from_master_seed_known_answer() {
         let seed = BPMasterSeed::new(vec![7u8; 32]);
-        let gens = DeviceGenerators::new().unwrap();
-        let keys = AuthSigningKeys::from_master_seed(&seed, b"", 0, &gens);
+        let keys = AuthSigningKeys::from_master_seed(&seed, b"", 0).unwrap();
         let mut bytes = Vec::new();
         keys.sk_aff.serialize_compressed(&mut bytes).unwrap();
         keys.sk_enc.serialize_compressed(&mut bytes).unwrap();
         assert_eq!(
             hex::encode(bytes),
-            "1790d5f31a11c8f55d73fbb2b2243126ae71f073ee6a63ee95ab5adb336c3f34b1026b6b7e456588fbd5e184df6b6164c0d89020a2a5526cd439df93eb44b423"
+            "8366b68f9fa4a121d8de67c3e4be71373849d1002dbe21957a77c3e0ee4493029900e1bb51bd267c6dfc28b077be5face539354d74bb26b3bed6aea36afaec29"
+        );
+    }
+
+    /// Pins the seed-to-randomness derivation and the response encoding the Ledger app uses.
+    #[test]
+    fn derive_account_randomness_known_answer() {
+        use codec::Encode;
+        let seed = BPMasterSeed::new(vec![7u8; 32]);
+        let request = AccountRandomnessDeviceRequest {
+            asset_id: 5,
+            counter: 3,
+        };
+        let account = derive_account_randomness(&seed, b"", 0, &request).unwrap();
+        let fee = derive_fee_account_randomness(&seed, b"", 0, &request).unwrap();
+        assert_eq!(
+            hex::encode(account.encode()),
+            "805b4f1a1081044299a78562ab3b8b4e9a6669f2e3c765557e1d3573993164a51480b5e8eaf4f978da5735977141343622d80a0f7a9227a73087c942dcd00c923739"
+        );
+        assert_eq!(
+            hex::encode(fee.encode()),
+            "80d2c669287607e8ca90edb19c5e0a6296c9935db919ce871324ae892a6bc7b8378008171ba37958458c19b91865096cbeb3a3d8373a6905f2e1d65aedab818c3a3f"
         );
     }
 
     #[cfg(feature = "host_proofs")]
     #[test]
     fn from_master_seed_matches_host() {
-        let gens = DeviceGenerators::new().unwrap();
         let seed_hex = "0x0707070707070707070707070707070707070707070707070707070707070707";
         let host = MasterSeed::from_seed(seed_hex)
+            .unwrap()
             .derive_account_keys("m/0")
             .unwrap();
         let seed = BPMasterSeed::new(vec![7u8; 32]);
-        let device = AuthSigningKeys::from_master_seed(&seed, b"m/0", 0, &gens);
+        let device = AuthSigningKeys::from_master_seed(&seed, b"m/0", 0).unwrap();
         assert_eq!(device.sk_aff, host.acct.secret.0.0);
         assert_eq!(device.sk_enc, host.enc.secret.0.0);
     }
@@ -399,7 +448,8 @@ mod tests {
         let mut rng = rng_from_seed([0u8; 32]);
         let g = DeviceGenerators::new().unwrap();
         let keys =
-            AuthSigningKeys::from_master_seed(&BPMasterSeed::new(b"txn-type".to_vec()), b"", 0, &g);
+            AuthSigningKeys::from_master_seed(&BPMasterSeed::new(b"txn-type".repeat(4)), b"", 0)
+                .unwrap();
         let pk = CompressedAffine::try_from(g.sig_key_gen()).unwrap();
 
         let registration = RegistrationDeviceRequest {

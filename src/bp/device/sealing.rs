@@ -1,5 +1,3 @@
-use crate::PallasScalar;
-use crate::auth_proofs::AuthSigningKeys;
 use crate::error::Error;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::vec::Vec;
@@ -7,13 +5,14 @@ use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{ChaCha20Poly1305, Nonce};
 #[cfg(feature = "hardcoded-key")]
 use hex_literal::hex;
+use polymesh_dart_bp::auth_proofs::keys::MasterSeed;
 use rand_core::CryptoRngCore;
 use zeroize::Zeroizing;
 
-const VERSION: u8 = 2;
+const VERSION: u8 = 3;
 const NONCE_LEN: usize = 12;
 
-/// Symmetric key that seals the account keys under the AEAD.
+/// Symmetric key that seals the master seed under the AEAD.
 pub type DataKey = [u8; 32];
 
 /// Supplies the data key for sealing. The hardcoded provider returns a fixed key. A KMS provider
@@ -57,7 +56,7 @@ fn cipher(data_key: &DataKey) -> ChaCha20Poly1305 {
 /// `[version][wrapped_len][wrapped]` is the AEAD associated data.
 pub fn seal<R: CryptoRngCore>(
     provider: &mut dyn DataKeyProvider,
-    keys: &AuthSigningKeys,
+    seed: &MasterSeed,
     rng: &mut R,
 ) -> Result<Vec<u8>, Error> {
     let (data_key, wrapped) = provider.fresh_data_key()?;
@@ -67,11 +66,8 @@ pub fn seal<R: CryptoRngCore>(
         .try_into()
         .map_err(|_| Error::Device("wrapped key too large".into()))?;
 
-    let mut plaintext = Zeroizing::new(Vec::with_capacity(
-        keys.sk_aff.compressed_size() + keys.sk_enc.compressed_size(),
-    ));
-    keys.sk_aff.serialize_compressed(&mut *plaintext)?;
-    keys.sk_enc.serialize_compressed(&mut *plaintext)?;
+    let mut plaintext = Zeroizing::new(Vec::with_capacity(seed.compressed_size()));
+    seed.serialize_compressed(&mut *plaintext)?;
     let mut nonce_bytes = [0u8; NONCE_LEN];
     rng.fill_bytes(&mut nonce_bytes);
     let mut nonce = Nonce::default();
@@ -96,7 +92,7 @@ pub fn seal<R: CryptoRngCore>(
     Ok(blob)
 }
 
-pub fn unseal(provider: &dyn DataKeyProvider, blob: &[u8]) -> Result<AuthSigningKeys, Error> {
+pub fn unseal(provider: &dyn DataKeyProvider, blob: &[u8]) -> Result<MasterSeed, Error> {
     if blob.len() < 3 || blob[0] != VERSION {
         return Err(Error::Device("bad sealed blob".into()));
     }
@@ -123,13 +119,12 @@ pub fn unseal(provider: &dyn DataKeyProvider, blob: &[u8]) -> Result<AuthSigning
     );
 
     let mut reader = &plaintext[..];
-    let sk_aff = PallasScalar::deserialize_compressed(&mut reader)?;
-    let sk_enc = PallasScalar::deserialize_compressed(&mut reader)?;
+    let seed = MasterSeed::deserialize_compressed(&mut reader)?;
     // Error if extra bytes
     if !reader.is_empty() {
         return Err(Error::Device("bad sealed blob".into()));
     }
-    Ok(AuthSigningKeys { sk_aff, sk_enc })
+    Ok(seed)
 }
 
 #[cfg(test)]
@@ -151,19 +146,24 @@ mod tests {
         }
     }
 
+    fn seed() -> MasterSeed {
+        MasterSeed::new((0u8..32).collect())
+    }
+
+    fn seed_bytes(seed: &MasterSeed) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        seed.serialize_compressed(&mut bytes).unwrap();
+        bytes
+    }
+
     fn sealed() -> Vec<u8> {
-        let keys = AuthSigningKeys {
-            sk_aff: PallasScalar::from(5u64),
-            sk_enc: PallasScalar::from(7u64),
-        };
-        seal(&mut TestProvider, &keys, &mut StdRng::seed_from_u64(0)).unwrap()
+        seal(&mut TestProvider, &seed(), &mut StdRng::seed_from_u64(0)).unwrap()
     }
 
     #[test]
     fn seal_unseal_roundtrip() {
-        let keys = unseal(&TestProvider, &sealed()).unwrap();
-        assert_eq!(keys.sk_aff, PallasScalar::from(5u64));
-        assert_eq!(keys.sk_enc, PallasScalar::from(7u64));
+        let unsealed = unseal(&TestProvider, &sealed()).unwrap();
+        assert_eq!(seed_bytes(&unsealed), seed_bytes(&seed()));
     }
 
     #[test]

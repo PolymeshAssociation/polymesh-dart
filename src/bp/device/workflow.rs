@@ -1,4 +1,7 @@
-use super::{AuthDevice, account_state_from_pubkeys};
+use super::{
+    AuthDevice, account_state_from_pubkeys, account_state_from_pubkeys_given_randomness,
+    fee_account_state_from_pubkey_given_randomness,
+};
 use crate::AssetPkTLookup;
 use crate::account_reg_split::AccountRegHostProtocol;
 use crate::affirmation_proofs::SenderAffirmationHostProtocol;
@@ -8,11 +11,12 @@ use crate::curve_tree::{
 use crate::fee_split::{FeePaymentHostProtocol, FeeRegHostProtocol, FeeTopupHostProtocol};
 use crate::key_reg_split::KeyRegistrationDeviceRequest;
 use crate::mint_split::MintHostProtocol;
+use crate::split_types::AccountRandomnessDeviceRequest;
 use crate::{
     ACCOUNT_TREE_HEIGHT, ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountKeys, AccountPublicKey,
     AccountPublicKeys, AccountStateCommitment, AssetId, Balance, EncryptionPublicKey,
-    FEE_ACCOUNT_TREE_HEIGHT, FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, FEE_ASSET_ID,
-    FeeAccountAssetState, Leg, LegConfig, LegEncrypted, LegRef, PallasA, SettlementRef, dart_gens,
+    FEE_ACCOUNT_TREE_HEIGHT, FEE_ACCOUNT_TREE_L, FEE_ACCOUNT_TREE_M, FEE_ASSET_ID, Leg, LegConfig,
+    LegEncrypted, LegRef, PallasA, SettlementRef, dart_gens,
 };
 use codec::Encode;
 use polymesh_dart_common::NullifierSkGenCounter;
@@ -82,9 +86,19 @@ pub fn run_register_mint_affirm<D: AuthDevice>(device: &mut D) {
         )
         .unwrap();
 
-    // Account-asset registration
-    let (account_state, rho_randomness) =
-        account_state_from_pubkeys(&mut rng, pk_aff, pk_enc, asset_id, counter, identity).unwrap();
+    // Account-asset registration, with the account randomness derived on the device.
+    let randomness = device
+        .account_randomness(AccountRandomnessDeviceRequest { asset_id, counter })
+        .unwrap();
+    let (account_state, rho_randomness) = account_state_from_pubkeys_given_randomness(
+        pk_aff,
+        pk_enc,
+        asset_id,
+        counter,
+        identity,
+        &randomness,
+    )
+    .unwrap();
     let (protocol, request) = AccountRegHostProtocol::init(
         &mut rng,
         &account_state,
@@ -199,8 +213,16 @@ pub fn run_fee_register_topup_pay<D: AuthDevice>(device: &mut D) {
     let (pubkeys, _) = device.generate_keys().unwrap();
     let pk = AccountPublicKey::from_affine(PallasA::try_from(&pubkeys.pk_aff).unwrap()).unwrap();
 
-    // Registration
-    let mut fee_state = FeeAccountAssetState::new(&mut rng, &pk, FEE_ASSET_ID, 1000).unwrap();
+    // Registration, with the fee account randomness derived on the device.
+    let randomness = device
+        .fee_account_randomness(AccountRandomnessDeviceRequest {
+            asset_id: FEE_ASSET_ID,
+            counter: 0,
+        })
+        .unwrap();
+    let mut fee_state =
+        fee_account_state_from_pubkey_given_randomness(&pk, FEE_ASSET_ID, 1000, &randomness)
+            .unwrap();
     let (protocol, request) =
         FeeRegHostProtocol::init(&mut rng, &pk, &fee_state, identity).unwrap();
     let response = device.fee_registration_proof(request).unwrap();

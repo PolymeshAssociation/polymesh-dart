@@ -6,7 +6,7 @@ use polymesh_dart_bp::auth_proofs::leg::{LegEncryptionCore, PartyEphemeralPublic
 use polymesh_dart_bp::auth_proofs::{
     DeviceAffirmationType as BPDeviceAffirmationType, DeviceTxnType as BPDeviceTxnType,
 };
-use polymesh_dart_common::{AssetId, Balance};
+use polymesh_dart_common::{AssetId, Balance, NullifierSkGenCounter};
 
 use super::*;
 use crate::Error;
@@ -183,6 +183,27 @@ pub struct FeeAccountDeviceRequest {
     pub nonce: Vec<u8>,
     pub pk: CompressedAffine,
     pub txn_type: DeviceTxnType,
+}
+
+/// Request for a new account's commitment randomness, derived on the device from its master seed.
+#[derive(Clone, Encode, Decode)]
+pub struct AccountRandomnessDeviceRequest {
+    pub asset_id: AssetId,
+    pub counter: NullifierSkGenCounter,
+}
+
+/// `(randomness, rho_randomness)` of a non-fee account.
+#[derive(Clone, Encode, Decode)]
+pub struct AccountRandomnessDeviceResponse {
+    pub randomness: WrappedCanonical<PallasScalar>,
+    pub rho_randomness: WrappedCanonical<PallasScalar>,
+}
+
+/// `(initial_rho, initial_randomness)` of a fee account.
+#[derive(Clone, Encode, Decode)]
+pub struct FeeAccountRandomnessDeviceResponse {
+    pub initial_rho: WrappedCanonical<PallasScalar>,
+    pub initial_randomness: WrappedCanonical<PallasScalar>,
 }
 
 /// Fee account registration request. The device checks `account_commitment` against the opening

@@ -11,16 +11,15 @@ use bounded_collections::BoundedVec;
 use rand_core::{CryptoRng, RngCore};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
-use polymesh_dart_bp::auth_proofs::keys::FEE_ACCOUNT_RANDOMNESS_DST;
-use polymesh_dart_bp::keys::ACCOUNT_RANDOMNESS_DST;
+use polymesh_dart_bp::auth_proofs::keys::{
+    ACCOUNT_RANDOMNESS_DST, FEE_ACCOUNT_RANDOMNESS_DST, MIN_IKM_LEN, extend_with_len, hkdf_to_field,
+};
 use polymesh_dart_bp::{account_registration::MasterSeed as BPMasterSeed, keys as bp_keys};
 use polymesh_dart_common::NullifierSkGenCounter;
 
 use super::encode::*;
 use super::*;
 use crate::*;
-
-pub const DERIVE_SEPARATOR: &[u8; 2] = b"//";
 
 /// The encryption public key, which can be shared freely.
 #[derive(
@@ -225,23 +224,27 @@ impl AccountKeyPair {
     }
 
     /// Derives commitment randomness from the account secret key, identity, asset ID, and counter.
+    /// Differs from `MasterSeed::derive_account_randomness` for the same keys. An account opened
+    /// with this is recoverable only from its secret key and identity.
     pub fn derive_account_randomness(
         &self,
         identity: &[u8],
         asset_id: AssetId,
         counter: NullifierSkGenCounter,
-    ) -> (PallasScalar, PallasScalar) {
+    ) -> Result<(PallasScalar, PallasScalar), Error> {
         self.derive_randomness(ACCOUNT_RANDOMNESS_DST, identity, asset_id, counter)
     }
 
     /// Derives fee account `(initial_rho, initial_randomness)` from the same input as
-    /// `derive_account_randomness` under a separate domain.
+    /// `derive_account_randomness` under a separate domain. The first output is `initial_rho`, not
+    /// the commitment randomness as in `derive_account_randomness`. Differs from
+    /// `MasterSeed::derive_fee_account_randomness` for the same keys.
     pub fn derive_fee_account_randomness(
         &self,
         identity: &[u8],
         asset_id: AssetId,
         counter: NullifierSkGenCounter,
-    ) -> (PallasScalar, PallasScalar) {
+    ) -> Result<(PallasScalar, PallasScalar), Error> {
         self.derive_randomness(FEE_ACCOUNT_RANDOMNESS_DST, identity, asset_id, counter)
     }
 
@@ -254,7 +257,7 @@ impl AccountKeyPair {
         identity: &[u8],
     ) -> Result<FeeAccountAssetState, Error> {
         let (initial_rho, initial_randomness) =
-            self.derive_fee_account_randomness(identity, asset_id, counter);
+            self.derive_fee_account_randomness(identity, asset_id, counter)?;
         FeeAccountAssetState::new_given_randomness(
             &self.public,
             asset_id,
@@ -270,20 +273,18 @@ impl AccountKeyPair {
         identity: &[u8],
         asset_id: AssetId,
         counter: NullifierSkGenCounter,
-    ) -> (PallasScalar, PallasScalar) {
-        // For creating randomness, use `secret_key//identity//asset_id//counter_n`
-        let mut extended_seed = self.secret.encode();
-        extended_seed.extend(DERIVE_SEPARATOR);
-        extended_seed.extend(identity);
-        extended_seed.extend(DERIVE_SEPARATOR);
-        extended_seed.extend(asset_id.to_le_bytes().as_slice());
-        extended_seed.extend(DERIVE_SEPARATOR);
-        extended_seed.extend(counter.to_le_bytes());
+    ) -> Result<(PallasScalar, PallasScalar), Error> {
+        // For creating randomness, use key `secret_key` and info `len(identity) || identity || asset_id || counter_n`
+        let mut secret_key = self.secret.encode();
+        let mut info = Vec::new();
+        extend_with_len(&mut info, identity);
+        info.extend(asset_id.to_le_bytes());
+        info.extend(counter.to_le_bytes());
         // Need two independent field elements, `randomness`, `rho_randomness`
-        let hasher = <DefaultFieldHasher<Blake2b512> as HashToField<PallasScalar>>::new(dst);
-        let [randomness, rho_randomness]: [PallasScalar; 2] = hasher.hash_to_field(&extended_seed);
-        extended_seed.zeroize();
-        (randomness, rho_randomness)
+        let elems = hkdf_to_field::<PallasScalar, 2>(dst, &secret_key, &info);
+        secret_key.zeroize();
+        let [randomness, rho_randomness] = elems?;
+        Ok((randomness, rho_randomness))
     }
 
     /// Creates an account state for the given asset, counter, and identity.
@@ -296,7 +297,7 @@ impl AccountKeyPair {
     ) -> Result<(AccountState, PallasScalar), Error> {
         let params = poseidon_params();
         let (randomness, rho_randomness) =
-            self.derive_account_randomness(identity, asset_id, counter);
+            self.derive_account_randomness(identity, asset_id, counter)?;
         let id = hash_identity::<PallasScalar>(identity);
         let state = BPAccountState::new_given_randomness(
             id,
@@ -339,15 +340,20 @@ pub struct AccountPublicKeys {
 pub struct MasterSeed(BPMasterSeed);
 
 impl MasterSeed {
-    /// From seed (mnemonic phrase or hex string)
-    pub fn from_seed(seed: &str) -> Self {
-        // If the seed is a hex string, use it directly; otherwise, treat it as a mnemonic phrase.
-        let seed_bytes = if seed.starts_with("0x") {
-            hex::decode(&seed[2..]).unwrap_or_else(|_| seed.as_bytes().to_vec())
-        } else {
-            seed.as_bytes().to_vec()
+    /// From a `0x`-prefixed hex string, or else the string's raw bytes. Not a BIP-39 mnemonic.
+    /// Rejects a seed shorter than `MIN_IKM_LEN` bytes.
+    pub fn from_seed(seed: &str) -> Result<Self, Error> {
+        // If the seed is a hex string, use it directly; otherwise, use its raw bytes.
+        let seed_bytes = match seed.strip_prefix("0x") {
+            Some(hex_seed) => hex::decode(hex_seed).map_err(|_| Error::HexDecodeError)?,
+            None => seed.as_bytes().to_vec(),
         };
-        Self(BPMasterSeed::new(seed_bytes))
+        if seed_bytes.len() < MIN_IKM_LEN {
+            return Err(
+                polymesh_dart_bp::Error::SeedTooShort(seed_bytes.len(), MIN_IKM_LEN).into(),
+            );
+        }
+        Ok(Self(BPMasterSeed::new(seed_bytes)))
     }
 
     /// Derives account keys from the master seed, path and index.
@@ -356,7 +362,7 @@ impl MasterSeed {
         let sig_key_gen = dart_gens().sig_key_gen();
         let ((acct_sk, acct_pk), (enc_sk, enc_pk)) =
             self.0
-                .derive_keys::<_, Blake2b512>(path.as_bytes(), 0, sig_key_gen, enc_key_gen);
+                .derive_keys(path.as_bytes(), 0, sig_key_gen, enc_key_gen)?;
         Ok(AccountKeys {
             enc: EncryptionKeyPair {
                 public: EncryptionPublicKey::from_affine(enc_pk.0)?,

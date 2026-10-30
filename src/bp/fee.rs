@@ -1218,7 +1218,8 @@ mod tests {
 
         let (initial_rho, initial_randomness) = keys
             .acct
-            .derive_fee_account_randomness(ctx, asset_id, counter);
+            .derive_fee_account_randomness(ctx, asset_id, counter)
+            .unwrap();
         assert_eq!(
             state.current_state.initial_rho.decode().unwrap(),
             initial_rho
@@ -1229,8 +1230,10 @@ mod tests {
         );
 
         // Same input as a regular account yields unrelated values.
-        let (randomness, rho_randomness) =
-            keys.acct.derive_account_randomness(ctx, asset_id, counter);
+        let (randomness, rho_randomness) = keys
+            .acct
+            .derive_account_randomness(ctx, asset_id, counter)
+            .unwrap();
         assert_ne!(initial_randomness, randomness);
         assert_ne!(initial_rho, rho_randomness);
 

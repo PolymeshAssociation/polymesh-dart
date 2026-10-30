@@ -5,8 +5,8 @@
 //! computed in-process with a local stand-in keypair (`device_keys`, below), so the test runs green
 //! without a device. This in-process keypair is NOT what a real Ledger derives for `PATH` — the
 //! app's `signing_keys` derives the account keys with `AuthSigningKeys::from_master_seed` from a
-//! `Secp256k1::derive_from` node of the device's on-chip master seed, a secret this test has no
-//! access to. It only needs SOME valid keypair to exercise the host protocol's accept logic.
+//! SLIP-21 node of the device's on-chip master seed, a secret this test has no access to. It only
+//! needs SOME valid keypair to exercise the host protocol's accept logic.
 //!
 //! To validate against a real device or emulator:
 //! - Paste each printed `*_APDU_FULL` into `ledgercomm-send`. Affirmation is chunked: send each
@@ -51,38 +51,22 @@ use polymesh_dart_common::{AssetId, NullifierSkGenCounter};
 use rand::rngs::StdRng;
 use rand_core::SeedableRng;
 
-/// `m/44'/1'/0'/0/0`, matching the registered path prefix in the app's `ledger_app.toml`.
-/// Hardened components have the high bit set.
-const PATH_COMPONENTS: &[u32] = &[
-    0x8000_002c,
-    0x8000_0001,
-    0x8000_0000,
-    0x0000_0000,
-    0x0000_0000,
-];
+/// Account path the app derives keys at under its SLIP-21 `MasterSeed`. Opaque bytes.
+const ACCOUNT_PATH: &[u8] = b"m/0";
 pub(super) const IDENTITY: &[u8] = b"test";
 pub(super) const ASSET_ID: AssetId = 1;
 pub(super) const COUNTER: NullifierSkGenCounter = 0;
 
-/// The path encoded as the app's `Bip32Path` expects: `[num_components][4-byte BE component]*`.
+/// The account path bytes the app's handlers take.
 pub(super) fn path_bytes() -> Vec<u8> {
-    let mut b = Vec::with_capacity(1 + 4 * PATH_COMPONENTS.len());
-    b.push(PATH_COMPONENTS.len() as u8);
-    for c in PATH_COMPONENTS {
-        b.extend_from_slice(&c.to_be_bytes());
-    }
-    b
+    ACCOUNT_PATH.to_vec()
 }
 
 /// Stand-in device keypair for the in-process fallback. See the module doc: this does NOT match
-/// what a real Ledger derives for `PATH_COMPONENTS`.
+/// what a real Ledger derives for `ACCOUNT_PATH`.
 fn device_keys() -> AuthSigningKeys {
-    AuthSigningKeys::from_master_seed(
-        &BPMasterSeed::new(b"ledger-test-seed".to_vec()),
-        b"",
-        0,
-        &DeviceGenerators::new().unwrap(),
-    )
+    AuthSigningKeys::from_master_seed(&BPMasterSeed::new(b"ledger-test-seed".repeat(2)), b"", 0)
+        .unwrap()
 }
 
 fn account_pubkeys(keys: &AuthSigningKeys) -> (PallasA, PallasA) {
@@ -94,7 +78,7 @@ fn account_pubkeys(keys: &AuthSigningKeys) -> (PallasA, PallasA) {
 
 /// The `(pk_aff, pk_enc)` the host builds its request around: the real device's pubkeys when
 /// `LEDGER_PUBKEYS_HEX` is set (64 bytes = `pk_aff.as_bytes() || pk_enc.as_bytes()`, exactly what
-/// `GetPubkey`/INS 5 returns for `PATH_COMPONENTS` — send `getpubkey_apdu()`), else the in-process
+/// `GetPubkey`/INS 5 returns for `ACCOUNT_PATH` — send `getpubkey_apdu()`), else the in-process
 /// fallback keypair. A real device's keys are not derivable from the path alone, so testing against
 /// a real device or emulator needs its pubkeys queried first.
 fn device_pubkeys(keys: &AuthSigningKeys) -> (PallasA, PallasA) {
@@ -132,6 +116,11 @@ pub(super) const INS_ASSET_REG: u8 = 8;
 pub(super) const INS_AFFIRM: u8 = 9;
 pub(super) const INS_MINT: u8 = 11;
 pub(super) const INS_GET_RESPONSE_CHUNK: u8 = 12;
+/// P1 = 0 for a non-fee account, 1 for a fee account.
+pub(super) const INS_ACCOUNT_RANDOMNESS: u8 = 13;
+pub(super) const INS_FEE_REG: u8 = 14;
+pub(super) const INS_FEE_TOPUP: u8 = 15;
+pub(super) const INS_FEE_PAYMENT: u8 = 16;
 const P2_MORE: u8 = 0x80;
 
 /// Wrap `data` in a full short APDU: `CLA INS P1 P2 Lc <data>`.
@@ -148,8 +137,13 @@ pub(super) fn full_apdu(ins: u8, data: &[u8]) -> String {
     hex::encode(full_apdu_p(ins, 0, 0, data))
 }
 
+/// Full single-APDU with `p1` (P2=0).
+pub(super) fn full_apdu_with_p1(ins: u8, p1: u8, data: &[u8]) -> String {
+    hex::encode(full_apdu_p(ins, p1, 0, data))
+}
+
 /// The `GetPubkey` (INS 5) APDU — returns the device's real `(pk_aff, pk_enc)` for the path. Its
-/// data is the bare `Bip32Path` (no `[path_len]` wrapper), unlike the proof handlers.
+/// data is the bare path (no `[path_len]` wrapper), unlike the proof handlers.
 pub(super) fn getpubkey_apdu() -> String {
     full_apdu(INS_GET_PUBKEY, &path_bytes())
 }
@@ -157,16 +151,16 @@ pub(super) fn getpubkey_apdu() -> String {
 /// The chunked affirmation APDU sequence: chunk 0 = path (P2 MORE), chunks 1..N = the request
 /// split at 255 bytes (last chunk P2 LAST). Paste each in order.
 pub(super) fn affirm_apdus(request_bytes: &[u8]) -> Vec<String> {
-    let mut apdus = vec![hex::encode(full_apdu_p(
-        INS_AFFIRM,
-        0,
-        P2_MORE,
-        &path_bytes(),
-    ))];
+    chunked_apdus(INS_AFFIRM, request_bytes)
+}
+
+/// The chunked APDU sequence for `ins`, laid out as in `affirm_apdus`.
+pub(super) fn chunked_apdus(ins: u8, request_bytes: &[u8]) -> Vec<String> {
+    let mut apdus = vec![hex::encode(full_apdu_p(ins, 0, P2_MORE, &path_bytes()))];
     let slices: Vec<&[u8]> = request_bytes.chunks(255).collect();
     for (i, s) in slices.iter().enumerate() {
         let p2 = if i + 1 < slices.len() { P2_MORE } else { 0 };
-        apdus.push(hex::encode(full_apdu_p(INS_AFFIRM, (i + 1) as u8, p2, s)));
+        apdus.push(hex::encode(full_apdu_p(ins, (i + 1) as u8, p2, s)));
     }
     apdus
 }
