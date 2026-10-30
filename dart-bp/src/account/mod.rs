@@ -25,6 +25,8 @@ pub use state_transition::AccountStateTransitionProof;
 pub use state_transition_multi::MultiAssetStateTransitionProof;
 
 use crate::auth_proofs::account::AuthProofAffirmation;
+pub use crate::auth_proofs::leg::LegProverConfig;
+pub use crate::auth_proofs::leg::LegVerifierConfig;
 use crate::leg::{LegEncryptionCore, ReceiverEphemeralPublicKey, SenderEphemeralPublicKey};
 use crate::util::{BPProof, handle_verification_tuples, prove_with_rng};
 use crate::{Error, TXN_CHALLENGE_LABEL, TXN_EVEN_LABEL, TXN_ODD_LABEL, error::Result};
@@ -44,8 +46,6 @@ use common::balance::BalanceSplitProver;
 pub use common::balance::ensure_correct_balance_change;
 pub use common::ensure_same_accounts;
 pub use common::leg_link::AccountTxnWitness;
-pub use common::leg_link::LegProverConfig;
-pub use common::leg_link::LegVerifierConfig;
 pub use common::verifier::SplitStateChangeVerifier;
 pub use common::verifier::StateChangeVerifier;
 use common::{

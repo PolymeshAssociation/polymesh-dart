@@ -13,6 +13,7 @@ pub use serde_impl::*;
 mod error;
 pub use error::Error;
 
+#[cfg(feature = "host_proofs")]
 pub mod curve_tree;
 
 pub use polymesh_dart_common::{
@@ -35,6 +36,7 @@ pub fn blake2_256<T: codec::Encode>(data: &T) -> [u8; 32] {
     Blake2b256::digest(&data.encode()).into()
 }
 
+#[cfg(feature = "host_proofs")]
 pub mod init {
     use crate::{
         Error,

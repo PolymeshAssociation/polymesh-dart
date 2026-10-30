@@ -1,12 +1,11 @@
 use crate::account::common::balance::{
     BalanceChangeConfig, BalanceChangeProof, BalanceChangeProver,
 };
-use crate::account::common::leg_link::{
-    AccountTxnWitness, LegProverConfig, LegVerifierConfig, check_balance_directions,
-};
+use crate::account::common::leg_link::{AccountTxnWitness, check_balance_directions};
 use crate::account::common::verifier::StateChangeVerifier;
 use crate::account::common::{CommonStateChangeProof, CommonStateChangeProver};
 use crate::account::{AccountCommitmentKeyTrait, AccountState, AccountStateCommitment};
+use crate::auth_proofs::leg::{LegProverConfig, LegVerifierConfig};
 use crate::leg::PartyEphemeralPublicKey;
 use crate::leg::{LegEncryptionCore, ReceiverEphemeralPublicKey, SenderEphemeralPublicKey};
 use crate::util::{

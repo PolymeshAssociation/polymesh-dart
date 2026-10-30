@@ -133,12 +133,21 @@ log = { workspace = true, default-features = false }
 hex = { workspace = true, default-features = false }
 zeroize = { workspace = true, default-features = false }
 
+# Enclave key sealing (M3). ChaCha20-Poly1305; consider AES-GCM later. Cipher isolated in
+# `bp::device`'s sealing module. Std-gated for now; move to a dedicated `enclave` feature if it
+# must stay out of non-enclave std builds.
+chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"], optional = true }
+# Only the `hardcoded-key` sealing key needs this.
+hex-literal = { version = "0.4", optional = true }
+
 # Substrate/SCALE deps.
 codec = { workspace = true, default-features = false, features = ["derive"] }
 scale-info = { workspace = true, default-features = false, features = [
     "derive",
 ] }
-bounded-collections = { workspace = true, default-features = false }
+# `scale-codec` gives BoundedVec its Encode/Decode + TypeInfo impls (used in bp/encode.rs). In the
+# std build this comes in transitively; the minimal no_std/embedded build needs it enabled here.
+bounded-collections = { workspace = true, default-features = false, features = ["scale-codec"] }
 sp-io = { git = "https://github.com/PolymeshAssociation/polkadot-sdk", branch = "polymesh-v8-stable2603-7", default-features = false, optional = true }
 
 # serde support
@@ -189,22 +198,59 @@ rand = { workspace = true }
 [[bench]]
 name = "proof_benchmark"
 harness = false
+required-features = ["host_proofs"]
 
 [[bench]]
 name = "fee_payments"
 harness = false
+required-features = ["host_proofs"]
 
 [[bench]]
 name = "leg_decrypt"
 harness = false
+required-features = ["host_proofs"]
 
 [[bench]]
 name = "discrete_log"
 harness = false
+required-features = ["host_proofs"]
+
+[[test]]
+name = "curve_tree_tests"
+required-features = ["host_proofs"]
+
+[[test]]
+name = "lean_curve_tree_tests"
+required-features = ["host_proofs"]
+
+[[test]]
+name = "replay"
+required-features = ["host_proofs"]
+
+[[test]]
+name = "sender_affirmation_verify_test"
+required-features = ["host_proofs"]
+
+[[test]]
+name = "simple_mint_and_transfer"
+required-features = ["host_proofs"]
+
+[[test]]
+name = "validation_tests"
+required-features = ["host_proofs"]
+
+[[test]]
+name = "serialized_objects_test"
+required-features = ["host_proofs"]
+
+[[test]]
+name = "batch_scan"
+required-features = ["host_proofs"]
 
 [[bench]]
 name = "key_distribution"
 harness = false
+required-features = ["host_proofs"]
 
 [features]
 default = [
@@ -212,11 +258,13 @@ default = [
     "asm",
     "parallel",
     "backend_bp",
+    "host_proofs",
     "async_tree",
     "serde",
     "utoipa",
     "sqlx",
     "large_baby_steps",
+    "hardcoded-key",
 ]
 
 serde = ["dep:serde", "serde_json", "serde_arrays"]
@@ -227,6 +275,8 @@ sqlx = ["dep:sqlx", "sqlx-core"]
 
 async_tree = []
 
+# Compiles the `bp` module: wire types (`encode`, `split_types`) plus, with `host_proofs` also on,
+# the Bulletproofs/curve-tree backed account/leg/fee proofs and key management.
 backend_bp = [
     "polymesh-dart-bp",
     "ark-ff",
@@ -235,11 +285,18 @@ backend_bp = [
     "ark-std",
     "dock_crypto_utils",
     "schnorr_pok",
+    "ark-pallas/curve",
+]
+
+# Bulletproofs/curve-tree backed host protocols: account, leg, fee, key-management and the
+# device auth-proof API (all of which depend on `bp::keys`). Off, `bp` only builds the wire types.
+host_proofs = [
+    "backend_bp",
+    "polymesh-dart-bp/host_proofs",
     "bulletproofs",
     "curve_tree_relations",
     "ark-ec-divisors",
     "ark-dlog-gadget",
-    "ark-pallas/curve",
     "ark-vesta",
 ]
 
@@ -249,13 +306,14 @@ large_baby_steps = [
 
 # Benchmark-only: precomputed fixed-base MSM tables for the verifier's final MSM.
 build-tables = [
+    "host_proofs",
     "polymesh-dart-bp/build-tables",
 ]
 
 # Native-only: register the shared per-curve fixed-base tables with the host MSM at node startup.
 host_msm_tables = [
     "std",
-    "backend_bp",
+    "host_proofs",
     "dep:ark-host-msm-impl",
     "ark-host-msm-impl/std",
 ]
@@ -277,7 +335,12 @@ std = [
     "ark-pallas?/std",
     "ark-vesta?/std",
     "zeroize/std",
+    "dep:chacha20poly1305",
 ]
+
+# Temporary PoC device sealing: compile the fixed sealing key into the enclave image. Off, the
+# device seals via KMS. Expected to fold into a `dev` feature later.
+hardcoded-key = ["dep:hex-literal"]
 
 # Turn on this feature for faster proof verification.
 verifier_parallel = [

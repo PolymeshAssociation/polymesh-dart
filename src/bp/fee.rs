@@ -14,7 +14,7 @@ use bounded_collections::BoundedVec;
 use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
 use scale_info::TypeInfo;
 
-use rand_core::{CryptoRng, RngCore, SeedableRng as _};
+use rand_core::{CryptoRng, RngCore};
 
 use super::encode::*;
 use super::*;
@@ -327,9 +327,9 @@ impl<T: DartLimits> FeeAccountRegistrationProof<T> {
 
         let device_response = create_fee_account_registration_auth_proof(
             rng,
-            key,
+            &key.into(),
             &device_request,
-            gens.account_comm_key().sk_gen(),
+            &gens.account_comm_key(),
         )?;
 
         let proof = protocol.finish(&device_response)?;
@@ -380,7 +380,7 @@ impl<T: DartLimits> BatchedFeeAccountRegistrationProof<T> {
             .into_par_iter()
             .zip(seeds)
             .map(|((account, asset_id, balance), seed)| {
-                let mut rng = rand_chacha::ChaCha20Rng::from_seed(seed);
+                let mut rng = rng_from_seed(seed);
                 FeeAccountRegistrationProof::new(&mut rng, account, *asset_id, *balance, identity)
             })
             .collect::<Result<Vec<_>, Error>>()?;
@@ -411,7 +411,7 @@ impl<T: DartLimits> BatchedFeeAccountRegistrationProof<T> {
         for (account, asset_id, balance) in registrations {
             let mut seed = [0u8; 32];
             rng.fill_bytes(&mut seed);
-            let mut rng = rand_chacha::ChaCha20Rng::from_seed(seed);
+            let mut rng = rng_from_seed(seed);
             let (proof, state) =
                 FeeAccountRegistrationProof::new(&mut rng, account, *asset_id, *balance, identity)?;
             proofs
@@ -509,7 +509,7 @@ impl<
 
         let device_response = create_fee_account_auth_proof(
             rng,
-            key,
+            &key.into(),
             &device_request,
             dart_gens().account_comm_key().sk_gen(),
         )?;
@@ -626,7 +626,7 @@ impl<
             .par_iter_mut()
             .zip(seeds)
             .map(|((key, amount, account_state), seed)| {
-                let mut rng = rand_chacha::ChaCha20Rng::from_seed(seed);
+                let mut rng = rng_from_seed(seed);
                 FeeAccountTopupProof::new(&mut rng, key, account_state, *amount, ctx, &tree_lookup)
             })
             .collect::<Result<Vec<_>, Error>>()?;
@@ -964,7 +964,7 @@ impl<
         let comm_re_rand_gen = tree_params.even_parameters.sl_params.pc_gens().B_blinding;
         let device_response = create_fee_payment_auth_proof(
             rng,
-            key,
+            &key.into(),
             &device_request,
             gens.account_comm_key().sk_gen(),
             comm_re_rand_gen,
@@ -1104,6 +1104,7 @@ pub const FEE_PAYMENT_BATCH_BROADCAST_CTX: &[u8] = b"FeePaymentBatchBroadcast";
 mod tests {
     use super::*;
     use crate::curve_tree::ProverCurveTree;
+    use rand_core::SeedableRng;
 
     #[test]
     fn fee_payment_encoded_size_by_tree_height() {

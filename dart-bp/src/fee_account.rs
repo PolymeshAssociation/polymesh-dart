@@ -1,5 +1,9 @@
 use crate::account::AccountCommitmentKeyTrait;
 use crate::auth_proofs::fee_account::AuthProofFeePayment;
+use crate::auth_proofs::fee_account::reg_comm_gens;
+pub use crate::auth_proofs::fee_account::{
+    FeeAccountStateCommitment, PALLAS_FR_SMOOTH_ORDER, ensure_valid_fee_registration_opening,
+};
 use crate::auth_proofs::{AuthProofOnlySk, AuthProofOnlySkProtocol, DeviceTxnType};
 use crate::dst;
 use crate::error::*;
@@ -75,9 +79,6 @@ pub struct FeeAccountState<G: AffineRepr> {
     pub rho: G::ScalarField,
     pub randomness: G::ScalarField,
 }
-
-#[derive(Copy, Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]
-pub struct FeeAccountStateCommitment<G: AffineRepr>(pub G);
 
 #[cfg_attr(
     all(test, feature = "nightly_mocking_tests"),
@@ -213,17 +214,6 @@ pub struct RegTxnWithoutSkProof<G: AffineRepr>(pub PokPedersenCommitment<G>);
 #[derive(Clone)]
 pub struct RegTxnProofWithoutSkProtocol<G: AffineRepr> {
     pub comm_protocol: PokPedersenCommitmentProtocol<G>,
-}
-
-/// Generators `(g_rho + g_current_rho, g_randomness + g_current_randomness)` of the registration proof.
-fn reg_comm_gens<G: AffineRepr>(account_comm_key: &impl AccountCommitmentKeyTrait<G>) -> (G, G) {
-    (
-        (account_comm_key.rho_gen().into_group() + account_comm_key.current_rho_gen())
-            .into_affine(),
-        (account_comm_key.randomness_gen().into_group()
-            + account_comm_key.current_randomness_gen())
-        .into_affine(),
-    )
 }
 
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
@@ -4161,59 +4151,6 @@ pub fn ensure_same_accounts_without_sk<G: AffineRepr>(
         if old_state.randomness * old_state.initial_randomness != new_state.randomness {
             return Err(Error::ProofGenerationError(
                 "Randomness not correctly updated in new fee account state".to_string(),
-            ));
-        }
-        Ok(())
-    }
-}
-
-/// The largest divisor of `p - 1` with all prime factors below `10^7`, for the Pallas scalar field `p`.
-/// `p - 1 = 2^32 * 3^2 * 1709 * 24859 * T` where `T` has no prime factor below `10^7`.
-pub const PALLAS_FR_SMOOTH_ORDER: [u64; 1] = [0x16ca4b3700000000];
-
-/// Device check for a split fee account registration. Rejects unless
-/// `account_commitment = pk + g_balance * balance + g_asset_id * asset_id + (g_rho + g_current_rho) * initial_rho + (g_randomness + g_current_randomness) * initial_randomness`,
-/// `initial_rho^smooth_order != 1` and `initial_randomness != 0`. With `smooth_order` the smooth
-/// part of `p - 1`, the order of `initial_rho` has a prime factor outside it, so the nullifiers
-/// `g_current_rho * initial_rho^k` don't repeat within that many state changes.
-pub fn ensure_valid_fee_registration_opening<G: AffineRepr>(
-    account_commitment: &FeeAccountStateCommitment<G>,
-    pk: &G,
-    asset_id: AssetId,
-    balance: Balance,
-    initial_rho: G::ScalarField,
-    initial_randomness: G::ScalarField,
-    smooth_order: &[u64],
-    account_comm_key: &impl AccountCommitmentKeyTrait<G>,
-) -> Result<()> {
-    #[cfg(feature = "ignore_prover_input_sanitation")]
-    {
-        return Ok(());
-    }
-
-    #[cfg(not(feature = "ignore_prover_input_sanitation"))]
-    {
-        use ark_ff::Field;
-        use ark_std::{One, Zero};
-        if initial_rho.is_zero() || initial_rho.pow(smooth_order).is_one() {
-            return Err(Error::ProofGenerationError(
-                "initial_rho has small multiplicative order".to_string(),
-            ));
-        }
-        if initial_randomness.is_zero() {
-            return Err(Error::ProofGenerationError(
-                "initial_randomness is zero".to_string(),
-            ));
-        }
-        let (rho_gen, randomness_gen) = reg_comm_gens(account_comm_key);
-        let expected = pk.into_group()
-            + account_comm_key.balance_gen() * G::ScalarField::from(balance)
-            + account_comm_key.asset_id_gen() * G::ScalarField::from(asset_id)
-            + rho_gen * initial_rho
-            + randomness_gen * initial_randomness;
-        if expected.into_affine() != account_commitment.0 {
-            return Err(Error::ProofGenerationError(
-                "Fee account commitment does not match the registration opening".to_string(),
             ));
         }
         Ok(())

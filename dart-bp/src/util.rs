@@ -9,7 +9,8 @@ use crate::account::state::{
 use crate::error::*;
 use crate::leg::{LegEncryptionCore, PartyEphemeralPublicKey};
 use crate::{
-    AssetId, BALANCE_BITS, BATCH_DIGEST_LABEL, Balance, CHUNK_INDEX_LABEL, NUM_CHUNKS_LABEL, dst,
+    AssetId, BALANCE_BITS, BATCH_DIGEST_LABEL, Balance, CHUNK_INDEX_LABEL, NUM_CHUNKS_LABEL,
+    add_to_transcript, dst,
 };
 use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
 use ark_ec::{AffineRepr, CurveGroup};
@@ -59,18 +60,6 @@ pub fn generate_even_odd_rngs<R: RngCore + CryptoRng>(rng: &mut R) -> (ChaChaRng
     let rng_even = reseed_rng(rng);
     let rng_odd = reseed_rng(rng);
     (rng_even, rng_odd)
-}
-
-#[macro_export]
-macro_rules! add_to_transcript {
-    ($transcript:expr, $($label:expr, $value:expr),* $(,)?) => {
-        let mut buf = ::ark_std::vec![];
-        $(
-            $value.serialize_compressed(&mut buf)?;
-            $transcript.append($label, &buf);
-            buf.clear();
-        )*
-    };
 }
 
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
@@ -2480,27 +2469,6 @@ pub fn bp_gens_for_vec_commitment<G: AffineRepr>(
     bp_gens: &BulletproofGens<G>,
 ) -> Copied<impl Iterator<Item = &G>> {
     bp_gens.share(0).G(size).copied()
-}
-
-/// Add a slice to transcript by first writing the slice length (as index) and then each element
-pub fn add_slice_to_transcript<T: CanonicalSerialize>(
-    transcript: &mut MerlinTranscript,
-    label: &'static [u8],
-    slice: &[T],
-) -> Result<()> {
-    let l = slice.len() as u32;
-    transcript.append(label, &l.to_le_bytes());
-
-    let mut buf = vec![];
-    for (i, item) in slice.iter().enumerate() {
-        // Write the index and then the item
-        buf.extend_from_slice(&(i as u32).to_le_bytes());
-        item.serialize_compressed(&mut buf)?;
-        transcript.append(label, &buf);
-        buf.clear()
-    }
-
-    Ok(())
 }
 
 /// Prove using SelRerandProofParameters (which contains bp_gens)

@@ -1,19 +1,18 @@
 use ark_std::vec::Vec;
 use codec::{Decode, Encode};
 
+use polymesh_dart_bp::auth_proofs::leg::LegProverConfig as BPLegProverConfig;
+use polymesh_dart_bp::auth_proofs::leg::{LegEncryptionCore, PartyEphemeralPublicKey};
 use polymesh_dart_bp::auth_proofs::{
     DeviceAffirmationType as BPDeviceAffirmationType, DeviceTxnType as BPDeviceTxnType,
-};
-use polymesh_dart_bp::{
-    account::common::leg_link::LegProverConfig as BPLegProverConfig,
-    leg::{LegEncryptionCore, PartyEphemeralPublicKey},
 };
 use polymesh_dart_common::{AssetId, Balance};
 
 use super::*;
 use crate::Error;
 
-pub use crate::bp::auth_proofs::{BPAuthProofOnlySk, BPAuthProofOnlySks};
+pub type BPAuthProofOnlySks = polymesh_dart_bp::auth_proofs::AuthProofOnlySks<PallasA>;
+pub type BPAuthProofOnlySk = polymesh_dart_bp::auth_proofs::AuthProofOnlySk<PallasA>;
 
 pub type BPAuthProofAffirmation =
     polymesh_dart_bp::auth_proofs::account::AuthProofAffirmation<PallasA>;
@@ -161,6 +160,16 @@ pub struct FeePaymentDeviceRequest {
 
 #[derive(Clone, Encode, Decode)]
 pub struct RegistrationDeviceRequest {
+    pub challenge_h_bytes: Vec<u8>,
+    pub nonce: Vec<u8>,
+    pub pk_aff: CompressedAffine,
+    pub pk_enc: CompressedAffine,
+    pub txn_type: DeviceTxnType,
+}
+
+/// Mint uses the same 2-secret-key proof as registration; kept as a distinct type.
+#[derive(Clone, Encode, Decode)]
+pub struct MintDeviceRequest {
     pub challenge_h_bytes: Vec<u8>,
     pub nonce: Vec<u8>,
     pub pk_aff: CompressedAffine,

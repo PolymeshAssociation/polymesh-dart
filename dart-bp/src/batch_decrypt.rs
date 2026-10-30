@@ -49,7 +49,7 @@ pub fn batch_decrypt_amounts<P: GLVConfig>(
     ))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "host_proofs"))]
 mod tests {
     use super::*;
     use ark_pallas::{Affine as PallasA, Fr as PallasScalar, PallasConfig};

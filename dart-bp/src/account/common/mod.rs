@@ -27,6 +27,7 @@ use ark_ec::{AffineRepr, CurveGroup, VariableBaseMSM};
 use ark_ec_divisors::DivisorCurve;
 use ark_ff::PrimeField;
 
+use crate::auth_proofs::leg::LegProverConfig;
 use ark_serialize::{
     CanonicalDeserialize, CanonicalSerialize, Compress, SerializationError, Valid, Validate,
 };
@@ -38,7 +39,7 @@ use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use curve_tree_relations::parameters::SelRerandProofParametersNew;
 use dock_crypto_utils::transcript::MerlinTranscript;
 use dock_crypto_utils::transcript::Transcript;
-use leg_link::{LegAccountLink, LegAccountLinkProtocol, LegProverConfig};
+use leg_link::{LegAccountLink, LegAccountLinkProtocol};
 use polymesh_dart_common::{AssetId, Balance};
 use rand_core::CryptoRngCore;
 use schnorr_pok::discrete_log::{
@@ -50,7 +51,6 @@ use schnorr_pok::partial::{
 };
 use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment, SchnorrResponse};
 use zeroize::{Zeroize, ZeroizeOnDrop};
-
 // Aiming for 3 possible workflows:
 // W1 - Solo. Single prover has all witnesses including secret key(s)
 //

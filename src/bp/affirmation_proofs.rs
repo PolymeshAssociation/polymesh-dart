@@ -280,11 +280,12 @@ macro_rules! with_balance {
 
                 let device_response = $crate::bp::auth_proofs::create_affirmation_auth_proof(
                     rng,
-                    keys,
+                    &keys.into(),
                     &device_request,
                     comm_re_rand_gen,
                     anchor_gen,
                     gens.leg_asset_value_gen(),
+                    &gens.account_comm_key(),
                 )?;
 
                 protocol.finish(rng, &device_response)
@@ -665,11 +666,12 @@ macro_rules! no_balance {
 
                 let device_response = $crate::bp::auth_proofs::create_affirmation_auth_proof(
                     rng,
-                    keys,
+                    &keys.into(),
                     &device_request,
                     comm_re_rand_gen,
                     anchor_gen,
                     gens.leg_asset_value_gen(),
+                    &gens.account_comm_key(),
                 )?;
 
                 protocol.finish(rng, &device_response)
