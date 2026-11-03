@@ -802,7 +802,8 @@ impl<T: DartLimits> SettlementBuilder<T> {
         let mut legs = Vec::with_capacity(encrypted_legs.len());
 
         for (idx, encrypted_leg) in encrypted_legs.into_iter().enumerate() {
-            let operation_ctx = leg_proof_initial_ctx(&memo, root_block, &legs_digest, idx as LegId);
+            let operation_ctx =
+                leg_proof_initial_ctx(&memo, root_block, &legs_digest, idx as LegId);
             let composed_ctx = compose_ctx(ctx, &operation_ctx);
             let leg_proof = encrypted_leg.prove(rng, &composed_ctx, &asset_tree)?;
             legs.push(leg_proof);
@@ -990,7 +991,7 @@ impl<
     ) -> Result<(), Error> {
         let batch_size = self.legs.len();
         if batch_size < 2 {
-            return self.verify(asset_tree, asset_lookup, rng);
+            return self.verify_with_context(ctx, asset_tree, asset_lookup, rng);
         }
 
         // Get the curve tree root.
@@ -1063,7 +1064,7 @@ impl<
     ) -> Result<(), Error> {
         let batch_size = self.legs.len();
         if batch_size < 2 {
-            return self.verify(asset_tree, asset_lookup, rng);
+            return self.verify_with_context(ctx, asset_tree, asset_lookup, rng);
         }
 
         // Get the curve tree root.

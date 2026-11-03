@@ -84,9 +84,10 @@ pub mod key_reg_split;
 pub mod mint_split;
 pub mod split_types;
 
-pub(crate) const CONTEXT_SEPARATOR_LABEL: &[u8; 17] = b"context-separator";
+pub const CONTEXT_SEPARATOR_LABEL: &[u8; 17] = b"context-separator";
 
-pub(crate) fn compose_ctx(ctx: &[u8], operation_ctx: &[u8]) -> Vec<u8> {
+#[cfg(feature = "host_proofs")]
+pub fn compose_ctx(ctx: &[u8], operation_ctx: &[u8]) -> Vec<u8> {
     if ctx.is_empty() {
         operation_ctx.to_vec()
     } else {
@@ -579,7 +580,10 @@ mod tests {
                 .encode()
         );
         assert_ne!(compose_ctx(b"a", b"bc"), compose_ctx(b"ab", b"c"));
-        assert_ne!(compose_ctx(b"batch-a", b"operation"), compose_ctx(b"batch-b", b"operation"));
+        assert_ne!(
+            compose_ctx(b"batch-a", b"operation"),
+            compose_ctx(b"batch-b", b"operation")
+        );
     }
     use crate::key_distribution_proof::KeyDistributionProof;
     use crate::mint_split::MintHostProtocol;
