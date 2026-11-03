@@ -106,9 +106,16 @@ fn test_sender_affirmation_verify() {
     context_proof
         .verify_with_context(ctx, &leg_enc, chain.account_tree(), &mut rng)
         .unwrap();
-    assert!(context_proof
-        .verify_with_context(b"different-context", &leg_enc, chain.account_tree(), &mut rng)
-        .is_err());
+    assert!(
+        context_proof
+            .verify_with_context(
+                b"different-context",
+                &leg_enc,
+                chain.account_tree(),
+                &mut rng
+            )
+            .is_err()
+    );
 
     println!(
         "For L={ACCOUNT_TREE_L}, height={ACCOUNT_TREE_HEIGHT}, verification time: {:?}",

@@ -107,7 +107,15 @@ macro_rules! with_balance {
                 amount: Balance,
                 tree_lookup: &impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
             ) -> Result<(Self, AffirmationDeviceRequest), Error> {
-                Self::init_with_context(rng, account_state, leg_ref, &[], leg_enc, amount, tree_lookup)
+                Self::init_with_context(
+                    rng,
+                    account_state,
+                    leg_ref,
+                    &[],
+                    leg_enc,
+                    amount,
+                    tree_lookup,
+                )
             }
 
             pub fn init_with_context<R: RngCore + CryptoRng>(
@@ -284,7 +292,14 @@ macro_rules! with_balance {
                 tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
             ) -> Result<Self, Error> {
                 Self::new_with_context(
-                    rng, keys, leg_ref, &[], amount, leg_enc, account_asset, tree_lookup,
+                    rng,
+                    keys,
+                    leg_ref,
+                    &[],
+                    amount,
+                    leg_enc,
+                    account_asset,
+                    tree_lookup,
                 )
             }
 
@@ -302,10 +317,15 @@ macro_rules! with_balance {
                     tree_lookup.params().even_parameters.pc_gens(),
                 );
 
-                let (protocol, device_request) =
-                    $HostProto::init_with_context(
-                        rng, account_asset, leg_ref, ctx, leg_enc, amount, &tree_lookup,
-                    )?;
+                let (protocol, device_request) = $HostProto::init_with_context(
+                    rng,
+                    account_asset,
+                    leg_ref,
+                    ctx,
+                    leg_enc,
+                    amount,
+                    &tree_lookup,
+                )?;
 
                 let device_response = $crate::bp::auth_proofs::create_affirmation_auth_proof(
                     rng,
@@ -530,7 +550,15 @@ macro_rules! no_balance {
                 amount: Balance,
                 tree_lookup: &impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
             ) -> Result<(Self, AffirmationDeviceRequest), Error> {
-                Self::init_with_context(rng, account_state, leg_ref, &[], leg_enc, amount, tree_lookup)
+                Self::init_with_context(
+                    rng,
+                    account_state,
+                    leg_ref,
+                    &[],
+                    leg_enc,
+                    amount,
+                    tree_lookup,
+                )
             }
 
             pub fn init_with_context<R: RngCore + CryptoRng>(
@@ -707,7 +735,14 @@ macro_rules! no_balance {
                 tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
             ) -> Result<Self, Error> {
                 Self::new_with_context(
-                    rng, keys, leg_ref, &[], leg_enc, amount, account_asset, tree_lookup,
+                    rng,
+                    keys,
+                    leg_ref,
+                    &[],
+                    leg_enc,
+                    amount,
+                    account_asset,
+                    tree_lookup,
                 )
             }
 
@@ -725,10 +760,15 @@ macro_rules! no_balance {
                     tree_lookup.params().even_parameters.pc_gens(),
                 );
 
-                let (protocol, device_request) =
-                    $HostProto::init_with_context(
-                        rng, account_asset, leg_ref, ctx, leg_enc, amount, &tree_lookup,
-                    )?;
+                let (protocol, device_request) = $HostProto::init_with_context(
+                    rng,
+                    account_asset,
+                    leg_ref,
+                    ctx,
+                    leg_enc,
+                    amount,
+                    &tree_lookup,
+                )?;
 
                 let device_response = $crate::bp::auth_proofs::create_affirmation_auth_proof(
                     rng,
