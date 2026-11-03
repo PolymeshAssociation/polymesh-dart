@@ -123,6 +123,18 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 [[package]]
 name = "ark-bls12-381"
 version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3df4dcc01ff89867cd86b0da835f23c3f02738353aaee7dde7495af71363b8d5"
+dependencies = [
+ "ark-ec",
+ "ark-ff",
+ "ark-serialize",
+ "ark-std",
+]
+
+[[package]]
+name = "ark-bls12-381"
+version = "0.5.0"
 source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master#ece0f9c19ad7363668b5dddf556e987a3303ac28"
 dependencies = [
  "ark-ec",
@@ -325,7 +337,7 @@ name = "ark-host-hash-to-curve"
 version = "0.5.0"
 source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master#ece0f9c19ad7363668b5dddf556e987a3303ac28"
 dependencies = [
- "ark-bls12-381",
+ "ark-bls12-381 0.5.0 (git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master)",
  "ark-bn254",
  "ark-ec",
  "ark-ff",
@@ -346,7 +358,7 @@ name = "ark-host-hash-to-curve-impl"
 version = "0.5.0"
 source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master#ece0f9c19ad7363668b5dddf556e987a3303ac28"
 dependencies = [
- "ark-bls12-381",
+ "ark-bls12-381 0.5.0 (git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master)",
  "ark-bn254",
  "ark-ec",
  "ark-ff",
@@ -373,7 +385,7 @@ name = "ark-host-msm-impl"
 version = "0.5.0"
 source = "git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master#ece0f9c19ad7363668b5dddf556e987a3303ac28"
 dependencies = [
- "ark-bls12-381",
+ "ark-bls12-381 0.5.0 (git+https://github.com/PolymeshAssociation/arkworks-algebra.git?branch=polymesh-master)",
  "ark-bn254",
  "ark-ec",
  "ark-ff",
@@ -2854,6 +2866,7 @@ dependencies = [
 name = "polymesh-dart-bp"
 version = "1.0.0"
 dependencies = [
+ "ark-bls12-381 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "ark-dlog-gadget",
  "ark-ec",
  "ark-ec-divisors",
@@ -2869,6 +2882,7 @@ dependencies = [
  "digest 0.10.7",
  "dock_crypto_utils",
  "hex",
+ "hkdf",
  "itertools 0.14.0",
  "lazy_static",
  "log",
@@ -2881,6 +2895,7 @@ dependencies = [
  "rayon",
  "relations",
  "schnorr_pok",
+ "sha2",
  "test-log",
  "thiserror",
  "zeroize",

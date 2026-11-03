@@ -12,6 +12,8 @@ polymesh-dart-common = { workspace = true, default-features = false }
 rand = { workspace = true, default-features = false }
 rand_core = { workspace = true, default-features = false }
 digest = { workspace = true, default-features = false }
+hkdf = { workspace = true, default-features = false }
+sha2 = { workspace = true, default-features = false }
 rayon = { workspace = true, default-features = false, optional = true }
 thiserror = { workspace = true, default-features = false }
 zeroize = { workspace = true, default-features = false }
@@ -51,7 +53,9 @@ test-log = { workspace = true }
 criterion = { workspace = true }
 ark-pallas = { workspace = true, features = ["curve"] }
 ark-vesta = { workspace = true }
+ark-bls12-381 = { version = "0.5.0", default-features = false, features = ["scalar_field"] }
 blake2 = { workspace = true }
+hex = { version = "0.4.3" }
 proptest = { version = "1", default-features = false, features = ["std"] }
 
 [[bench]]

@@ -6,7 +6,8 @@ use crate::AssetPkTLookup;
 use crate::Error;
 use crate::account_reg_split::AccountRegHostProtocol;
 use crate::curve_tree::{AccountTreeConfig, CurveTreeConfig};
-use crate::{AssetId, PallasA};
+use crate::split_types::AccountRandomnessDeviceRequest;
+use crate::{AssetId, PallasA, PallasScalar, WrappedCanonical};
 use codec::{Decode, Encode};
 use polymesh_dart_common::NullifierSkGenCounter;
 use rand::rngs::StdRng;
@@ -87,6 +88,48 @@ fn fee_register_topup_pay_over_tcp() {
     run_fee_register_topup_pay(&mut device);
     drop(device);
     server.join().unwrap();
+}
+
+#[test]
+fn account_randomness_persists_across_restart() {
+    let request = || AccountRandomnessDeviceRequest {
+        asset_id: 1,
+        counter: 0,
+    };
+    let scalars = |a: &WrappedCanonical<PallasScalar>, b: &WrappedCanonical<PallasScalar>| {
+        (a.decode().unwrap(), b.decode().unwrap())
+    };
+
+    let mut device = InMemoryDevice::new(StdRng::seed_from_u64(1));
+    assert!(device.account_randomness(request()).is_err());
+    let (_, sealed) = device.generate_keys().unwrap();
+    let account = device.account_randomness(request()).unwrap();
+    let fee = device.fee_account_randomness(request()).unwrap();
+
+    let mut device = InMemoryDevice::new(StdRng::seed_from_u64(2));
+    device.load_keys(sealed).unwrap();
+    let account_again = device.account_randomness(request()).unwrap();
+    let fee_again = device.fee_account_randomness(request()).unwrap();
+
+    let account = scalars(&account.randomness, &account.rho_randomness);
+    let fee = scalars(&fee.initial_rho, &fee.initial_randomness);
+    assert_eq!(
+        account,
+        scalars(&account_again.randomness, &account_again.rho_randomness)
+    );
+    assert_eq!(
+        fee,
+        scalars(&fee_again.initial_rho, &fee_again.initial_randomness)
+    );
+    assert_ne!(account, fee);
+
+    let next = device
+        .account_randomness(AccountRandomnessDeviceRequest {
+            asset_id: 1,
+            counter: 1,
+        })
+        .unwrap();
+    assert_ne!(account, scalars(&next.randomness, &next.rho_randomness));
 }
 
 #[test]

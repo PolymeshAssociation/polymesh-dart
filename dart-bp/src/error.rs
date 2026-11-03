@@ -167,6 +167,10 @@ pub enum Error {
     /// Point at identity not allowed
     #[error("Point at identity not allowed")]
     PointAtIdentity,
+
+    /// Seed shorter than the minimum
+    #[error("Seed is {0} bytes but expected at least {1}")]
+    SeedTooShort(usize, usize),
 }
 
 impl Error {
