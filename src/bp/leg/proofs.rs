@@ -138,7 +138,19 @@ impl<T: DartLimits> MediatorAffirmationProof<T> {
         key_index: MediatorId,
         accept: bool,
     ) -> Result<Self, Error> {
-        let ctx = leg_ref.context();
+        Self::new_with_context(rng, leg_ref, &[], leg_enc, mediator_keys, key_index, accept)
+    }
+
+    pub fn new_with_context<R: RngCore + CryptoRng>(
+        rng: &mut R,
+        leg_ref: &LegRef,
+        ctx: &[u8],
+        leg_enc: &MediatorEncryption,
+        mediator_keys: &AccountKeys,
+        key_index: MediatorId,
+        accept: bool,
+    ) -> Result<Self, Error> {
+        let ctx = compose_ctx(ctx, &leg_ref.context());
         let med = leg_enc.decode()?;
         // The mediator's encryption key is one of the asset's and its index is found by trial
         // decryption. The ring hides it so it must not be stored or sent anywhere.
@@ -176,7 +188,18 @@ impl<T: DartLimits> MediatorAffirmationProof<T> {
         key_index: MediatorId,
         accept: bool,
     ) -> Result<Self, Error> {
-        let ctx = leg_ref.context();
+        Self::new_revealed_with_context(rng, leg_ref, &[], mediator_keys, key_index, accept)
+    }
+
+    pub fn new_revealed_with_context<R: RngCore + CryptoRng>(
+        rng: &mut R,
+        leg_ref: &LegRef,
+        ctx: &[u8],
+        mediator_keys: &AccountKeys,
+        key_index: MediatorId,
+        accept: bool,
+    ) -> Result<Self, Error> {
+        let ctx = compose_ctx(ctx, &leg_ref.context());
         let proof = mediator::PublicAssetMediatorTxnProof::new(
             rng,
             mediator_keys.acct.secret.0.0,
@@ -202,7 +225,15 @@ impl<T: DartLimits> MediatorAffirmationProof<T> {
 
     /// Verify a leg whose asset-id is hidden.
     pub fn verify(&self, leg_enc: &MediatorEncryption) -> Result<(), Error> {
-        let ctx = self.leg_ref.context();
+        self.verify_with_context(&[], leg_enc)
+    }
+
+    pub fn verify_with_context(
+        &self,
+        ctx: &[u8],
+        leg_enc: &MediatorEncryption,
+    ) -> Result<(), Error> {
+        let ctx = compose_ctx(ctx, &self.leg_ref.context());
         match &self.inner {
             MediatorAffirmationInner::Hidden(inner) => {
                 inner.decode()?.verify(
@@ -220,7 +251,15 @@ impl<T: DartLimits> MediatorAffirmationProof<T> {
 
     /// Verify a leg whose asset-id is revealed.
     pub fn verify_revealed(&self, mediator_pk: &AccountPublicKey) -> Result<(), Error> {
-        let ctx = self.leg_ref.context();
+        self.verify_revealed_with_context(&[], mediator_pk)
+    }
+
+    pub fn verify_revealed_with_context(
+        &self,
+        ctx: &[u8],
+        mediator_pk: &AccountPublicKey,
+    ) -> Result<(), Error> {
+        let ctx = compose_ctx(ctx, &self.leg_ref.context());
         match &self.inner {
             MediatorAffirmationInner::Revealed(inner) => {
                 inner.decode()?.verify(

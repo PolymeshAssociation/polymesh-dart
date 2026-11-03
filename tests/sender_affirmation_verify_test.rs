@@ -90,6 +90,26 @@ fn test_sender_affirmation_verify() {
         .verify(&leg_enc, chain.account_tree(), &mut rng)
         .unwrap();
 
+    let ctx = b"generic-submission-context";
+    let mut issuer_asset_state = issuer_acct.get_account_asset_state(asset_id).unwrap();
+    let context_proof = SenderAffirmationProof::<()>::new_with_context(
+        &mut rng,
+        &issuer_acct.keys(),
+        &leg_ref,
+        ctx,
+        500,
+        &leg_enc,
+        &mut issuer_asset_state,
+        account_tree.prover_account_tree(),
+    )
+    .unwrap();
+    context_proof
+        .verify_with_context(ctx, &leg_enc, chain.account_tree(), &mut rng)
+        .unwrap();
+    assert!(context_proof
+        .verify_with_context(b"different-context", &leg_enc, chain.account_tree(), &mut rng)
+        .is_err());
+
     println!(
         "For L={ACCOUNT_TREE_L}, height={ACCOUNT_TREE_HEIGHT}, verification time: {:?}",
         start.elapsed()
