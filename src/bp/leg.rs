@@ -733,8 +733,16 @@ impl<T: DartLimits> SettlementBuilder<T> {
         self,
         rng: &mut R,
     ) -> Result<SettlementProof<T, AssetTreeConfig>, Error> {
+        self.build_with_context(&[], rng)
+    }
+
+    pub fn build_with_context<R: RngCore + CryptoRng>(
+        self,
+        ctx: &[u8],
+        rng: &mut R,
+    ) -> Result<SettlementProof<T, AssetTreeConfig>, Error> {
         if let Some(paths) = &self.paths {
-            self.encrypt_and_prove(rng, paths)
+            self.encrypt_and_prove_with_context(ctx, rng, paths)
         } else {
             Err(Error::CurveTreeRootNotFound)
         }
@@ -750,6 +758,23 @@ impl<T: DartLimits> SettlementBuilder<T> {
             >,
     >(
         &self,
+        rng: &mut R,
+        asset_tree: impl CurveTreeLookup<ASSET_TREE_L, ASSET_TREE_M, C>,
+    ) -> Result<SettlementProof<T, C>, Error> {
+        self.encrypt_and_prove_with_context(&[], rng, asset_tree)
+    }
+
+    pub fn encrypt_and_prove_with_context<
+        R: RngCore + CryptoRng,
+        C: CurveTreeConfig<
+                F0 = <VestaParameters as CurveConfig>::ScalarField,
+                F1 = <PallasParameters as CurveConfig>::ScalarField,
+                P0 = VestaParameters,
+                P1 = PallasParameters,
+            >,
+    >(
+        &self,
+        ctx: &[u8],
         rng: &mut R,
         asset_tree: impl CurveTreeLookup<ASSET_TREE_L, ASSET_TREE_M, C>,
     ) -> Result<SettlementProof<T, C>, Error> {
@@ -777,8 +802,10 @@ impl<T: DartLimits> SettlementBuilder<T> {
         let mut legs = Vec::with_capacity(encrypted_legs.len());
 
         for (idx, encrypted_leg) in encrypted_legs.into_iter().enumerate() {
-            let ctx = leg_proof_initial_ctx(&memo, root_block, &legs_digest, idx as LegId);
-            let leg_proof = encrypted_leg.prove(rng, &ctx, &asset_tree)?;
+            let operation_ctx =
+                leg_proof_initial_ctx(&memo, root_block, &legs_digest, idx as LegId);
+            let composed_ctx = compose_ctx(ctx, &operation_ctx);
+            let leg_proof = encrypted_leg.prove(rng, &composed_ctx, &asset_tree)?;
             legs.push(leg_proof);
         }
 
@@ -868,6 +895,17 @@ impl<
         asset_lookup: &AssetKeysLookup,
         rng: &mut R,
     ) -> Result<(), Error> {
+        self.verify_with_context(&[], asset_tree, asset_lookup, rng)
+    }
+
+    #[cfg(feature = "parallel")]
+    pub fn verify_with_context<R: RngCore + CryptoRng + Send + Sync + Clone>(
+        &self,
+        ctx: &[u8],
+        asset_tree: impl ValidateCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, C>,
+        asset_lookup: &AssetKeysLookup,
+        rng: &mut R,
+    ) -> Result<(), Error> {
         // Get the curve tree root.
         let root = asset_tree
             .get_block_root(self.root_block.into())
@@ -885,8 +923,10 @@ impl<
         self.legs.par_iter().enumerate().try_for_each_init(
             || rng.clone(),
             |rng, (idx, leg)| {
-                let ctx = leg_proof_initial_ctx(memo, self.root_block, &legs_digest, idx as LegId);
-                leg.verify(&ctx, &root, asset_lookup, rng)
+                let operation_ctx =
+                    leg_proof_initial_ctx(memo, self.root_block, &legs_digest, idx as LegId);
+                let composed_ctx = compose_ctx(ctx, &operation_ctx);
+                leg.verify(&composed_ctx, &root, asset_lookup, rng)
             },
         )?;
         Ok(())
@@ -895,6 +935,17 @@ impl<
     #[cfg(not(feature = "parallel"))]
     pub fn verify<R: RngCore + CryptoRng>(
         &self,
+        asset_tree: impl ValidateCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, C>,
+        asset_lookup: &AssetKeysLookup,
+        rng: &mut R,
+    ) -> Result<(), Error> {
+        self.verify_with_context(&[], asset_tree, asset_lookup, rng)
+    }
+
+    #[cfg(not(feature = "parallel"))]
+    pub fn verify_with_context<R: RngCore + CryptoRng>(
+        &self,
+        ctx: &[u8],
         asset_tree: impl ValidateCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, C>,
         asset_lookup: &AssetKeysLookup,
         rng: &mut R,
@@ -912,9 +963,10 @@ impl<
         }
         let legs_digest = self.legs_digest();
         for (idx, leg) in self.legs.iter().enumerate() {
-            let ctx =
+            let operation_ctx =
                 leg_proof_initial_ctx(&self.memo, self.root_block, &legs_digest, idx as LegId);
-            leg.verify(&ctx, &root, asset_lookup, rng)?;
+            let composed_ctx = compose_ctx(ctx, &operation_ctx);
+            leg.verify(&composed_ctx, &root, asset_lookup, rng)?;
         }
         Ok(())
     }
@@ -926,9 +978,20 @@ impl<
         asset_lookup: &AssetKeysLookup,
         rng: &mut R,
     ) -> Result<(), Error> {
+        self.batched_verify_with_context(&[], asset_tree, asset_lookup, rng)
+    }
+
+    #[cfg(feature = "parallel")]
+    pub fn batched_verify_with_context<R: RngCore + CryptoRng + Send + Sync + Clone>(
+        &self,
+        ctx: &[u8],
+        asset_tree: impl ValidateCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, C>,
+        asset_lookup: &AssetKeysLookup,
+        rng: &mut R,
+    ) -> Result<(), Error> {
         let batch_size = self.legs.len();
         if batch_size < 2 {
-            return self.verify(asset_tree, asset_lookup, rng);
+            return self.verify_with_context(ctx, asset_tree, asset_lookup, rng);
         }
 
         // Get the curve tree root.
@@ -953,11 +1016,12 @@ impl<
             .map_init(
                 || rng.clone(),
                 |rng, (idx, leg)| {
-                    let ctx =
+                    let operation_ctx =
                         leg_proof_initial_ctx(memo, self.root_block, &legs_digest, idx as LegId);
+                    let composed_ctx = compose_ctx(ctx, &operation_ctx);
                     let guard = RandomizedMultCheckerGuard::new_using_rng(rng);
                     guard.with_err(Error::RMCVerifyError, |rmc| {
-                        leg.batched_verify(&ctx, &root, asset_lookup, rng, Some(rmc))
+                        leg.batched_verify(&composed_ctx, &root, asset_lookup, rng, Some(rmc))
                     })
                 },
             )
@@ -987,9 +1051,20 @@ impl<
         asset_lookup: &AssetKeysLookup,
         rng: &mut R,
     ) -> Result<(), Error> {
+        self.batched_verify_with_context(&[], asset_tree, asset_lookup, rng)
+    }
+
+    #[cfg(not(feature = "parallel"))]
+    pub fn batched_verify_with_context<R: RngCore + CryptoRng>(
+        &self,
+        ctx: &[u8],
+        asset_tree: impl ValidateCurveTreeRoot<ASSET_TREE_L, ASSET_TREE_M, C>,
+        asset_lookup: &AssetKeysLookup,
+        rng: &mut R,
+    ) -> Result<(), Error> {
         let batch_size = self.legs.len();
         if batch_size < 2 {
-            return self.verify(asset_tree, asset_lookup, rng);
+            return self.verify_with_context(ctx, asset_tree, asset_lookup, rng);
         }
 
         // Get the curve tree root.
@@ -1010,9 +1085,11 @@ impl<
         let guard = RandomizedMultCheckerGuard::new_using_rng(rng);
         guard.with_err(Error::RMCVerifyError, |rmc| {
             for (idx, leg) in self.legs.iter().enumerate() {
-                let ctx =
+                let operation_ctx =
                     leg_proof_initial_ctx(&self.memo, self.root_block, &legs_digest, idx as LegId);
-                let (even, odd) = leg.batched_verify(&ctx, &root, asset_lookup, rng, Some(rmc))?;
+                let composed_ctx = compose_ctx(ctx, &operation_ctx);
+                let (even, odd) =
+                    leg.batched_verify(&composed_ctx, &root, asset_lookup, rng, Some(rmc))?;
                 // If any tuple is empty which can happen when asset id is revealed
                 if !even.fixed_point_scalars.is_empty() {
                     even_tuples.push(even);

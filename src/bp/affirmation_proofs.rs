@@ -107,6 +107,26 @@ macro_rules! with_balance {
                 amount: Balance,
                 tree_lookup: &impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
             ) -> Result<(Self, AffirmationDeviceRequest), Error> {
+                Self::init_with_context(
+                    rng,
+                    account_state,
+                    leg_ref,
+                    &[],
+                    leg_enc,
+                    amount,
+                    tree_lookup,
+                )
+            }
+
+            pub fn init_with_context<R: RngCore + CryptoRng>(
+                rng: &mut R,
+                account_state: &mut AccountAssetState,
+                leg_ref: &LegRef,
+                ctx: &[u8],
+                leg_enc: &LegEncrypted,
+                amount: Balance,
+                tree_lookup: &impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
+            ) -> Result<(Self, AffirmationDeviceRequest), Error> {
                 let state_change = account_state.$state_method(amount)?;
                 let updated_commitment = state_change.commitment()?;
                 let leaf_path = state_change.get_path(tree_lookup)?;
@@ -115,7 +135,7 @@ macro_rules! with_balance {
                 let root = tree_lookup.root()?;
                 let root = root.root_node()?;
 
-                let nonce = leg_ref.context();
+                let nonce = compose_ctx(ctx, &leg_ref.context());
                 let leg_enc_inner = leg_enc.decode()?;
                 let (leg_enc_core, eph_pk) = leg_enc_inner.$EphPkExtractor();
 
@@ -271,12 +291,41 @@ macro_rules! with_balance {
                 account_asset: &mut AccountAssetState,
                 tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
             ) -> Result<Self, Error> {
+                Self::new_with_context(
+                    rng,
+                    keys,
+                    leg_ref,
+                    &[],
+                    amount,
+                    leg_enc,
+                    account_asset,
+                    tree_lookup,
+                )
+            }
+
+            pub fn new_with_context<R: RngCore + CryptoRng>(
+                rng: &mut R,
+                keys: &AccountKeys,
+                leg_ref: &LegRef,
+                ctx: &[u8],
+                amount: Balance,
+                leg_enc: &LegEncrypted,
+                account_asset: &mut AccountAssetState,
+                tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
+            ) -> Result<Self, Error> {
                 let gens = $crate::bp::device::DeviceGenerators::from_host_given_pc_gens(
                     tree_lookup.params().even_parameters.pc_gens(),
                 );
 
-                let (protocol, device_request) =
-                    $HostProto::init(rng, account_asset, leg_ref, leg_enc, amount, &tree_lookup)?;
+                let (protocol, device_request) = $HostProto::init_with_context(
+                    rng,
+                    account_asset,
+                    leg_ref,
+                    ctx,
+                    leg_enc,
+                    amount,
+                    &tree_lookup,
+                )?;
 
                 let device_response = $crate::bp::auth_proofs::create_affirmation_auth_proof(
                     rng,
@@ -294,6 +343,16 @@ macro_rules! with_balance {
                 tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
                 rng: &mut R,
             ) -> Result<(), Error> {
+                self.verify_with_context(&[], leg_enc, tree_roots, rng)
+            }
+
+            pub fn verify_with_context<R: RngCore + CryptoRng>(
+                &self,
+                ctx: &[u8],
+                leg_enc: &LegEncrypted,
+                tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
+                rng: &mut R,
+            ) -> Result<(), Error> {
                 // Get the curve tree root.
                 let root = tree_roots
                     .get_block_root(self.root_block.into())
@@ -304,7 +363,7 @@ macro_rules! with_balance {
                 let root = root.root_node()?;
 
                 let proof = self.inner.decode()?;
-                self.verify_core(&proof, leg_enc, &root, rng)
+                self.verify_core(&proof, ctx, leg_enc, &root, rng)
             }
 
             pub(crate) fn verify_core<R: RngCore + CryptoRng>(
@@ -316,13 +375,14 @@ macro_rules! with_balance {
                     <C as CurveTreeConfig>::P0,
                     <C as CurveTreeConfig>::P1,
                 >,
+                ctx: &[u8],
                 leg_enc: &LegEncrypted,
                 root: &Root<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C::P0, C::P1>,
                 rng: &mut R,
             ) -> Result<(), Error> {
                 let updated_comm = self.updated_account_state_commitment.as_commitment()?;
                 let nullifier = self.nullifier.get_affine()?;
-                let ctx = self.leg_ref.context();
+                let ctx = compose_ctx(ctx, &self.leg_ref.context());
                 let gens = dart_gens();
                 let comm_key = gens.account_comm_key();
                 let sk_gen = comm_key.sk_gen();
@@ -490,6 +550,26 @@ macro_rules! no_balance {
                 amount: Balance,
                 tree_lookup: &impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
             ) -> Result<(Self, AffirmationDeviceRequest), Error> {
+                Self::init_with_context(
+                    rng,
+                    account_state,
+                    leg_ref,
+                    &[],
+                    leg_enc,
+                    amount,
+                    tree_lookup,
+                )
+            }
+
+            pub fn init_with_context<R: RngCore + CryptoRng>(
+                rng: &mut R,
+                account_state: &mut AccountAssetState,
+                leg_ref: &LegRef,
+                ctx: &[u8],
+                leg_enc: &LegEncrypted,
+                amount: Balance,
+                tree_lookup: &impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
+            ) -> Result<(Self, AffirmationDeviceRequest), Error> {
                 let state_change = account_state.$state_method()?;
                 let updated_commitment = state_change.commitment()?;
                 let leaf_path = state_change.get_path(tree_lookup)?;
@@ -498,7 +578,7 @@ macro_rules! no_balance {
                 let root = tree_lookup.root()?;
                 let root = root.root_node()?;
 
-                let nonce = leg_ref.context();
+                let nonce = compose_ctx(ctx, &leg_ref.context());
                 let leg_enc_inner = leg_enc.decode()?;
                 let (leg_enc_core, eph_pk) = leg_enc_inner.$EphPkExtractor();
 
@@ -654,12 +734,41 @@ macro_rules! no_balance {
                 account_asset: &mut AccountAssetState,
                 tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
             ) -> Result<Self, Error> {
+                Self::new_with_context(
+                    rng,
+                    keys,
+                    leg_ref,
+                    &[],
+                    leg_enc,
+                    amount,
+                    account_asset,
+                    tree_lookup,
+                )
+            }
+
+            pub fn new_with_context<R: RngCore + CryptoRng>(
+                rng: &mut R,
+                keys: &AccountKeys,
+                leg_ref: &LegRef,
+                ctx: &[u8],
+                leg_enc: &LegEncrypted,
+                amount: Balance,
+                account_asset: &mut AccountAssetState,
+                tree_lookup: impl CurveTreeLookup<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
+            ) -> Result<Self, Error> {
                 let gens = $crate::bp::device::DeviceGenerators::from_host_given_pc_gens(
                     tree_lookup.params().even_parameters.pc_gens(),
                 );
 
-                let (protocol, device_request) =
-                    $HostProto::init(rng, account_asset, leg_ref, leg_enc, amount, &tree_lookup)?;
+                let (protocol, device_request) = $HostProto::init_with_context(
+                    rng,
+                    account_asset,
+                    leg_ref,
+                    ctx,
+                    leg_enc,
+                    amount,
+                    &tree_lookup,
+                )?;
 
                 let device_response = $crate::bp::auth_proofs::create_affirmation_auth_proof(
                     rng,
@@ -677,6 +786,16 @@ macro_rules! no_balance {
                 tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
                 rng: &mut R,
             ) -> Result<(), Error> {
+                self.verify_with_context(&[], leg_enc, tree_roots, rng)
+            }
+
+            pub fn verify_with_context<R: RngCore + CryptoRng>(
+                &self,
+                ctx: &[u8],
+                leg_enc: &LegEncrypted,
+                tree_roots: impl ValidateCurveTreeRoot<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C>,
+                rng: &mut R,
+            ) -> Result<(), Error> {
                 // Get the curve tree root.
                 let root = tree_roots
                     .get_block_root(self.root_block.into())
@@ -687,7 +806,7 @@ macro_rules! no_balance {
                 let root = root.root_node()?;
 
                 let proof = self.inner.decode()?;
-                self.verify_core(&proof, leg_enc, &root, rng)
+                self.verify_core(&proof, ctx, leg_enc, &root, rng)
             }
 
             pub(crate) fn verify_core<R: RngCore + CryptoRng>(
@@ -699,13 +818,14 @@ macro_rules! no_balance {
                     <C as CurveTreeConfig>::P0,
                     <C as CurveTreeConfig>::P1,
                 >,
+                ctx: &[u8],
                 leg_enc: &LegEncrypted,
                 root: &Root<ACCOUNT_TREE_L, ACCOUNT_TREE_M, C::P0, C::P1>,
                 rng: &mut R,
             ) -> Result<(), Error> {
                 let updated_comm = self.updated_account_state_commitment.as_commitment()?;
                 let nullifier = self.nullifier.get_affine()?;
-                let ctx = self.leg_ref.context();
+                let ctx = compose_ctx(ctx, &self.leg_ref.context());
                 let gens = dart_gens();
                 let comm_key = gens.account_comm_key();
                 let sk_gen = comm_key.sk_gen();

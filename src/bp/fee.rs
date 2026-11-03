@@ -34,6 +34,12 @@ use polymesh_dart_bp::{AUTH_PROOF_LABEL, TXN_CHALLENGE_LABEL, fee_account as bp_
 type BPFeeAccountState = bp_fee_account::FeeAccountState<PallasA>;
 type BPFeeAccountStateCommitment = bp_fee_account::FeeAccountStateCommitment<PallasA>;
 
+/// Canonical submission context for proofs bound to a relayer batch's spent fee state.
+/// Snapshot the nullifier before generating batch proofs and reuse that state for payment.
+pub fn relayer_batch_proof_context(nullifier: &FeeAccountStateNullifier) -> Vec<u8> {
+    (b"polymesh/dart/submission/v1".as_slice(), 1u8, nullifier).encode()
+}
+
 pub trait FeeAccountStateUpdate {
     fn account_state_commitment(&self) -> FeeAccountStateCommitment;
     fn nullifier(&self) -> FeeAccountStateNullifier;

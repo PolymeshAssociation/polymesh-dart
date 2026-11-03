@@ -84,6 +84,17 @@ pub mod key_reg_split;
 pub mod mint_split;
 pub mod split_types;
 
+pub const CONTEXT_SEPARATOR_LABEL: &[u8; 17] = b"context-separator";
+
+#[cfg(feature = "host_proofs")]
+pub fn compose_ctx(ctx: &[u8], operation_ctx: &[u8]) -> Vec<u8> {
+    if ctx.is_empty() {
+        operation_ctx.to_vec()
+    } else {
+        (ctx, CONTEXT_SEPARATOR_LABEL, operation_ctx).encode()
+    }
+}
+
 #[cfg(feature = "host_proofs")]
 use crate::curve_tree::{
     AccountTreeConfig, AssetTreeConfig, CompressedLeafValue, CurveTreeConfig, CurveTreeLookup,
@@ -555,6 +566,25 @@ mod tests {
     };
     use crate::curve_tree::ProverCurveTree;
     use crate::fee_split::{FeePaymentHostProtocol, FeeRegHostProtocol, FeeTopupHostProtocol};
+
+    #[test]
+    fn context_composition_preserves_operation_binding() {
+        assert_eq!(compose_ctx(&[], b"operation"), b"operation");
+        assert_eq!(
+            compose_ctx(b"batch", b"operation"),
+            (
+                b"batch".as_slice(),
+                CONTEXT_SEPARATOR_LABEL,
+                b"operation".as_slice()
+            )
+                .encode()
+        );
+        assert_ne!(compose_ctx(b"a", b"bc"), compose_ctx(b"ab", b"c"));
+        assert_ne!(
+            compose_ctx(b"batch-a", b"operation"),
+            compose_ctx(b"batch-b", b"operation")
+        );
+    }
     use crate::key_distribution_proof::KeyDistributionProof;
     use crate::mint_split::MintHostProtocol;
     use crate::split_types::{AffirmationDeviceRequest, AffirmationDeviceResponse};
@@ -770,7 +800,7 @@ mod tests {
         });
         let (send_core_verify, _) = bench(K, || {
             send_proof
-                .verify_core(&send_core, &leg_enc, &account_root_node, &mut rng)
+                .verify_core(&send_core, &[], &leg_enc, &account_root_node, &mut rng)
                 .unwrap()
         });
         let (send_decode, _) = bench(K, || send_proof.inner.decode().unwrap());
@@ -818,7 +848,7 @@ mod tests {
         });
         let (recv_core_verify, _) = bench(K, || {
             recv_proof
-                .verify_core(&recv_core, &leg_enc, &account_root_node, &mut rng)
+                .verify_core(&recv_core, &[], &leg_enc, &account_root_node, &mut rng)
                 .unwrap()
         });
         let (recv_decode, _) = bench(K, || recv_proof.inner.decode().unwrap());
