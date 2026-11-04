@@ -28,20 +28,23 @@ use super::*;
 pub struct ProofHash(#[cfg_attr(feature = "serde", serde(with = "human_hex"))] pub [u8; 32]);
 
 /// A single batched proof (no identity).
+///
+/// The optional `u8` on affirmations that can finalize a settlement is the settlement's leg count,
+/// used for weight/fee estimation (`None` means worst-case). The chain rejects a wrong count.
 #[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
 #[scale_info(skip_type_params(T))]
 pub enum BatchedProof<T: DartLimits = ()> {
     CreateSettlement(SettlementProof<T>),
     SenderAffirmation(SenderAffirmationProof<T>),
     ReceiverAffirmation(ReceiverAffirmationProof<T>),
-    MediatorAffirmation(MediatorAffirmationProof<T>),
-    SenderCounterUpdate(SenderCounterUpdateProof<T>),
-    SenderRevertAffirmation(SenderRevertAffirmationProof<T>),
-    ReceiverRevertAffirmation(ReceiverRevertAffirmationProof<T>),
-    ReceiverClaim(ReceiverClaimProof<T>),
+    MediatorAffirmation(MediatorAffirmationProof<T>, Option<u8>),
+    SenderCounterUpdate(SenderCounterUpdateProof<T>, Option<u8>),
+    SenderRevertAffirmation(SenderRevertAffirmationProof<T>, Option<u8>),
+    ReceiverRevertAffirmation(ReceiverRevertAffirmationProof<T>, Option<u8>),
+    ReceiverClaim(ReceiverClaimProof<T>, Option<u8>),
     ExecuteInstantSettlement(InstantSettlementProof<T>),
-    InstantSenderAffirmation(InstantSenderAffirmationProof<T>),
-    InstantReceiverAffirmation(InstantReceiverAffirmationProof<T>),
+    InstantSenderAffirmation(InstantSenderAffirmationProof<T>, Option<u8>),
+    InstantReceiverAffirmation(InstantReceiverAffirmationProof<T>, Option<u8>),
 }
 
 /// A batch of DART proofs.
