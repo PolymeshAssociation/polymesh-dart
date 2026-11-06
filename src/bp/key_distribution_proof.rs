@@ -27,7 +27,7 @@ pub struct KeyDistributionProof<T: DartLimits = ()> {
     /// The public key corresponding to the distributed secret key (`enc_key_gen * sk`).
     pub public_key: EncryptionPublicKey,
     /// The recipient public keys the secret was distributed to.
-    pub recipient_pks: BoundedBTreeSet<EncryptionPublicKey, T::MaxKeysPerRegProof>,
+    pub recipient_pks: BoundedBTreeSet<EncryptionPublicKey, T::MaxKeyDistributionRecipients>,
     inner: BoundedCanonical<
         key_distribution::KeyDistributionProof<PallasA, KEY_DIST_CHUNK_BITS, KEY_DIST_NUM_CHUNKS>,
         T::MaxInnerProofSize,
