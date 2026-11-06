@@ -26,8 +26,8 @@ use polymesh_dart_bp::poseidon_impls::poseidon_2::{
 use polymesh_dart_common::{
     MAX_ACCOUNT_ASSET_REG_PROOFS, MAX_ASSET_AUDITORS, MAX_ASSET_ENC_KEYS, MAX_ASSET_MEDIATORS,
     MAX_BATCHED_PROOFS, MAX_FEE_ACCOUNT_REG_PROOFS, MAX_FEE_ACCOUNT_TOPUP_PROOFS,
-    MAX_INNER_PROOF_SIZE, MAX_KEYS_PER_REG_PROOF, MAX_PUBLIC_ENC_KEYS, MEMO_MAX_LENGTH,
-    SETTLEMENT_MAX_LEGS,
+    MAX_INNER_PROOF_SIZE, MAX_KEY_DISTRIBUTION_RECIPIENTS, MAX_KEYS_PER_REG_PROOF,
+    MAX_PUBLIC_ENC_KEYS, MEMO_MAX_LENGTH, SETTLEMENT_MAX_LEGS,
 };
 use scale_info::TypeInfo;
 
@@ -162,6 +162,9 @@ pub trait DartLimits:
     /// The maximum number of keys in an account registration proof.
     type MaxKeysPerRegProof: GetExtra<u32>;
 
+    /// The maximum number of recipients in a key distribution proof.
+    type MaxKeyDistributionRecipients: GetExtra<u32>;
+
     /// The maximum number of proofs in a single batched proof.
     type MaxBatchedProofs: GetExtra<u32>;
 
@@ -198,6 +201,7 @@ pub trait DartLimits:
 
 impl DartLimits for () {
     type MaxKeysPerRegProof = ConstSize<500>;
+    type MaxKeyDistributionRecipients = ConstSize<MAX_KEY_DISTRIBUTION_RECIPIENTS>;
     type MaxBatchedProofs = ConstSize<MAX_BATCHED_PROOFS>;
     type MaxFeeAccountRegProofs = ConstSize<MAX_FEE_ACCOUNT_REG_PROOFS>;
     type MaxFeeAccountTopupProofs = ConstSize<MAX_FEE_ACCOUNT_TOPUP_PROOFS>;
@@ -216,6 +220,7 @@ pub struct PolymeshLimits;
 
 impl DartLimits for PolymeshLimits {
     type MaxKeysPerRegProof = ConstSize<MAX_KEYS_PER_REG_PROOF>;
+    type MaxKeyDistributionRecipients = ConstSize<MAX_KEY_DISTRIBUTION_RECIPIENTS>;
     type MaxBatchedProofs = ConstSize<MAX_BATCHED_PROOFS>;
     type MaxFeeAccountRegProofs = ConstSize<MAX_FEE_ACCOUNT_REG_PROOFS>;
     type MaxFeeAccountTopupProofs = ConstSize<MAX_FEE_ACCOUNT_TOPUP_PROOFS>;
@@ -1034,6 +1039,57 @@ mod tests {
 
         let recovered = proof.decrypt(0, &recipient.enc.secret).unwrap();
         assert_eq!(recovered, distributor.secret.inner().0);
+    }
+
+    fn check_key_distribution_recipient_limit<T: DartLimits>() {
+        let mut rng = rand::thread_rng();
+        let distributor = EncryptionKeyPair::rand(&mut rng).unwrap();
+        let max_recipients = T::MaxKeyDistributionRecipients::get() as usize;
+        let recipients = (0..max_recipients + 1)
+            .map(|_| EncryptionKeyPair::rand(&mut rng).unwrap())
+            .collect::<Vec<_>>();
+        let params = curve_tree::get_account_curve_tree_parameters();
+        let nonce = b"test-nonce";
+
+        let proof = KeyDistributionProof::<T>::new(
+            &mut rng,
+            &distributor,
+            recipients[..max_recipients]
+                .iter()
+                .map(|r| r.public.clone())
+                .collect(),
+            nonce,
+            params,
+        )
+        .unwrap();
+        assert_eq!(proof.recipient_pks.len(), max_recipients);
+
+        let decoded = KeyDistributionProof::<T>::decode(&mut &proof.encode()[..]).unwrap();
+        decoded.verify(nonce, params, &mut rng).unwrap();
+        let index = decoded
+            .recipient_pks
+            .iter()
+            .position(|pk| *pk == recipients[0].public)
+            .unwrap();
+        let recovered = decoded.decrypt(index, &recipients[0].secret).unwrap();
+        assert_eq!(recovered, distributor.secret.inner().0);
+
+        assert!(matches!(
+            KeyDistributionProof::<T>::new(
+                &mut rng,
+                &distributor,
+                recipients.iter().map(|r| r.public.clone()).collect(),
+                nonce,
+                params,
+            ),
+            Err(Error::TooManyPublicInputsInProof)
+        ));
+    }
+
+    #[test]
+    fn key_distribution_recipient_limit() {
+        check_key_distribution_recipient_limit::<()>();
+        check_key_distribution_recipient_limit::<PolymeshLimits>();
     }
 
     #[test]

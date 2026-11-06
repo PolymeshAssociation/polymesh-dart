@@ -48,6 +48,9 @@ pub const MEMO_MAX_LENGTH: u32 = 256;
 pub const SETTLEMENT_MAX_LEGS: u32 = 16;
 
 pub const MAX_KEYS_PER_REG_PROOF: u32 = 100;
+/// Maximum number of recipients of a shared auditor or mediator encryption key in a key
+/// distribution proof.
+pub const MAX_KEY_DISTRIBUTION_RECIPIENTS: u32 = MAX_ASSET_AUDITORS + MAX_ASSET_MEDIATORS;
 pub const MAX_ACCOUNT_ASSET_REG_PROOFS: u32 = 50;
 pub const MAX_BATCHED_PROOFS: u32 = 10;
 pub const MAX_FEE_ACCOUNT_REG_PROOFS: u32 = 10;
