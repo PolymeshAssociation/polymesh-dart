@@ -33,7 +33,7 @@ use curve_tree_relations::ped_comm_group_elems::{
 use curve_tree_relations::range_proof::range_proof;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
-use polymesh_dart_common::{BALANCE_BITS, Balance};
+use polymesh_dart_common::{BALANCE_BITS, Balance, MAX_ASSET_ENC_KEYS, MAX_ASSET_MEDIATORS};
 use rand_core::CryptoRngCore;
 use schnorr_pok::discrete_log::{
     PokDiscreteLogProtocol, PokPedersenCommitment, PokPedersenCommitmentProtocol,
@@ -1336,6 +1336,14 @@ impl<
 
         asset_comm_params.ensure_max_keys_supported()?;
         AssetCommitmentParams::<G0, G1>::ensure_key_counts_supported(num_enc_keys, num_med_keys)?;
+
+        let max_num_points = 1 + MAX_ASSET_ENC_KEYS as usize + MAX_ASSET_MEDIATORS as usize;
+        if self.re_randomized_points.len() > max_num_points {
+            return Err(Error::TooManyRandomizedPoints(
+                self.re_randomized_points.len(),
+                max_num_points,
+            ));
+        }
 
         if self.resp_eph_pk_enc.len() != num_enc_keys {
             return Err(Error::ProofVerificationError(format!(

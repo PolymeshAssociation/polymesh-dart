@@ -93,6 +93,10 @@ pub enum Error {
         max_med_keys: usize,
     },
 
+    /// More randomized points than an asset leaf holds
+    #[error("Randomized point count is {0} but at most {1} are supported")]
+    TooManyRandomizedPoints(usize, usize),
+
     /// Expect same number of randomized points and responses for the points
     #[error("Randomized point count is {0} but expected at least {1}")]
     DifferentNumberOfRandomizedPointsAndResponses(usize, usize),

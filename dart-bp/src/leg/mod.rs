@@ -66,6 +66,10 @@ pub struct AssetCommitmentParams<
     /// `2 * (1 + MAX_ASSET_ENC_KEYS + MAX_ASSET_MEDIATORS)` commits the mediator count. Must have at
     /// least that many plus one generators.
     pub comm_key: Vec<Affine<G1>>,
+    /// Number of encryption keys `comm_key` is sized for.
+    pub max_enc_keys: u32,
+    /// Number of mediator keys `comm_key` is sized for.
+    pub max_med_keys: u32,
 }
 
 impl<
@@ -162,6 +166,8 @@ impl<
             j_0,
             freeze_gen,
             comm_key,
+            max_enc_keys,
+            max_med_keys,
         }
     }
 }
