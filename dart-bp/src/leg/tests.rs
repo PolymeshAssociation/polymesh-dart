@@ -1070,7 +1070,7 @@ fn leg_proofs_reject_root_of_different_height() {
     const NUM_GENS: usize = 1 << 14;
     const L: usize = 64;
     const M: usize = 2;
-    const HEIGHT: usize = 4;
+    const HEIGHT: u8 = 4;
 
     let label = b"asset-tree-params";
     let asset_tree_params =
@@ -3802,7 +3802,7 @@ proptest! {
 
         const NUM_GENS: usize = 1 << 12;
         const L: usize = 64;
-        const HEIGHT: usize = 2;
+        const HEIGHT: u8 = 2;
 
         let label = b"test_label";
         let asset_tree_params = SelRerandProofParametersNew::<VestaParameters, PallasParameters, _, _>::new_using_label(

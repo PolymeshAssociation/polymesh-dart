@@ -245,7 +245,7 @@ fn account_proofs_reject_root_of_different_height() {
     const NUM_GENS: usize = 1 << 14;
     const L: usize = 64;
     const M: usize = 2;
-    const HEIGHT: usize = 4;
+    const HEIGHT: u8 = 4;
     let (account_tree_params, account_comm_key, enc_gen) = setup_gens_new::<NUM_GENS>(b"testing");
 
     let (((sk, pk), (sk_e, pk_e)), (_, (_, pk_other_e)), ((_, _), (_, pk_a_e))) = setup_keys(
@@ -9131,7 +9131,7 @@ fn multi_asset_state_transition_different_confs() {
     // batched-path width 2/4 at differing tree heights -- to check it holds across curve-tree parameter choices.
     fn check<const L: usize, const M: usize>(
         num_legs: usize,
-        height: usize,
+        height: u8,
         account_tree_params: &SelRerandProofParametersNew<
             PallasParameters,
             VestaParameters,
@@ -9479,7 +9479,7 @@ pub fn get_tree_with_account_comm<
     account: &AccountState<PallasA>,
     account_comm_key: impl AccountCommitmentKeyTrait<PallasA>,
     account_tree_params: &P,
-    tree_height: usize,
+    tree_height: u8,
 ) -> Result<CurveTree<L, 1, PallasParameters, VestaParameters>> {
     let account_comm = account.commit(account_comm_key)?;
 
@@ -9497,7 +9497,7 @@ pub fn get_tree_with_commitment<
 >(
     account_comm: AccountStateCommitment<PallasA>,
     account_tree_params: &P,
-    tree_height: usize,
+    tree_height: u8,
 ) -> CurveTree<L, 1, PallasParameters, VestaParameters> {
     let set = vec![account_comm.0];
     CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
@@ -9516,7 +9516,7 @@ pub fn get_batched_tree_with_account_comms<
     accounts: Vec<&AccountState<PallasA>>,
     account_comm_key: impl AccountCommitmentKeyTrait<PallasA>,
     account_tree_params: &P,
-    tree_height: usize,
+    tree_height: u8,
 ) -> Result<CurveTree<L, M, PallasParameters, VestaParameters>> {
     let account_comms: Vec<_> = accounts
         .iter()
@@ -9622,8 +9622,8 @@ pub fn setup_single_leg_settlement_common<
     AccountTreeParams: SelRerandParametersRef<PallasParameters, VestaParameters>,
     AssetTreeParams: SelRerandParametersRef<VestaParameters, PallasParameters>,
 >(
-    asset_tree_height: u64,
-    account_tree_height: u64,
+    asset_tree_height: u8,
+    account_tree_height: u8,
     account_tree_params: AccountTreeParams,
     asset_tree_params: AssetTreeParams,
     asset_comm_params: AssetCommitmentParams<PallasParameters, VestaParameters>,
@@ -9675,7 +9675,7 @@ pub fn setup_single_leg_settlement_common<
     let asset_tree = CurveTree::<L, 1, VestaParameters, PallasParameters>::from_leaves(
         &set,
         &asset_tree_params,
-        Some(asset_tree_height as usize),
+        Some(asset_tree_height),
     );
 
     // Get asset tree path
@@ -9713,7 +9713,7 @@ pub fn setup_single_leg_settlement_common<
     let account_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
         &account_comms,
         &account_tree_params,
-        Some(account_tree_height as usize),
+        Some(account_tree_height),
     );
 
     let account_tree_root = account_tree.root_node();
@@ -9762,8 +9762,8 @@ pub fn setup_single_leg_settlement_common<
 }
 
 pub fn setup_single_leg_settlement<const NUM_GENS: usize, const L: usize>(
-    asset_tree_height: u64,
-    account_tree_height: u64,
+    asset_tree_height: u8,
+    account_tree_height: u8,
 ) -> (
     AssetData<PallasFr, VestaFr, PallasParameters, VestaParameters>,
     CurveTreeWitnessPath<L, VestaParameters, PallasParameters>,
@@ -9825,8 +9825,8 @@ pub fn setup_multi_asset_settlement<
     const ACCOUNT_TREE_M: usize,
 >(
     num_legs: usize,
-    asset_tree_height: usize,
-    account_tree_height: usize,
+    asset_tree_height: u8,
+    account_tree_height: u8,
 ) -> (
     Vec<AssetData<PallasFr, VestaFr, PallasParameters, VestaParameters>>,
     Vec<CurveTreeWitnessMultiPath<L, ASSET_TREE_M, VestaParameters, PallasParameters>>,
@@ -10021,7 +10021,7 @@ pub fn setup_single_leg_settlement_public_asset_common<
     const L: usize,
     AccountTreeParams: SelRerandParametersRef<PallasParameters, VestaParameters>,
 >(
-    account_tree_height: u64,
+    account_tree_height: u8,
     account_tree_params: AccountTreeParams,
     account_comm_key: impl AccountCommitmentKeyTrait<PallasA>,
     enc_gen: PallasA,
@@ -10088,7 +10088,7 @@ pub fn setup_single_leg_settlement_public_asset_common<
     let account_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
         &account_comms,
         &account_tree_params,
-        Some(account_tree_height as usize),
+        Some(account_tree_height),
     );
 
     let account_tree_root = account_tree.root_node();
@@ -10132,7 +10132,7 @@ pub fn setup_single_leg_settlement_public_asset_common<
 }
 
 pub fn setup_single_leg_settlement_public_asset<const NUM_GENS: usize, const L: usize>(
-    account_tree_height: u64,
+    account_tree_height: u8,
 ) -> (
     Leg<PallasA>,
     LegEncryption<PallasA>,
@@ -17148,8 +17148,8 @@ mod leg_party_key_binding {
 
     const NUM_GENS: usize = 1 << 13;
     const L: usize = 64;
-    const ASSET_TREE_HEIGHT: usize = 4;
-    const ACCOUNT_TREE_HEIGHT: usize = 6;
+    const ASSET_TREE_HEIGHT: u8 = 4;
+    const ACCOUNT_TREE_HEIGHT: u8 = 6;
     /// Asset credited to the receiver.
     const CREDITED_ASSET_ID: AssetId = 1;
     /// Asset debited from the sender when the asset-id is hidden.
