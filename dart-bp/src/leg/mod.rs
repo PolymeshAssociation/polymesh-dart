@@ -95,7 +95,12 @@ impl<
     }
 
     /// Errors if `num_enc_keys` exceeds `MAX_ASSET_ENC_KEYS` or `num_med_keys` exceeds `MAX_ASSET_MEDIATORS`.
-    pub fn ensure_key_counts_supported(num_enc_keys: usize, num_med_keys: usize) -> Result<()> {
+    pub fn ensure_key_counts_supported(
+        &self,
+        num_enc_keys: usize,
+        num_med_keys: usize,
+    ) -> Result<()> {
+        self.ensure_max_keys_supported()?;
         if num_enc_keys > MAX_ASSET_ENC_KEYS as usize || num_med_keys > MAX_ASSET_MEDIATORS as usize
         {
             return Err(Error::TooManyAssetKeys {
@@ -126,8 +131,7 @@ impl<
         num_enc_keys: usize,
         num_med_keys: usize,
     ) -> Result<Vec<G1::ScalarField>> {
-        self.ensure_max_keys_supported()?;
-        Self::ensure_key_counts_supported(num_enc_keys, num_med_keys)?;
+        self.ensure_key_counts_supported(num_enc_keys, num_med_keys)?;
         let num_unused_keys = (MAX_ASSET_ENC_KEYS as usize - num_enc_keys)
             + (MAX_ASSET_MEDIATORS as usize - num_med_keys);
         // 2 scalar per point and then 1 final scalar for the mediator count
@@ -222,8 +226,7 @@ impl<
     ) -> Result<Self> {
         let n = enc_keys.len();
         let m = med_keys.len();
-        params.ensure_max_keys_supported()?;
-        AssetCommitmentParams::<G0, G1>::ensure_key_counts_supported(n, m)?;
+        params.ensure_key_counts_supported(n, m)?;
         // Asset id could be kept out of `points` and committed in commitment directly using one of the generators of comm_key
         // but that pushes asset id into the other group which makes the leg creation txn proof quite expensive.
         // Point block: both coordinates of [asset_id, auditor pks, mediator pks] under

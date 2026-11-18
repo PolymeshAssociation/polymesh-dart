@@ -1334,8 +1334,7 @@ impl<
             ));
         }
 
-        asset_comm_params.ensure_max_keys_supported()?;
-        AssetCommitmentParams::<G0, G1>::ensure_key_counts_supported(num_enc_keys, num_med_keys)?;
+        asset_comm_params.ensure_key_counts_supported(num_enc_keys, num_med_keys)?;
 
         let max_num_points = 1 + MAX_ASSET_ENC_KEYS as usize + MAX_ASSET_MEDIATORS as usize;
         if self.re_randomized_points.len() > max_num_points {
