@@ -425,7 +425,8 @@ mod tests {
                 &all_account_comms,
                 &account_tree_params,
                 Some(account_tree_height),
-            );
+            )
+            .unwrap();
         assert_eq!(
             account_tree.root_node(),
             account_tree_root,

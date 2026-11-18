@@ -1,6 +1,6 @@
 [package]
 name = "polymesh-dart"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2024"
 description = "Polymesh DART assets."
 authors = ["Polymesh Labs"]
@@ -17,7 +17,7 @@ members = ["dart-bp", "dart-testing-cli", "dart-common"]
 #ark-ec-divisors = { package = "ark-ec-divisors", path = "../curve-trees/ark-ec-divisors"}
 #ark-dlog-gadget = { package = "ark-dlog-gadget", path = "../curve-trees/ark-dlog-gadget"}
 
-# If want to pull code for curve-trees from git, comment above 2 relations and uncomment below 2
+# If want to pull code for curve-trees from git, comment above and uncomment below
 bulletproofs = { git = "https://github.com/PolymeshAssociation/curve-trees", branch = "polymesh" }
 curve_tree_relations = { package = "relations", git = "https://github.com/PolymeshAssociation/curve-trees", branch = "polymesh" }
 ark-ec-divisors = { package = "ark-ec-divisors", git = "https://github.com/PolymeshAssociation/curve-trees", branch = "polymesh" }
@@ -62,9 +62,9 @@ ark-secp256k1 = { git = "https://github.com/PolymeshAssociation/arkworks-algebra
 ark-secq256k1 = { git = "https://github.com/PolymeshAssociation/arkworks-algebra.git", branch = "polymesh-master" }
 
 [workspace.dependencies]
-polymesh-dart = { path = "./", version = "1.0.0", default-features = false }
-polymesh-dart-bp = { path = "./dart-bp", version = "1.0.0", default-features = false }
-polymesh-dart-common = { path = "./dart-common", version = "1.0.0", default-features = false }
+polymesh-dart = { path = "./", version = "1.0.1", default-features = false }
+polymesh-dart-bp = { path = "./dart-bp", version = "1.0.1", default-features = false }
+polymesh-dart-common = { path = "./dart-common", version = "1.0.1", default-features = false }
 
 # Common
 rand = { version = "0.8", default-features = false }

@@ -154,7 +154,8 @@ fn create_account_and_tree<
         &set,
         &account_tree_params,
         Some(5),
-    );
+    )
+    .unwrap();
 
     (account, account_tree)
 }

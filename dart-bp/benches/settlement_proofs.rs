@@ -172,7 +172,8 @@ fn bench_settlement_multi_asset(c: &mut Criterion) {
         &commitments,
         &asset_tree_params,
         Some(height),
-    );
+    )
+    .unwrap();
 
     let root = asset_tree.root_node();
     let amount = 100;
@@ -360,7 +361,8 @@ fn bench_batch_settlement_verification(c: &mut Criterion) {
         &commitments,
         &asset_tree_params,
         Some(height),
-    );
+    )
+    .unwrap();
 
     let (_, _pk_s) = keygen_sig(&mut rng, sig_key_gen);
     let (_, _pk_r) = keygen_sig(&mut rng, sig_key_gen);
@@ -649,7 +651,8 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
         &asset_commitments,
         &asset_tree_params,
         Some(asset_tree_height),
-    );
+    )
+    .unwrap();
     let asset_tree_root = asset_tree.root_node();
 
     // Create legs, all with same sender (Alice) and receiver (Bob) but different assets
@@ -722,7 +725,8 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
             &all_account_comms,
             &account_tree_params,
             Some(account_tree_height),
-        );
+        )
+        .unwrap();
     let account_tree_root = account_tree.root_node();
 
     let nonce = b"multi_asset_settlement_bench";

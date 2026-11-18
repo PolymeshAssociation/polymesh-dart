@@ -133,6 +133,10 @@ impl<
                 "Total number of paths in leaf_paths does not match number of accounts".to_string(),
             ));
         }
+        #[cfg(not(feature = "ignore_prover_input_sanitation"))]
+        for leaf_path in &leaf_paths {
+            leaf_path.check_height_for_root(tree_root)?;
+        }
 
         add_to_transcript!(even_prover.transcript(), ROOT_LABEL, tree_root);
 

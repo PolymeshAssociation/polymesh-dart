@@ -136,6 +136,7 @@ impl<
             if updated_account.balance > MAX_BALANCE {
                 return Err(Error::AmountTooLarge(updated_account.balance));
             }
+            leaf_path.check_height_for_root(root)?;
         }
 
         let (re_randomized_path, rerandomization) = leaf_path

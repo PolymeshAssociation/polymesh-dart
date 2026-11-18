@@ -859,16 +859,11 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> CompressedCurveTreeRoot
         }
     }
 
-    pub fn from_root_node(
-        height: NodeLevel,
-        root: Root<L, M, C::P0, C::P1>,
-    ) -> Result<Self, Error> {
-        let mut compressed = match root {
-            Root::Even(r) => Self::compress::<C::P0, C::P1>(&r)?,
-            Root::Odd(r) => Self::compress::<C::P1, C::P0>(&r)?,
-        };
-        compressed.height = height;
-        Ok(compressed)
+    pub fn from_root_node(root: Root<L, M, C::P0, C::P1>) -> Result<Self, Error> {
+        match root {
+            Root::Even(r) => Self::compress::<C::P0, C::P1>(&r),
+            Root::Odd(r) => Self::compress::<C::P1, C::P0>(&r),
+        }
     }
 
     pub fn compress<
@@ -905,7 +900,7 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> CompressedCurveTreeRoot
         Ok(Self {
             commitments,
             x_coord_children,
-            height: 0,
+            height: root.height,
             _marker: PhantomData,
         })
     }
@@ -938,6 +933,7 @@ impl<const L: usize, const M: usize, C: CurveTreeConfig> CompressedCurveTreeRoot
         Ok(RootNode {
             commitments,
             x_coord_children,
+            height: self.height,
         })
     }
 

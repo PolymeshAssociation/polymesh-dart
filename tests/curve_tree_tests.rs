@@ -19,7 +19,7 @@ const HEIGHT: NodeLevel = 4;
 /// A Full Curve Tree that support both insertion and updates.
 pub struct CurveTreeOld<const L: usize> {
     tree: CurveTree<L, 1, VestaParameters, PallasParameters>,
-    height: usize,
+    height: NodeLevel,
     leaves: Vec<VestaA>,
     length: usize,
     params: CurveTreeParameters<AssetTreeConfig>,
@@ -38,10 +38,10 @@ impl<const L: usize> std::fmt::Debug for CurveTreeOld<L> {
 
 impl<const L: usize> CurveTreeOld<L> {
     /// Creates a new instance of `CurveTreeWithBackend`
-    pub fn new_with_capacity(height: usize) -> Result<Self, Error> {
+    pub fn new_with_capacity(height: NodeLevel) -> Result<Self, Error> {
         let params = AssetTreeConfig::build_parameters();
         Ok(Self {
-            tree: CurveTree::from_leaves(&[VestaA::zero()], &params, Some(height)),
+            tree: CurveTree::from_leaves(&[VestaA::zero()], &params, Some(height)).unwrap(),
             leaves: vec![],
             length: 0,
             height,
@@ -49,7 +49,7 @@ impl<const L: usize> CurveTreeOld<L> {
         })
     }
 
-    pub fn height(&self) -> usize {
+    pub fn height(&self) -> NodeLevel {
         self.tree.height()
     }
 
@@ -94,7 +94,8 @@ impl<const L: usize> CurveTreeOld<L> {
         }
         let new_cap = last_leaf_index + 1;
         self.leaves.resize(new_cap, VestaA::zero());
-        let new_tree = CurveTree::from_leaves(&self.leaves, &self.params, Some(self.height));
+        let new_tree =
+            CurveTree::from_leaves(&self.leaves, &self.params, Some(self.height)).unwrap();
         self.tree = new_tree;
     }
 
@@ -114,8 +115,7 @@ impl<const L: usize> CurveTreeOld<L> {
     /// Get the root node of the curve tree.
     pub fn root(&self) -> CompressedCurveTreeRoot<L, 1, AssetTreeConfig> {
         let root = self.tree.root_node();
-        CompressedCurveTreeRoot::from_root_node(self.height as _, root)
-            .expect("Failed to compress root")
+        CompressedCurveTreeRoot::from_root_node(root).expect("Failed to compress root")
     }
 }
 
@@ -135,8 +135,8 @@ fn setup_trees() -> (
     SelRerandProofParametersNew<VestaParameters, PallasParameters, VestaParams, PallasParams>,
 ) {
     let mut full_tree =
-        CurveTreeOld::<L>::new_with_capacity(HEIGHT as usize).expect("Failed to create full tree");
-    assert!(full_tree.height() == HEIGHT as usize);
+        CurveTreeOld::<L>::new_with_capacity(HEIGHT).expect("Failed to create full tree");
+    assert!(full_tree.height() == HEIGHT);
     let params = full_tree.params().clone();
     let mut storage_tree = CurveTreeWithBackend::<L, 1, AssetTreeConfig>::new(HEIGHT)
         .expect("Failed to create storage tree");

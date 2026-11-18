@@ -1,6 +1,6 @@
 [package]
 name = "polymesh-dart-bp"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2024"
 description = "Polymesh DART assets."
 authors = ["Polymesh Labs"]
@@ -149,4 +149,4 @@ parallel = [
 ignore_prover_input_sanitation = []
 
 # Nightly-only mocking tests (mocktopus requires nightly).
-nightly_mocking_tests = ["dep:mocktopus"]
+nightly_mocking_tests = ["dep:mocktopus", "bulletproofs?/nightly_mocking_tests"]

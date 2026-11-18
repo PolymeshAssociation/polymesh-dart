@@ -1498,7 +1498,8 @@ mod tests {
                 &account_comms,
                 &account_tree_params,
                 Some(6),
-            );
+            )
+            .unwrap();
             let account_tree_root = account_tree.root_node();
 
             let alice_leaf_path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
@@ -2229,7 +2230,8 @@ mod tests {
             &account_comms,
             &account_tree_params,
             Some(6),
-        );
+        )
+        .unwrap();
         let account_tree_root = account_tree.root_node();
 
         // Get paths for both Alice accounts (asset1 at index 0, asset2 at index 1)
