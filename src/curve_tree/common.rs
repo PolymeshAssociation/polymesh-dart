@@ -848,8 +848,7 @@ macro_rules! impl_curve_tree_with_backend {
                     // Fallback to slow build if not found in storage.
                     let root = self.inner_slow_build_root(None)$($await)*?;
 
-                    let height = self.height(None)$($await)*?;
-                    Ok(CompressedCurveTreeRoot::from_root_node(height, root)?)
+                    Ok(CompressedCurveTreeRoot::from_root_node(root)?)
                 }
             }
 
@@ -864,7 +863,8 @@ macro_rules! impl_curve_tree_with_backend {
                 block_number: Option<BlockNumber>,
             ) -> Result<Root<L, M, C::P0, C::P1>, Error> {
                 let params = self.parameters();
-                let root = NodeLocation::<L>::root(self.height(block_number)$($await)*?);
+                let height = self.height(block_number)$($await)*?;
+                let root = NodeLocation::<L>::root(height);
                 match self.backend.get_inner_node(root, block_number)$($await)*? {
                     Some(node) => match node.decompress()? {
                         Inner::Even(commitments) => Ok(Root::Even(RootNode {
@@ -872,12 +872,14 @@ macro_rules! impl_curve_tree_with_backend {
                             x_coord_children: self
                                 ._get_odd_x_coord_children_batch(root, block_number, &params.odd_parameters.sl_params.delta)
                                 $($await)*?,
+                            height,
                         })),
                         Inner::Odd(commitments) => Ok(Root::Odd(RootNode {
                             commitments: commitments.clone(),
                             x_coord_children: self
                                 ._get_even_x_coord_children_batch(root, block_number, &params.even_parameters.sl_params.delta)
                                 $($await)*?,
+                            height,
                         })),
                     }
                     None => Err(crate::Error::CurveTreeRootNotFound.into()),

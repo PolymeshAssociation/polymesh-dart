@@ -114,8 +114,7 @@ impl<const L: usize> CurveTreeOld<L> {
     /// Get the root node of the curve tree.
     pub fn root(&self) -> CompressedCurveTreeRoot<L, 1, AssetTreeConfig> {
         let root = self.tree.root_node();
-        CompressedCurveTreeRoot::from_root_node(self.height as _, root)
-            .expect("Failed to compress root")
+        CompressedCurveTreeRoot::from_root_node(root).expect("Failed to compress root")
     }
 }
 

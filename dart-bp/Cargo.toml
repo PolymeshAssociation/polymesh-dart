@@ -149,4 +149,4 @@ parallel = [
 ignore_prover_input_sanitation = []
 
 # Nightly-only mocking tests (mocktopus requires nightly).
-nightly_mocking_tests = ["dep:mocktopus"]
+nightly_mocking_tests = ["dep:mocktopus", "bulletproofs?/nightly_mocking_tests"]

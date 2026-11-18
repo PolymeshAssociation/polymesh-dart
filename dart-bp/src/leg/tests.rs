@@ -9,6 +9,7 @@ use crate::util::{
     add_verification_tuples_batches_to_rmc, batch_verify_bp, get_verification_tuples_with_rng,
     prove_with_rng, verify_rmc, verify_with_rng,
 };
+use ark_ec::VariableBaseMSM;
 use ark_ec_divisors::curves::{pallas::PallasParams, vesta::VestaParams};
 use ark_pallas::{Affine as PallasA, Fr as PallasScalar, PallasConfig};
 use ark_serialize::CanonicalSerialize;
@@ -30,7 +31,10 @@ type VestaParameters = VestaConfig;
 #[test]
 fn asset_freeze_generator() {
     let bp_gens = BulletproofGens::<ark_vesta::Affine>::new(128, 1);
-    for (num_enc_keys, num_med_keys) in [(0, 0), (1, 0), (2, 2), (4, 2)] {
+    for (num_enc_keys, num_med_keys) in [
+        (MAX_ASSET_ENC_KEYS, MAX_ASSET_MEDIATORS),
+        (MAX_ASSET_ENC_KEYS + 2, MAX_ASSET_MEDIATORS),
+    ] {
         let params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
             b"asset-freeze-test",
             num_enc_keys,
@@ -40,7 +44,10 @@ fn asset_freeze_generator() {
         let old_len = 2 * (1 + num_enc_keys + num_med_keys) + 1;
         let old_gens = bp_gens_for_vec_commitment(old_len, &bp_gens).collect::<Vec<_>>();
         assert_eq!(params.comm_key, old_gens);
-        assert_eq!(params.count_gen(), old_gens[old_len as usize - 1]);
+        assert_eq!(
+            params.count_gen().unwrap(),
+            old_gens[AssetCommitmentParams::<PallasParameters, VestaParameters>::leaf_width() - 1]
+        );
         assert_eq!(params.comm_key.len(), old_len as usize);
         assert!(!params.freeze_gen().is_zero());
         assert_ne!(params.freeze_gen(), params.j_0);
@@ -840,8 +847,8 @@ fn leg_verification() {
                                 num_public_mediators: u8| {
         let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
             b"asset-comm-params",
-            num_enc_keys as u32,
-            num_mediators as u32,
+            MAX_ASSET_ENC_KEYS,
+            MAX_ASSET_MEDIATORS,
             &asset_tree_params.even_parameters.bp_gens(),
         );
 
@@ -1036,6 +1043,411 @@ fn leg_verification() {
 }
 
 #[test]
+fn leg_proofs_reject_root_of_different_height() {
+    // Leg and settlement proofs whose asset-tree path is longer or shorter than the root's height are
+    // rejected.
+
+    use curve_tree_relations::error::Error as CurveTreeError;
+
+    fn assert_path_length_mismatch<T>(res: core::result::Result<T, crate::Error>) {
+        match res {
+            Err(Error::CurveTreeError(CurveTreeError::PathLengthMismatch { .. })) => {}
+            Err(e) => panic!("expected PathLengthMismatch, got {e:?}"),
+            Ok(_) => panic!("expected PathLengthMismatch, got Ok"),
+        }
+    }
+
+    fn assert_witness_path_height_mismatch<T>(res: core::result::Result<T, crate::Error>) {
+        match res {
+            Err(Error::CurveTreeError(CurveTreeError::WitnessPathHeightMismatch { .. })) => {}
+            Err(e) => panic!("expected WitnessPathHeightMismatch, got {e:?}"),
+            Ok(_) => panic!("expected WitnessPathHeightMismatch, got Ok"),
+        }
+    }
+
+    let mut rng = rand::thread_rng();
+
+    const NUM_GENS: usize = 1 << 14;
+    const L: usize = 64;
+    const M: usize = 2;
+    const HEIGHT: usize = 4;
+
+    let label = b"asset-tree-params";
+    let asset_tree_params =
+        SelRerandProofParametersNew::<VestaParameters, PallasParameters, _, _>::new_using_label(
+            label,
+            NUM_GENS as u32,
+            NUM_GENS as u32,
+        )
+        .unwrap();
+    let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into_affine();
+    let enc_gen = hash_to_pallas(label, b"enc-key-h").into_affine();
+    let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
+        b"asset-comm-params",
+        MAX_ASSET_ENC_KEYS,
+        MAX_ASSET_MEDIATORS,
+        &asset_tree_params.even_parameters.bp_gens(),
+    );
+
+    let (_, pk_s_e) = keygen_enc(&mut rng, enc_key_gen);
+    let (_, pk_r_e) = keygen_enc(&mut rng, enc_key_gen);
+    let (_, pk_a_e) = keygen_enc(&mut rng, enc_key_gen);
+    let amount = 100;
+    let nonce = b"test-nonce";
+
+    let asset_ids = [1, 2];
+    let asset_data = asset_ids
+        .iter()
+        .map(|asset_id| {
+            AssetData::new(*asset_id, vec![pk_a_e.0], vec![], &asset_comm_params).unwrap()
+        })
+        .collect::<Vec<_>>();
+    let set = asset_data
+        .iter()
+        .map(|ad| ad.commitment)
+        .collect::<Vec<_>>();
+
+    let mut legs = Vec::new();
+    let mut leg_encs = Vec::new();
+    let mut leg_enc_rands = Vec::new();
+    for asset_id in asset_ids {
+        let leg = Leg::new(
+            pk_s_e.0,
+            pk_r_e.0,
+            amount,
+            asset_id,
+            vec![pk_a_e.0],
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        let (leg_enc, leg_enc_rand) = leg
+            .encrypt(
+                &mut rng,
+                LegEncConfig {
+                    reveal_asset_id: false,
+                    visibility: PartyVisibility::FullVisibility,
+                },
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+        legs.push(leg);
+        leg_encs.push(leg_enc);
+        leg_enc_rands.push(leg_enc_rand);
+    }
+
+    // Single path
+    let tree = CurveTree::<L, 1, VestaParameters, PallasParameters>::from_leaves(
+        &set,
+        &asset_tree_params,
+        Some(HEIGHT),
+    );
+    let taller_tree = CurveTree::<L, 1, VestaParameters, PallasParameters>::from_leaves(
+        &set,
+        &asset_tree_params,
+        Some(HEIGHT + 2),
+    );
+    let root = tree.root_node();
+    let taller_root = taller_tree.root_node();
+
+    for (proof_tree, proof_root, other_root) in [
+        (&taller_tree, &taller_root, &root),
+        (&tree, &root, &taller_root),
+    ] {
+        let proof =
+            LegCreationProof::<L, PallasScalar, VestaScalar, PallasConfig, VestaParameters>::new::<
+                _,
+                PallasParams,
+                VestaParams,
+            >(
+                &mut rng,
+                legs[0].clone(),
+                leg_encs[0].clone(),
+                leg_enc_rands[0].clone(),
+                proof_tree.get_path_to_leaf_for_proof(0, 0).unwrap(),
+                asset_data[0].clone(),
+                proof_root,
+                nonce,
+                &asset_tree_params,
+                &asset_comm_params,
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+        proof
+            .verify::<_, PallasParams, VestaParams>(
+                &mut rng,
+                leg_encs[0].clone(),
+                proof_root,
+                vec![],
+                nonce,
+                &asset_tree_params,
+                &asset_comm_params,
+                enc_key_gen,
+                enc_gen,
+                None,
+            )
+            .unwrap();
+        assert_path_length_mismatch(proof.verify::<_, PallasParams, VestaParams>(
+            &mut rng,
+            leg_encs[0].clone(),
+            other_root,
+            vec![],
+            nonce,
+            &asset_tree_params,
+            &asset_comm_params,
+            enc_key_gen,
+            enc_gen,
+            None,
+        ));
+    }
+
+    assert_witness_path_height_mismatch(LegCreationProof::<
+        L,
+        PallasScalar,
+        VestaScalar,
+        PallasConfig,
+        VestaParameters,
+    >::new::<_, PallasParams, VestaParams>(
+        &mut rng,
+        legs[0].clone(),
+        leg_encs[0].clone(),
+        leg_enc_rands[0].clone(),
+        tree.get_path_to_leaf_for_proof(0, 0).unwrap(),
+        asset_data[0].clone(),
+        &taller_root,
+        nonce,
+        &asset_tree_params,
+        &asset_comm_params,
+        enc_key_gen,
+        enc_gen,
+    ));
+
+    // Batched paths
+    let batched_tree = CurveTree::<L, M, VestaParameters, PallasParameters>::from_leaves(
+        &set,
+        &asset_tree_params,
+        Some(HEIGHT),
+    );
+    let taller_batched_tree = CurveTree::<L, M, VestaParameters, PallasParameters>::from_leaves(
+        &set,
+        &asset_tree_params,
+        Some(HEIGHT + 2),
+    );
+    let batched_root = batched_tree.root_node();
+    let taller_batched_root = taller_batched_tree.root_node();
+
+    for (proof_tree, proof_root, other_root) in [
+        (&taller_batched_tree, &taller_batched_root, &batched_root),
+        (&batched_tree, &batched_root, &taller_batched_root),
+    ] {
+        let proof =
+            SettlementCreationProof::<L, M, _, _, _, _>::new::<_, PallasParams, VestaParams>(
+                &mut rng,
+                legs.clone(),
+                leg_encs.clone(),
+                leg_enc_rands.clone(),
+                vec![proof_tree.get_paths_to_leaves(&[0, 1]).unwrap()],
+                asset_data.clone(),
+                proof_root,
+                nonce,
+                &asset_tree_params,
+                &asset_comm_params,
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+        proof
+            .verify(
+                &mut rng,
+                leg_encs.clone(),
+                proof_root,
+                vec![],
+                vec![],
+                nonce,
+                &asset_tree_params,
+                &asset_comm_params,
+                enc_key_gen,
+                enc_gen,
+                None,
+            )
+            .unwrap();
+        assert_path_length_mismatch(proof.verify(
+            &mut rng,
+            leg_encs.clone(),
+            other_root,
+            vec![],
+            vec![],
+            nonce,
+            &asset_tree_params,
+            &asset_comm_params,
+            enc_key_gen,
+            enc_gen,
+            None,
+        ));
+    }
+
+    assert_witness_path_height_mismatch(SettlementCreationProof::<L, M, _, _, _, _>::new::<
+        _,
+        PallasParams,
+        VestaParams,
+    >(
+        &mut rng,
+        legs.clone(),
+        leg_encs.clone(),
+        leg_enc_rands.clone(),
+        vec![batched_tree.get_paths_to_leaves(&[0, 1]).unwrap()],
+        asset_data.clone(),
+        &taller_batched_root,
+        nonce,
+        &asset_tree_params,
+        &asset_comm_params,
+        enc_key_gen,
+        enc_gen,
+    ));
+}
+
+#[test]
+fn leg_verification_with_oversized_params() {
+    // Params with more generators than the maximum produce the same leaves and proofs that
+    // verify under params sized exactly for the maximum.
+
+    let mut rng = rand::thread_rng();
+
+    const NUM_GENS: usize = 1 << 13;
+    const L: usize = 64;
+
+    let label = b"asset-tree-params";
+    let asset_tree_params =
+        SelRerandProofParametersNew::<VestaParameters, PallasParameters, _, _>::new_using_label(
+            label,
+            NUM_GENS as u32,
+            NUM_GENS as u32,
+        )
+        .unwrap();
+
+    let sig_key_gen = hash_to_pallas(label, b"sig-key").into_affine();
+    let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into_affine();
+    let enc_gen = hash_to_pallas(label, b"enc-key-h").into_affine();
+
+    let exact_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
+        b"asset-comm-params",
+        MAX_ASSET_ENC_KEYS,
+        MAX_ASSET_MEDIATORS,
+        &asset_tree_params.even_parameters.bp_gens(),
+    );
+    let oversized_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
+        b"asset-comm-params",
+        MAX_ASSET_ENC_KEYS + 2,
+        MAX_ASSET_MEDIATORS + 1,
+        &asset_tree_params.even_parameters.bp_gens(),
+    );
+    assert!(oversized_params.comm_key.len() > exact_params.comm_key.len());
+
+    let asset_id = 1;
+    let amount = 100;
+    let nonce = b"test-nonce";
+
+    let (_, pk_s_e) = keygen_enc(&mut rng, enc_key_gen);
+    let (_, pk_r_e) = keygen_enc(&mut rng, enc_key_gen);
+
+    for (num_enc_keys, num_mediators) in [
+        (0, 0),
+        (1, 1),
+        (MAX_ASSET_ENC_KEYS, 0),
+        (MAX_ASSET_ENC_KEYS, MAX_ASSET_MEDIATORS),
+    ] {
+        let keys_enc = (0..num_enc_keys)
+            .map(|_| keygen_enc(&mut rng, enc_key_gen).1.0)
+            .collect::<Vec<_>>();
+        let keys_mediator = (0..num_mediators)
+            .map(|_| keygen_sig(&mut rng, sig_key_gen).1.0)
+            .collect::<Vec<_>>();
+
+        let asset_data = AssetData::new(
+            asset_id,
+            keys_enc.clone(),
+            keys_mediator.clone(),
+            &oversized_params,
+        )
+        .unwrap();
+        assert_eq!(
+            asset_data.commitment,
+            AssetData::new(
+                asset_id,
+                keys_enc.clone(),
+                keys_mediator.clone(),
+                &exact_params,
+            )
+            .unwrap()
+            .commitment
+        );
+
+        let asset_tree = CurveTree::<L, 1, VestaParameters, PallasParameters>::from_leaves(
+            &[asset_data.commitment],
+            &asset_tree_params,
+            Some(4),
+        );
+
+        let leg = Leg::new(
+            pk_s_e.0,
+            pk_r_e.0,
+            amount,
+            asset_id,
+            keys_enc.clone(),
+            keys_mediator.clone(),
+            vec![],
+        )
+        .unwrap();
+        let (leg_enc, leg_enc_rand) = leg
+            .encrypt(&mut rng, LegEncConfig::default(), enc_key_gen, enc_gen)
+            .unwrap();
+
+        let path = asset_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+        let root = asset_tree.root_node();
+
+        let proof =
+            LegCreationProof::<L, PallasScalar, VestaScalar, PallasConfig, VestaParameters>::new::<
+                _,
+                PallasParams,
+                VestaParams,
+            >(
+                &mut rng,
+                leg.clone(),
+                leg_enc.clone(),
+                leg_enc_rand.clone(),
+                path,
+                asset_data.clone(),
+                &root,
+                nonce,
+                &asset_tree_params,
+                &oversized_params,
+                enc_key_gen,
+                enc_gen,
+            )
+            .unwrap();
+
+        for params in [&oversized_params, &exact_params] {
+            proof
+                .verify::<_, PallasParams, VestaParams>(
+                    &mut rng,
+                    leg_enc.clone(),
+                    &root,
+                    vec![],
+                    nonce,
+                    &asset_tree_params,
+                    params,
+                    enc_key_gen,
+                    enc_gen,
+                    None,
+                )
+                .unwrap();
+        }
+    }
+}
+
+#[test]
 fn batch_leg_verification() {
     let mut rng = rand::thread_rng();
 
@@ -1066,8 +1478,8 @@ fn batch_leg_verification() {
                                 num_mediators: u8| {
         let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
             b"asset-comm-params",
-            num_auditors as u32,
-            num_mediators as u32,
+            MAX_ASSET_ENC_KEYS,
+            MAX_ASSET_MEDIATORS,
             &asset_tree_params.even_parameters.bp_gens(),
         );
 
@@ -1325,8 +1737,8 @@ fn combined_leg_verification() {
         |parties_see_each_other: bool, num_auditors: u8, num_mediators: u8| {
             let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
                 b"asset-comm-params",
-                num_auditors as u32,
-                num_mediators as u32,
+                MAX_ASSET_ENC_KEYS,
+                MAX_ASSET_MEDIATORS,
                 &asset_tree_params.even_parameters.bp_gens(),
             );
 
@@ -1558,8 +1970,8 @@ fn combined_leg_verification() {
             );
         };
 
-    test_with_config(true, 2, 3);
-    test_with_config(false, 2, 3);
+    test_with_config(true, 2, 2);
+    test_with_config(false, 2, 2);
     test_with_config(true, 1, 1);
 }
 
@@ -1587,11 +1999,10 @@ fn settlement_verification() {
     let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into_affine();
     let enc_gen = hash_to_pallas(label, b"enc-key-h").into_affine();
 
-    let num_auditors = 1;
     let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
         b"asset-comm-params",
-        num_auditors,
-        0,
+        MAX_ASSET_ENC_KEYS,
+        MAX_ASSET_MEDIATORS,
         &asset_tree_params.even_parameters.bp_gens(),
     );
 
@@ -2114,11 +2525,10 @@ fn batch_settlement_verification() {
     let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into_affine();
     let enc_gen = hash_to_pallas(label, b"enc-key-h").into_affine();
 
-    let num_auditors = 1;
     let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
         b"asset-comm-params",
-        num_auditors,
-        0,
+        MAX_ASSET_ENC_KEYS,
+        MAX_ASSET_MEDIATORS,
         &asset_tree_params.even_parameters.bp_gens(),
     );
 
@@ -2353,11 +2763,10 @@ fn large_settlement_verification() {
     let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into_affine();
     let enc_gen = hash_to_pallas(label, b"enc-key-h").into_affine();
 
-    let num_auditors = 1;
     let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
         b"asset-comm-params",
-        num_auditors,
-        0,
+        MAX_ASSET_ENC_KEYS,
+        MAX_ASSET_MEDIATORS,
         &asset_tree_params.even_parameters.bp_gens(),
     );
 
@@ -2499,11 +2908,10 @@ fn combined_settlement_verification() {
     let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into_affine();
     let enc_gen = hash_to_pallas(label, b"enc-key-h").into_affine();
 
-    let num_auditors = 1;
     let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
         b"asset-comm-params",
-        num_auditors,
-        0,
+        MAX_ASSET_ENC_KEYS,
+        MAX_ASSET_MEDIATORS,
         &asset_tree_params.even_parameters.bp_gens(),
     );
 
@@ -2755,11 +3163,10 @@ fn six_leg_alternating_settlement() {
     let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into_affine();
     let enc_gen = hash_to_pallas(label, b"enc-key-h").into_affine();
 
-    let num_auditors = 1;
     let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
         b"asset-comm-params",
-        num_auditors,
-        0,
+        MAX_ASSET_ENC_KEYS,
+        MAX_ASSET_MEDIATORS,
         &asset_tree_params.even_parameters.bp_gens(),
     );
 
@@ -2909,11 +3316,10 @@ fn six_leg_grouped_settlement() {
     let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into_affine();
     let enc_gen = hash_to_pallas(label, b"enc-key-h").into_affine();
 
-    let num_auditors = 1;
     let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
         b"asset-comm-params",
-        num_auditors,
-        0,
+        MAX_ASSET_ENC_KEYS,
+        MAX_ASSET_MEDIATORS,
         &asset_tree_params.even_parameters.bp_gens(),
     );
 
@@ -3064,8 +3470,8 @@ fn leg_creation_proof_rejects_missing_blinding_key() {
 
     let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
         b"asset-comm-params-mb",
-        num_auditors as u32,
-        num_mediators as u32,
+        MAX_ASSET_ENC_KEYS,
+        MAX_ASSET_MEDIATORS,
         &asset_tree_params.even_parameters.bp_gens(),
     );
 
@@ -3409,8 +3815,8 @@ proptest! {
 
         let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
             b"test_label_1",
-            num_enc_keys as u32,
-            num_mediators as u32,
+            MAX_ASSET_ENC_KEYS,
+            MAX_ASSET_MEDIATORS,
             &asset_tree_params.even_parameters.bp_gens(),
         );
 
@@ -3668,8 +4074,8 @@ proptest! {
                 .unwrap();
             let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
                 b"asset-comm-params",
-                num_enc_keys as u32,
-                num_mediators as u32,
+                MAX_ASSET_ENC_KEYS,
+                MAX_ASSET_MEDIATORS,
                 &asset_tree_params.even_parameters.bp_gens(),
             );
             let asset_data = AssetData::new(
@@ -3765,8 +4171,8 @@ fn leg_creator_tries_to_portray_mediator_as_auditor() {
     let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into_affine();
     let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
         b"asset-comm-params",
-        2,
-        2,
+        MAX_ASSET_ENC_KEYS,
+        MAX_ASSET_MEDIATORS,
         &asset_tree_params.even_parameters.bp_gens(),
     );
 
@@ -3785,8 +4191,104 @@ fn leg_creator_tries_to_portray_mediator_as_auditor() {
     // Both layouts commit the same point block, so the divergence is exactly the mediator-count term.
     assert_eq!(
         (asset_a.commitment.into_group() - asset_b.commitment).into_affine(),
-        asset_comm_params.count_gen()
+        asset_comm_params.count_gen().unwrap()
     );
+}
+
+#[test]
+fn leaf_suffix() {
+    // The leg proof opens the leaf as the coordinates of `AssetData::points` followed by `leaf_suffix`.
+
+    let mut rng = rand::thread_rng();
+    let bp_gens = BulletproofGens::<ark_vesta::Affine>::new(128, 1);
+    let label = b"test";
+    let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into_affine();
+    let sig_key_gen = hash_to_pallas(label, b"sig-key-g").into_affine();
+
+    let leaf_width = AssetCommitmentParams::<PallasParameters, VestaParameters>::leaf_width();
+    for (cap_enc, cap_med) in [
+        (MAX_ASSET_ENC_KEYS, MAX_ASSET_MEDIATORS),
+        (MAX_ASSET_ENC_KEYS + 2, MAX_ASSET_MEDIATORS + 1),
+    ] {
+        let params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
+            b"asset-comm-params",
+            cap_enc,
+            cap_med,
+            &bp_gens,
+        );
+        for num_enc in 0..=MAX_ASSET_ENC_KEYS as usize {
+            for num_med in 0..=MAX_ASSET_MEDIATORS as usize {
+                let enc_keys = (0..num_enc)
+                    .map(|_| keygen_enc(&mut rng, enc_key_gen).1.0)
+                    .collect::<Vec<_>>();
+                let med_keys = (0..num_med)
+                    .map(|_| keygen_sig(&mut rng, sig_key_gen).1.0)
+                    .collect::<Vec<_>>();
+                for frozen in [false, true] {
+                    let asset_data = AssetData::new_with_freeze(
+                        1,
+                        enc_keys.clone(),
+                        med_keys.clone(),
+                        frozen,
+                        &params,
+                    )
+                    .unwrap();
+                    let suffix = asset_data.leaf_suffix(&params).unwrap();
+                    assert_eq!(suffix, params.leaf_suffix(num_enc, num_med).unwrap());
+
+                    let mut scalars = asset_data
+                        .points(&params)
+                        .iter()
+                        .flat_map(|p| {
+                            let (x, y) = p.xy().unwrap();
+                            [x, y]
+                        })
+                        .collect::<Vec<_>>();
+                    assert_eq!(scalars.len(), 2 * (1 + num_enc + num_med));
+                    scalars.extend_from_slice(&suffix);
+                    assert_eq!(scalars.len(), leaf_width);
+                    assert_eq!(
+                        ark_vesta::Projective::msm(&params.comm_key[..leaf_width], &scalars)
+                            .unwrap()
+                            .into_affine(),
+                        asset_data.commitment
+                    );
+                }
+            }
+        }
+        assert!(
+            params
+                .leaf_suffix(MAX_ASSET_ENC_KEYS as usize + 1, 0)
+                .is_err()
+        );
+        assert!(
+            params
+                .leaf_suffix(1, MAX_ASSET_MEDIATORS as usize + 1)
+                .is_err()
+        );
+        let too_many_enc_keys = (0..=MAX_ASSET_ENC_KEYS)
+            .map(|_| keygen_enc(&mut rng, enc_key_gen).1.0)
+            .collect::<Vec<_>>();
+        assert!(AssetData::new(1, too_many_enc_keys, vec![], &params).is_err());
+    }
+
+    // Params sized below the maximums are rejected.
+    for (cap_enc, cap_med) in [
+        (0, 0),
+        (MAX_ASSET_ENC_KEYS, MAX_ASSET_MEDIATORS - 1),
+        (MAX_ASSET_ENC_KEYS - 1, MAX_ASSET_MEDIATORS),
+    ] {
+        let params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
+            b"asset-comm-params",
+            cap_enc,
+            cap_med,
+            &bp_gens,
+        );
+        assert!(params.ensure_max_keys_supported().is_err());
+        assert!(params.count_gen().is_err());
+        assert!(params.leaf_suffix(0, 0).is_err());
+        assert!(AssetData::new(1, vec![], vec![], &params).is_err());
+    }
 }
 
 // Run these tests as cargo test --features=ignore_prover_input_sanitation input_sanitation_disabled
@@ -3816,8 +4318,8 @@ mod input_sanitation_disabled {
         .unwrap();
         let params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
             b"asset-freeze-test",
-            1,
-            0,
+            MAX_ASSET_ENC_KEYS,
+            MAX_ASSET_MEDIATORS,
             &tree_params.even_parameters.bp_gens(),
         );
         let enc_key_gen = hash_to_pallas(b"asset-freeze-test", b"enc-key-g").into_affine();
@@ -3984,13 +4486,13 @@ mod input_sanitation_disabled {
         let enc_gen = PallasA::rand(&mut rng);
 
         let num_auditors = 2u8;
-        let num_mediators = 3u8;
+        let num_mediators = 2u8;
         let asset_id = 1;
 
         let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
             b"asset-comm-params",
-            num_auditors as u32,
-            num_mediators as u32,
+            MAX_ASSET_ENC_KEYS,
+            MAX_ASSET_MEDIATORS,
             &asset_tree_params.even_parameters.bp_gens(),
         );
 
@@ -4204,8 +4706,8 @@ mod input_sanitation_disabled {
 
         let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
             b"asset-comm-params",
-            num_auditors as u32,
-            num_mediators as u32,
+            MAX_ASSET_ENC_KEYS,
+            MAX_ASSET_MEDIATORS,
             &asset_tree_params.even_parameters.bp_gens(),
         );
 
@@ -4418,8 +4920,8 @@ mod input_sanitation_disabled {
 
         let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
             b"asset-comm-params",
-            num_auditors as u32,
-            0,
+            MAX_ASSET_ENC_KEYS,
+            MAX_ASSET_MEDIATORS,
             &asset_tree_params.even_parameters.bp_gens(),
         );
 

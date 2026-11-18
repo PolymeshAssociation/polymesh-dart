@@ -765,6 +765,9 @@ impl<
         even_prover: &mut Prover<MerlinTranscript, Affine<G0>>,
         odd_prover: &mut Prover<MerlinTranscript, Affine<G1>>,
     ) -> Result<(Self, Affine<G0>)> {
+        #[cfg(not(feature = "ignore_prover_input_sanitation"))]
+        leaf_path.check_height_for_root(root)?;
+
         let pk = &account.pk;
         let (re_randomized_path, rerandomization) = leaf_path
             .select_and_rerandomize_prover_gadget_new::<_, Parameters0, Parameters1>(
@@ -2341,6 +2344,8 @@ impl<
         odd_prover: &mut Prover<MerlinTranscript, Affine<G1>>,
     ) -> Result<(Self, Affine<G0>)> {
         ensure_same_accounts_without_sk(&account, &updated_account, true)?;
+        #[cfg(not(feature = "ignore_prover_input_sanitation"))]
+        leaf_path.check_height_for_root(root)?;
 
         let (re_randomized_path, rerandomization) = leaf_path
             .select_and_rerandomize_prover_gadget_new::<_, Parameters0, Parameters1>(

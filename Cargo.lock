@@ -199,7 +199,7 @@ dependencies = [
 [[package]]
 name = "ark-dlog-gadget"
 version = "0.1.0"
-source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=polymesh#bac76fa2265895fee9e075d34f73a40783d86a3a"
+source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=patch9#caab3f87ce35a4fb26883cd21ac1bdebe0ceaf8a"
 dependencies = [
  "ark-curve25519",
  "ark-ec",
@@ -246,7 +246,7 @@ dependencies = [
 [[package]]
 name = "ark-ec-divisors"
 version = "0.1.0"
-source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=polymesh#bac76fa2265895fee9e075d34f73a40783d86a3a"
+source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=patch9#caab3f87ce35a4fb26883cd21ac1bdebe0ceaf8a"
 dependencies = [
  "ark-curve25519",
  "ark-ec",
@@ -723,7 +723,7 @@ dependencies = [
 [[package]]
 name = "bulletproofs"
 version = "2.0.0"
-source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=polymesh#bac76fa2265895fee9e075d34f73a40783d86a3a"
+source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=patch9#caab3f87ce35a4fb26883cd21ac1bdebe0ceaf8a"
 dependencies = [
  "ahash",
  "ark-ec",
@@ -745,6 +745,7 @@ dependencies = [
  "fnv",
  "hashbrown 0.15.5",
  "log",
+ "mocktopus",
  "rand 0.8.8",
  "rand_core 0.6.4",
  "rayon",
@@ -3190,7 +3191,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 [[package]]
 name = "relations"
 version = "0.1.0"
-source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=polymesh#bac76fa2265895fee9e075d34f73a40783d86a3a"
+source = "git+https://github.com/PolymeshAssociation/curve-trees?branch=patch9#caab3f87ce35a4fb26883cd21ac1bdebe0ceaf8a"
 dependencies = [
  "ark-crypto-primitives",
  "ark-dlog-gadget",

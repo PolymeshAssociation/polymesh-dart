@@ -24,6 +24,7 @@ use polymesh_dart_bp::leg::settlement_proof::SettlementCreationProof;
 use polymesh_dart_bp::leg::{AssetCommitmentParams, AssetData, Leg};
 use polymesh_dart_bp::poseidon_impls::poseidon_2::params::pallas::get_poseidon2_params_for_2_1_hashing;
 use polymesh_dart_bp::util::{add_verification_tuples_batches_to_rmc, batch_verify_bp, verify_rmc};
+use polymesh_dart_common::{MAX_ASSET_ENC_KEYS, MAX_ASSET_MEDIATORS};
 use rand_core::CryptoRngCore;
 
 type PallasParameters = ark_pallas::PallasConfig;
@@ -144,11 +145,10 @@ fn bench_settlement_multi_asset(c: &mut Criterion) {
     let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into_affine();
     let enc_gen = hash_to_pallas(label, b"enc-key-h").into_affine();
 
-    let num_auditors = 1;
     let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
         b"asset-comm-params",
-        num_auditors,
-        0,
+        MAX_ASSET_ENC_KEYS,
+        MAX_ASSET_MEDIATORS,
         asset_tree_params.even_parameters.bp_gens(),
     );
 
@@ -336,11 +336,10 @@ fn bench_batch_settlement_verification(c: &mut Criterion) {
     let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into_affine();
     let enc_gen = hash_to_pallas(label, b"enc-key-h").into_affine();
 
-    let num_auditors = 1;
     let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
         b"asset-comm-params",
-        num_auditors,
-        0,
+        MAX_ASSET_ENC_KEYS,
+        MAX_ASSET_MEDIATORS,
         &asset_tree_params.even_parameters.bp_gens(),
     );
 
@@ -617,8 +616,8 @@ fn bench_single_shot_settlement_multi_asset(c: &mut Criterion) {
     let enc_key_gen = account_comm_key.sk_enc_gen();
     let asset_comm_params = AssetCommitmentParams::new(
         b"asset-comm-params",
-        1,
-        0,
+        MAX_ASSET_ENC_KEYS,
+        MAX_ASSET_MEDIATORS,
         asset_tree_params.even_parameters.bp_gens(),
     );
 

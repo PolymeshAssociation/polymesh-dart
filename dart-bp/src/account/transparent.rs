@@ -1217,6 +1217,8 @@ impl<
         ensure_same_accounts(account, updated_account, true)?;
         ensure_correct_balance_change(account, updated_account, amount, has_balance_decreased)?;
         ensure_counter_unchanged(account, updated_account)?;
+        #[cfg(not(feature = "ignore_prover_input_sanitation"))]
+        leaf_path.check_height_for_root(root)?;
 
         let (re_randomized_path, rerandomization) = leaf_path
             .select_and_rerandomize_prover_gadget_new::<_, Parameters0, Parameters1>(

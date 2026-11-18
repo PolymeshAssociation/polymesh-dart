@@ -7,8 +7,8 @@ use crate::util::{
     handle_verification_tuples, prove_with_rng,
 };
 use crate::{
-    Error, LEG_ENC_LABEL, NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL, ROOT_LABEL, add_to_transcript,
-    dst, error::Result,
+    ASSET_KEY_COUNTS_LABEL, Error, LEG_ENC_LABEL, NONCE_LABEL, RE_RANDOMIZED_PATH_LABEL,
+    ROOT_LABEL, add_to_transcript, dst, error::Result,
 };
 use ark_dlog_gadget::dlog::{DiscreteLogParameters, DivisorComms};
 use ark_ec::short_weierstrass::{Affine, Projective, SWCurveConfig};
@@ -27,7 +27,8 @@ use curve_tree_relations::curve_tree::{Root, SelectAndRerandomizePathWithDivisor
 use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use curve_tree_relations::parameters::SelRerandProofParametersNew;
 use curve_tree_relations::ped_comm_group_elems::{
-    ReRandomizedPoints, prove as prove_ped_com, verify as verify_ped_com,
+    ReRandomizedPoints, prove_given_public_suffix as prove_ped_com,
+    verify_given_public_suffix as verify_ped_com,
 };
 use curve_tree_relations::range_proof::range_proof;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
@@ -217,6 +218,9 @@ impl<
         even_prover: &mut Prover<MerlinTranscript, Affine<G1>>,
         odd_prover: &mut Prover<MerlinTranscript, Affine<G0>>,
     ) -> Result<Self> {
+        #[cfg(not(feature = "ignore_prover_input_sanitation"))]
+        leaf_path.check_height_for_root(asset_tree_root)?;
+
         let (re_randomized_path, re_randomization_of_leaf) = leaf_path
             .select_and_rerandomize_prover_gadget_new::<_, Parameters1, Parameters0>(
                 even_prover,
@@ -326,7 +330,7 @@ impl<
             .unwrap();
             // Mediator count committed under the trailing generator.
             commitment +=
-                asset_comm_params.count_gen() * F1::from(asset_data.num_mediator_keys() as u64);
+                asset_comm_params.count_gen()? * F1::from(asset_data.num_mediator_keys() as u64);
             assert_eq!(
                 commitment
                     + (tree_parameters.even_parameters.pc_gens().B_blinding
@@ -346,16 +350,20 @@ impl<
         for i in 0..(num_enc_keys + num_med_keys) {
             key_indices.insert(i + 1);
         }
-        // The leaf commits the mediator count under `count_gen`. Subtract it so `prove_ped_com` opens
-        // only the point block.
-        let adjusted_leaf = (rerandomized_leaf.into_group()
-            - asset_comm_params.count_gen() * F1::from(num_med_keys as u64))
-        .into_affine();
+        // Open the leaf at width `2 * (1 + MAX_ASSET_ENC_KEYS + MAX_ASSET_MEDIATORS) + 1`. The unused key
+        // slots and the mediator count follow the points.
+        let leaf_suffix = asset_data.leaf_suffix(asset_comm_params)?;
+        add_to_transcript!(
+            even_prover.transcript(),
+            ASSET_KEY_COUNTS_LABEL,
+            [num_enc_keys as u32, num_med_keys as u32],
+        );
         let (re_randomized_points, divisor_comms) = prove_ped_com::<_, _, _, _, G0, Parameters1>(
             rng,
             even_prover,
             &asset_data_points,
-            &adjusted_leaf,
+            &rerandomized_leaf,
+            &leaf_suffix,
             re_randomization_of_leaf,
             &blindings_for_points,
             &tree_parameters.odd_parameters,
@@ -1315,12 +1323,6 @@ impl<
             )
         })?;
 
-        if asset_comm_params.comm_key.len() < self.re_randomized_points.len() {
-            return Err(Error::InsufficientCommitmentKeyLength(
-                asset_comm_params.comm_key.len(),
-                self.re_randomized_points.len(),
-            ));
-        }
         let num_enc_keys = leg_enc.eph_pk_enc_keys.len();
         let num_med_keys = leg_enc.num_mediators();
         let num_pub_enc_keys = public_enc_keys.len();
@@ -1332,16 +1334,8 @@ impl<
             ));
         }
 
-        if num_enc_keys > asset_comm_params.num_enc_keys as usize
-            || num_med_keys > asset_comm_params.num_med_keys as usize
-        {
-            return Err(Error::InsufficientCommitmentKeyLength(
-                asset_comm_params.comm_key.len(),
-                1 + asset_comm_params.num_enc_keys as usize
-                    + asset_comm_params.num_med_keys as usize
-                    + 1,
-            ));
-        }
+        asset_comm_params.ensure_max_keys_supported()?;
+        AssetCommitmentParams::<G0, G1>::ensure_key_counts_supported(num_enc_keys, num_med_keys)?;
 
         if self.resp_eph_pk_enc.len() != num_enc_keys {
             return Err(Error::ProofVerificationError(format!(
@@ -1487,13 +1481,18 @@ impl<
         for i in 0..(num_enc_keys + num_med_keys) {
             key_indices.insert(i + 1);
         }
-        // Subtract the mediator-count term (committed under `count_gen`) before opening the point block.
-        let adjusted_leaf = (rerandomized_leaf.into_group()
-            - asset_comm_params.count_gen() * F1::from(num_med_keys as u64))
-        .into_affine();
+        // Open the leaf at width `2 * (1 + MAX_ASSET_ENC_KEYS + MAX_ASSET_MEDIATORS) + 1`. The unused key
+        // slots and the mediator count follow the points.
+        let leaf_suffix = asset_comm_params.leaf_suffix(num_enc_keys, num_med_keys)?;
+        add_to_transcript!(
+            even_verifier.transcript(),
+            ASSET_KEY_COUNTS_LABEL,
+            [num_enc_keys as u32, num_med_keys as u32],
+        );
         verify_ped_com::<_, _, _, _, Parameters1>(
             even_verifier,
-            adjusted_leaf,
+            rerandomized_leaf,
+            &leaf_suffix,
             &self.re_randomized_points,
             &self.ped_comms,
             &tree_parameters.odd_parameters,
@@ -2852,6 +2851,7 @@ mod input_sanitation_tests {
     use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
     use curve_tree_relations::curve_tree::CurveTree;
     use curve_tree_relations::parameters::SelRerandProofParametersNew;
+    use polymesh_dart_common::{MAX_ASSET_ENC_KEYS, MAX_ASSET_MEDIATORS};
 
     type PallasParameters = PallasConfig;
     type VestaParameters = VestaConfig;
@@ -2885,8 +2885,8 @@ mod input_sanitation_tests {
 
         let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
             b"asset-comm-params",
-            num_auditors as u32,
-            num_mediators as u32,
+            MAX_ASSET_ENC_KEYS,
+            MAX_ASSET_MEDIATORS,
             &asset_tree_params.even_parameters.bp_gens(),
         );
 
@@ -3017,8 +3017,8 @@ mod input_sanitation_tests {
         let enc_gen = hash_to_pallas(label, b"enc-key-h").into_affine();
         let acp = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
             b"acp",
-            1,
-            0,
+            MAX_ASSET_ENC_KEYS,
+            MAX_ASSET_MEDIATORS,
             &p.even_parameters.bp_gens(),
         );
         let (_, pk_s) = keygen_enc(&mut rng, enc_key_gen);
@@ -3112,8 +3112,8 @@ mod input_sanitation_tests {
         let enc_gen = hash_to_pallas(label, b"enc-key-h").into_affine();
         let acp = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
             b"acp",
-            1,
-            0,
+            MAX_ASSET_ENC_KEYS,
+            MAX_ASSET_MEDIATORS,
             &p.even_parameters.bp_gens(),
         );
         let (_, pk_s) = keygen_enc(&mut rng, enc_key_gen);
@@ -3219,8 +3219,8 @@ mod input_sanitation_tests {
         let nonce = b"nonce";
         let acp = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
             b"asset-comm-params",
-            1,
-            0,
+            MAX_ASSET_ENC_KEYS,
+            MAX_ASSET_MEDIATORS,
             &p.even_parameters.bp_gens(),
         );
         let (_, pk_s) = keygen_enc(&mut rng, enc_key_gen);
@@ -3332,6 +3332,7 @@ mod input_sanitation_tests {
 mod mocking_tests {
     use super::*;
     use crate::keys::{keygen_enc, keygen_sig};
+    use crate::leg::settlement_proof::SettlementCreationProof;
     use crate::leg::{LegEncConfig, PartyVisibility};
     use crate::util::verify_rmc;
     use ark_ec_divisors::curves::{pallas::PallasParams, vesta::VestaParams};
@@ -3340,10 +3341,13 @@ mod mocking_tests {
     use ark_std::UniformRand;
     use ark_vesta::VestaConfig;
     use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
+    use bulletproofs::r1cs::{committed_vec_dimension, committed_vec_opening};
     use curve_tree_relations::curve_tree::{CurveTree, Root};
     use curve_tree_relations::parameters::SelRerandProofParametersNew;
     use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
     use mocktopus::mocking::{MockResult, Mockable};
+    use polymesh_dart_common::{MAX_ASSET_ENC_KEYS, MAX_ASSET_MEDIATORS};
+    use std::{cell::Cell, rc::Rc};
 
     type PallasParameters = PallasConfig;
     type VestaParameters = VestaConfig;
@@ -3406,6 +3410,103 @@ mod mocking_tests {
 
     fn clear_asset_data_points_mock() {
         AssetData::<PallasF, VestaF, PallasParameters, VestaParameters>::points.clear_mock();
+    }
+
+    fn clear_committed_vec_mocks() {
+        committed_vec_opening::<VestaF>.clear_mock();
+        committed_vec_dimension::<VestaF>.clear_mock();
+    }
+
+    /// Both coordinates of each point of `data`.
+    fn leaf_point_coords(
+        data: &AssetData<PallasF, VestaF, PallasParameters, VestaParameters>,
+        params: &AssetCommitmentParams<PallasParameters, VestaParameters>,
+    ) -> Vec<VestaF> {
+        data.points(params)
+            .iter()
+            .flat_map(|p| {
+                let (x, y) = p.xy().unwrap();
+                [x, y]
+            })
+            .collect()
+    }
+
+    /// Makes the prover open the leaf of `claimed_data` as its point coordinates followed by `suffix`
+    /// instead of its leaf suffix. `fired` counts the replaced openings. The prover and verifier add the
+    /// same leaf suffix to the transcript and open the leaf at the full width, so verification fails only
+    /// on the leaf suffix constraints.
+    fn mock_leaf_suffix(
+        claimed_data: &AssetData<PallasF, VestaF, PallasParameters, VestaParameters>,
+        params: &AssetCommitmentParams<PallasParameters, VestaParameters>,
+        suffix: Vec<VestaF>,
+        fired: Rc<Cell<usize>>,
+    ) -> MockGuard {
+        let coords = leaf_point_coords(claimed_data, params);
+        let committed = [
+            coords.as_slice(),
+            claimed_data.leaf_suffix(params).unwrap().as_slice(),
+        ]
+        .concat();
+        let opening = [coords, suffix].concat();
+        committed_vec_opening::<VestaF>.mock_safe(move |v: &[VestaF]| {
+            if v == committed.as_slice() {
+                fired.set(fired.get() + 1);
+                MockResult::Return(opening.clone())
+            } else {
+                MockResult::Continue((v,))
+            }
+        });
+        MockGuard::new(clear_committed_vec_mocks)
+    }
+
+    /// Makes the prover open the leaf of `claimed_data` as its point coordinates followed by `suffix`
+    /// and declare the dimension of the point coordinates. `fired` counts the replaced dimensions. The
+    /// verifier opens the leaf at the full width, so the declared dimensions differ and verification
+    /// fails on the transcript before the leaf suffix constraints matter. Tests using this guard the
+    /// full width opening. Tests using `mock_leaf_suffix` guard the suffix constraints.
+    fn mock_opening_beyond_declared_dimension(
+        claimed_data: &AssetData<PallasF, VestaF, PallasParameters, VestaParameters>,
+        params: &AssetCommitmentParams<PallasParameters, VestaParameters>,
+        suffix: Vec<VestaF>,
+        fired: Rc<Cell<usize>>,
+    ) -> MockGuard {
+        let coords = leaf_point_coords(claimed_data, params);
+        let committed = [
+            coords.as_slice(),
+            claimed_data.leaf_suffix(params).unwrap().as_slice(),
+        ]
+        .concat();
+        let dimension = coords.len();
+        let opening = [coords, suffix].concat();
+        let stored_opening = opening.clone();
+        committed_vec_opening::<VestaF>.mock_safe(move |v: &[VestaF]| {
+            if v == committed.as_slice() {
+                MockResult::Return(stored_opening.clone())
+            } else {
+                MockResult::Continue((v,))
+            }
+        });
+        committed_vec_dimension::<VestaF>.mock_safe(move |o: &[VestaF]| {
+            if o == opening.as_slice() {
+                fired.set(fired.get() + 1);
+                MockResult::Return(dimension)
+            } else {
+                MockResult::Continue((o,))
+            }
+        });
+        MockGuard::new(clear_committed_vec_mocks)
+    }
+
+    /// Runs `f` on a one-thread rayon pool so the provers run by `rayon::join` see this thread's mocks.
+    fn on_one_thread<R: Send>(f: impl FnOnce() -> R + Send) -> R {
+        #[cfg(feature = "parallel")]
+        return rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap()
+            .install(f);
+        #[cfg(not(feature = "parallel"))]
+        f()
     }
 
     fn assert_leg_verify_fails_with_rmc(
@@ -3490,8 +3591,8 @@ mod mocking_tests {
 
         let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
             b"asset-comm-params",
-            num_auditors as u32,
-            num_mediators as u32,
+            MAX_ASSET_ENC_KEYS,
+            MAX_ASSET_MEDIATORS,
             &asset_tree_params.even_parameters.bp_gens(),
         );
 
@@ -3645,8 +3746,8 @@ mod mocking_tests {
 
         let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
             b"asset-comm-params",
-            num_auditors as u32,
-            num_mediators as u32,
+            MAX_ASSET_ENC_KEYS,
+            MAX_ASSET_MEDIATORS,
             &asset_tree_params.even_parameters.bp_gens(),
         );
 
@@ -3775,8 +3876,8 @@ mod mocking_tests {
 
         let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
             b"asset-comm-params",
-            num_auditors as u32,
-            num_mediators as u32,
+            MAX_ASSET_ENC_KEYS,
+            MAX_ASSET_MEDIATORS,
             &asset_tree_params.even_parameters.bp_gens(),
         );
 
@@ -4079,8 +4180,8 @@ mod mocking_tests {
 
         let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
             b"asset-comm-params",
-            num_auditors as u32,
-            num_mediators as u32,
+            MAX_ASSET_ENC_KEYS,
+            MAX_ASSET_MEDIATORS,
             &asset_tree_params.even_parameters.bp_gens(),
         );
 
@@ -4269,8 +4370,8 @@ mod mocking_tests {
 
         let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
             b"asset-comm-params",
-            num_auditors as u32,
-            num_mediators as u32,
+            MAX_ASSET_ENC_KEYS,
+            MAX_ASSET_MEDIATORS,
             &asset_tree_params.even_parameters.bp_gens(),
         );
 
@@ -4448,8 +4549,8 @@ mod mocking_tests {
 
         let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
             b"asset-comm-params",
-            num_auditors as u32,
-            num_mediators as u32,
+            MAX_ASSET_ENC_KEYS,
+            MAX_ASSET_MEDIATORS,
             &asset_tree_params.even_parameters.bp_gens(),
         );
 
@@ -4613,8 +4714,8 @@ mod mocking_tests {
 
         let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
             b"asset-comm-params",
-            num_auditors as u32,
-            num_mediators as u32,
+            MAX_ASSET_ENC_KEYS,
+            MAX_ASSET_MEDIATORS,
             &asset_tree_params.even_parameters.bp_gens(),
         );
 
@@ -4716,5 +4817,558 @@ mod mocking_tests {
             None,
         );
         assert_err!(verify_res, Error::ProofVerificationError(_));
+    }
+
+    /// Proof that carries the leg in [`assert_leaf_suffix_of_other_shape_fails_verification`].
+    #[derive(Clone, Copy, Debug)]
+    enum ProofKind {
+        Leg,
+        /// Settlement with the leg as its only leg, using the batched asset tree path.
+        Settlement,
+    }
+
+    enum ProofUnderTest {
+        Leg(LegCreationProof<64, PallasF, VestaF, PallasParameters, VestaParameters>),
+        Settlement(
+            SettlementCreationProof<64, 1, PallasF, VestaF, PallasParameters, VestaParameters>,
+        ),
+    }
+
+    impl ProofUnderTest {
+        fn verify(
+            &self,
+            rng: &mut impl CryptoRngCore,
+            leg_enc: LegEncryption<PallasA>,
+            root: &Root<64, 1, VestaParameters, PallasParameters>,
+            nonce: &[u8],
+            asset_tree_params: &SelRerandProofParametersNew<
+                VestaParameters,
+                PallasParameters,
+                VestaParams,
+                PallasParams,
+            >,
+            asset_comm_params: &AssetCommitmentParams<PallasParameters, VestaParameters>,
+            enc_key_gen: PallasA,
+            enc_gen: PallasA,
+            rmc: Option<(
+                &mut RandomizedMultChecker<Affine<VestaParameters>>,
+                &mut RandomizedMultChecker<PallasA>,
+            )>,
+        ) -> Result<()> {
+            match self {
+                Self::Leg(proof) => proof.verify::<_, PallasParams, VestaParams>(
+                    rng,
+                    leg_enc,
+                    root,
+                    vec![],
+                    nonce,
+                    asset_tree_params,
+                    asset_comm_params,
+                    enc_key_gen,
+                    enc_gen,
+                    rmc,
+                ),
+                Self::Settlement(proof) => proof.verify::<_, PallasParams, VestaParams>(
+                    rng,
+                    vec![leg_enc],
+                    root,
+                    vec![],
+                    vec![],
+                    nonce,
+                    asset_tree_params,
+                    asset_comm_params,
+                    enc_key_gen,
+                    enc_gen,
+                    rmc,
+                ),
+            }
+        }
+    }
+
+    /// The asset tree holds the leaf of `real_ek`/`real_med_ak`. Checks that an honest leg of that shape
+    /// verifies, then builds a leg declaring `claimed_ek`/`claimed_med_ak` whose prover opens the real
+    /// leaf in full by committing the real leaf's suffix, and checks that verification fails. `kind`
+    /// selects the proof carrying the leg. `mock_prover` gets the claimed asset data and the real leaf's
+    /// suffix and installs the mocks.
+    fn assert_leaf_suffix_of_other_shape_fails_verification(
+        kind: ProofKind,
+        label: &[u8],
+        real_ek: Vec<PallasA>,
+        real_med_ak: Vec<PallasA>,
+        claimed_ek: Vec<PallasA>,
+        claimed_med_ak: Vec<PallasA>,
+        mock_prover: impl FnOnce(
+            &AssetData<PallasF, VestaF, PallasParameters, VestaParameters>,
+            &AssetCommitmentParams<PallasParameters, VestaParameters>,
+            Vec<VestaF>,
+            Rc<Cell<usize>>,
+        ) -> MockGuard,
+    ) {
+        let mut rng = rand::thread_rng();
+        const NUM_GENS: usize = 1 << 13;
+        const L: usize = 64;
+
+        let asset_tree_params = SelRerandProofParametersNew::<
+            VestaParameters,
+            PallasParameters,
+            _,
+            _,
+        >::new_using_label(label, NUM_GENS as u32, NUM_GENS as u32)
+        .unwrap();
+
+        let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into_affine();
+        let enc_gen = hash_to_pallas(label, b"enc-key-h").into_affine();
+
+        let asset_id = 1u32;
+        let amount = 100u64;
+        let nonce = b"test-nonce";
+
+        let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
+            b"asset-comm-params",
+            MAX_ASSET_ENC_KEYS,
+            MAX_ASSET_MEDIATORS,
+            &asset_tree_params.even_parameters.bp_gens(),
+        );
+
+        let (_, pk_s_e) = keygen_enc(&mut rng, enc_key_gen);
+        let (_, pk_r_e) = keygen_enc(&mut rng, enc_key_gen);
+
+        let real_data = AssetData::new(
+            asset_id,
+            real_ek.clone(),
+            real_med_ak.clone(),
+            &asset_comm_params,
+        )
+        .unwrap();
+
+        let mut real_scalars = real_data
+            .points(&asset_comm_params)
+            .iter()
+            .flat_map(|p| {
+                let (x, y) = p.xy().unwrap();
+                [x, y]
+            })
+            .collect::<Vec<_>>();
+        real_scalars.extend(real_data.leaf_suffix(&asset_comm_params).unwrap());
+
+        let suffix = real_scalars[(2 * (1 + claimed_ek.len() + claimed_med_ak.len()))..].to_vec();
+
+        let asset_tree = CurveTree::<L, 1, VestaParameters, PallasParameters>::from_leaves(
+            &vec![real_data.commitment],
+            &asset_tree_params,
+            Some(2),
+        );
+        let root = asset_tree.root_node();
+
+        let mut prove = |enc_keys: Vec<PallasA>, med_keys: Vec<PallasA>| {
+            let asset_data = AssetData::new(
+                asset_id,
+                enc_keys.clone(),
+                med_keys.clone(),
+                &asset_comm_params,
+            )
+            .unwrap();
+            let leg = Leg::new(
+                pk_s_e.0,
+                pk_r_e.0,
+                amount,
+                asset_id,
+                enc_keys,
+                med_keys,
+                vec![],
+            )
+            .unwrap();
+            let (leg_enc, leg_enc_rand) = leg
+                .encrypt(
+                    &mut rng,
+                    LegEncConfig {
+                        visibility: PartyVisibility::FullVisibility,
+                        reveal_asset_id: false,
+                    },
+                    enc_key_gen,
+                    enc_gen,
+                )
+                .unwrap();
+            let proof = match kind {
+                ProofKind::Leg => ProofUnderTest::Leg(
+                    LegCreationProof::<L, PallasF, VestaF, PallasParameters, VestaParameters>::new::<
+                        _,
+                        PallasParams,
+                        VestaParams,
+                    >(
+                        &mut rng,
+                        leg,
+                        leg_enc.clone(),
+                        leg_enc_rand,
+                        asset_tree.get_path_to_leaf_for_proof(0, 0).unwrap(),
+                        asset_data,
+                        &root,
+                        nonce,
+                        &asset_tree_params,
+                        &asset_comm_params,
+                        enc_key_gen,
+                        enc_gen,
+                    )
+                    .unwrap(),
+                ),
+                ProofKind::Settlement => ProofUnderTest::Settlement(
+                    SettlementCreationProof::<
+                        L,
+                        1,
+                        PallasF,
+                        VestaF,
+                        PallasParameters,
+                        VestaParameters,
+                    >::new::<_, PallasParams, VestaParams>(
+                        &mut rng,
+                        vec![leg],
+                        vec![leg_enc.clone()],
+                        vec![leg_enc_rand],
+                        vec![asset_tree.get_paths_to_leaves(&[0]).unwrap()],
+                        vec![asset_data],
+                        &root,
+                        nonce,
+                        &asset_tree_params,
+                        &asset_comm_params,
+                        enc_key_gen,
+                        enc_gen,
+                    )
+                    .unwrap(),
+                ),
+            };
+            (proof, leg_enc)
+        };
+
+        let (honest_proof, honest_leg_enc) = prove(real_ek, real_med_ak);
+
+        let claimed_data = AssetData::new(
+            asset_id,
+            claimed_ek.clone(),
+            claimed_med_ak.clone(),
+            &asset_comm_params,
+        )
+        .unwrap();
+        let fired = Rc::new(Cell::new(0));
+        let _guard = mock_prover(&claimed_data, &asset_comm_params, suffix, fired.clone());
+        let (proof, leg_enc) = prove(claimed_ek, claimed_med_ak);
+        assert!(fired.get() > 0, "mock did not apply to the prover");
+
+        honest_proof
+            .verify(
+                &mut rng,
+                honest_leg_enc,
+                &root,
+                nonce,
+                &asset_tree_params,
+                &asset_comm_params,
+                enc_key_gen,
+                enc_gen,
+                None,
+            )
+            .unwrap();
+
+        assert_err!(
+            proof.verify(
+                &mut rng,
+                leg_enc.clone(),
+                &root,
+                nonce,
+                &asset_tree_params,
+                &asset_comm_params,
+                enc_key_gen,
+                enc_gen,
+                None,
+            ),
+            Error::BulletproofR1CSError(_)
+        );
+
+        let mut rmc_1 = RandomizedMultChecker::new(VestaF::rand(&mut rng));
+        let mut rmc_0 = RandomizedMultChecker::new(PallasF::rand(&mut rng));
+        let verify_with_rmc = proof.verify(
+            &mut rng,
+            leg_enc,
+            &root,
+            nonce,
+            &asset_tree_params,
+            &asset_comm_params,
+            enc_key_gen,
+            enc_gen,
+            Some((&mut rmc_1, &mut rmc_0)),
+        );
+        let rmc_result = verify_rmc(rmc_0, rmc_1);
+        assert!(
+            verify_with_rmc.is_err() || rmc_result.is_err(),
+            "expected verification with RandomizedMultChecker to fail, got {verify_with_rmc:?} and {rmc_result:?}"
+        );
+    }
+
+    #[test]
+    fn leg_proof_dropping_mediator() {
+        // Asset has 1 auditor and 1 mediator. The leg declares the 2 encryption keys and no mediator,
+        // so the mediator's affirmation key and the count fall in the leaf suffix.
+
+        let mut rng = rand::thread_rng();
+        let label = b"test-label";
+        let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into_affine();
+        let sig_key_gen = hash_to_pallas(label, b"sig-key").into_affine();
+        let (_, ek_1) = keygen_enc(&mut rng, enc_key_gen);
+        let (_, ek_2) = keygen_enc(&mut rng, enc_key_gen);
+        let (_, med_aff) = keygen_sig(&mut rng, sig_key_gen);
+
+        assert_leaf_suffix_of_other_shape_fails_verification(
+            ProofKind::Leg,
+            label,
+            vec![ek_1.0, ek_2.0],
+            vec![med_aff.0],
+            vec![ek_1.0, ek_2.0],
+            vec![],
+            mock_leaf_suffix,
+        );
+    }
+
+    #[test]
+    fn leg_proof_dropping_one_of_two_mediators() {
+        // Asset has 2 auditors and 2 mediators. The leg declares only the first mediator, so the
+        // second mediator's affirmation key and the count fall in the leaf suffix.
+
+        let mut rng = rand::thread_rng();
+        let label = b"test-label";
+        let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into_affine();
+        let sig_key_gen = hash_to_pallas(label, b"sig-key").into_affine();
+        let (_, ek_1) = keygen_enc(&mut rng, enc_key_gen);
+        let (_, ek_2) = keygen_enc(&mut rng, enc_key_gen);
+        let (_, med_ak_1) = keygen_sig(&mut rng, sig_key_gen);
+        let (_, med_ak_2) = keygen_sig(&mut rng, sig_key_gen);
+
+        assert_leaf_suffix_of_other_shape_fails_verification(
+            ProofKind::Leg,
+            label,
+            vec![ek_1.0, ek_2.0],
+            vec![med_ak_1.0, med_ak_2.0],
+            vec![ek_1.0, ek_2.0],
+            vec![med_ak_1.0],
+            mock_leaf_suffix,
+        );
+    }
+
+    #[test]
+    fn leg_proof_presenting_mediator_as_auditor() {
+        // Asset has 1 auditor and 1 mediator. The leg presents the mediator's affirmation key as a second
+        // encryption key and declares no mediator.
+
+        let mut rng = rand::thread_rng();
+        let label = b"test-label";
+        let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into_affine();
+        let sig_key_gen = hash_to_pallas(label, b"sig-key").into_affine();
+        let (_, ek) = keygen_enc(&mut rng, enc_key_gen);
+        let (_, mk) = keygen_sig(&mut rng, sig_key_gen);
+
+        assert_leaf_suffix_of_other_shape_fails_verification(
+            ProofKind::Leg,
+            label,
+            vec![ek.0],
+            vec![mk.0],
+            vec![ek.0, mk.0],
+            vec![],
+            mock_leaf_suffix,
+        );
+    }
+
+    #[test]
+    fn leg_proof_dropping_mediator_beyond_declared_dimension() {
+        // Asset has 1 auditor and 1 mediator. The leg declares the 2 encryption keys and no mediator.
+        // The prover opens the whole leaf but declares the dimension of the 3 declared points.
+
+        on_one_thread(|| {
+            let mut rng = rand::thread_rng();
+            let label = b"test-label";
+            let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into_affine();
+            let sig_key_gen = hash_to_pallas(label, b"sig-key").into_affine();
+            let (_, ek_1) = keygen_enc(&mut rng, enc_key_gen);
+            let (_, ek_2) = keygen_enc(&mut rng, enc_key_gen);
+            let (_, med_aff) = keygen_sig(&mut rng, sig_key_gen);
+
+            assert_leaf_suffix_of_other_shape_fails_verification(
+                ProofKind::Leg,
+                label,
+                vec![ek_1.0, ek_2.0],
+                vec![med_aff.0],
+                vec![ek_1.0, ek_2.0],
+                vec![],
+                mock_opening_beyond_declared_dimension,
+            );
+        });
+    }
+
+    #[test]
+    fn leg_proof_dropping_one_of_two_mediators_beyond_declared_dimension() {
+        // Asset has 2 auditors and 2 mediators. The leg declares only the first mediator. The prover
+        // opens the whole leaf but declares the dimension of the 4 declared points.
+
+        on_one_thread(|| {
+            let mut rng = rand::thread_rng();
+            let label = b"test-label";
+            let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into_affine();
+            let sig_key_gen = hash_to_pallas(label, b"sig-key").into_affine();
+            let (_, ek_1) = keygen_enc(&mut rng, enc_key_gen);
+            let (_, ek_2) = keygen_enc(&mut rng, enc_key_gen);
+            let (_, med_ak_1) = keygen_sig(&mut rng, sig_key_gen);
+            let (_, med_ak_2) = keygen_sig(&mut rng, sig_key_gen);
+
+            assert_leaf_suffix_of_other_shape_fails_verification(
+                ProofKind::Leg,
+                label,
+                vec![ek_1.0, ek_2.0],
+                vec![med_ak_1.0, med_ak_2.0],
+                vec![ek_1.0, ek_2.0],
+                vec![med_ak_1.0],
+                mock_opening_beyond_declared_dimension,
+            );
+        });
+    }
+
+    #[test]
+    fn leg_proof_presenting_mediator_as_auditor_beyond_declared_dimension() {
+        // Asset has 1 auditor and 1 mediator. The leg presents the mediator's affirmation key as a second
+        // encryption key and declares no mediator. The prover opens the whole leaf but declares the
+        // dimension of the 3 declared points, so only the count slot differs from the expected suffix.
+
+        on_one_thread(|| {
+            let mut rng = rand::thread_rng();
+            let label = b"test-label";
+            let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into_affine();
+            let sig_key_gen = hash_to_pallas(label, b"sig-key").into_affine();
+            let (_, ek) = keygen_enc(&mut rng, enc_key_gen);
+            let (_, mk) = keygen_sig(&mut rng, sig_key_gen);
+
+            assert_leaf_suffix_of_other_shape_fails_verification(
+                ProofKind::Leg,
+                label,
+                vec![ek.0],
+                vec![mk.0],
+                vec![ek.0, mk.0],
+                vec![],
+                mock_opening_beyond_declared_dimension,
+            );
+        });
+    }
+
+    #[test]
+    fn leg_proof_dropping_auditors_and_mediators() {
+        // Asset has 2 encryption keys and 1 mediator. The leg declares no encryption key and no mediator,
+        // so every key and the count fall in the leaf suffix.
+
+        let mut rng = rand::thread_rng();
+        let label = b"test-label";
+        let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into_affine();
+        let sig_key_gen = hash_to_pallas(label, b"sig-key").into_affine();
+        let (_, ek_1) = keygen_enc(&mut rng, enc_key_gen);
+        let (_, ek_2) = keygen_enc(&mut rng, enc_key_gen);
+        let (_, med_aff) = keygen_sig(&mut rng, sig_key_gen);
+
+        assert_leaf_suffix_of_other_shape_fails_verification(
+            ProofKind::Leg,
+            label,
+            vec![ek_1.0, ek_2.0],
+            vec![med_aff.0],
+            vec![],
+            vec![],
+            mock_leaf_suffix,
+        );
+    }
+
+    #[test]
+    fn leg_proof_dropping_auditors_and_mediators_beyond_declared_dimension() {
+        // Asset has 2 encryption keys and 1 mediator. The leg declares no encryption key and no mediator.
+        // The prover opens the whole leaf but declares the dimension of the asset-id point.
+
+        on_one_thread(|| {
+            let mut rng = rand::thread_rng();
+            let label = b"test-label";
+            let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into_affine();
+            let sig_key_gen = hash_to_pallas(label, b"sig-key").into_affine();
+            let (_, ek_1) = keygen_enc(&mut rng, enc_key_gen);
+            let (_, ek_2) = keygen_enc(&mut rng, enc_key_gen);
+            let (_, med_aff) = keygen_sig(&mut rng, sig_key_gen);
+
+            assert_leaf_suffix_of_other_shape_fails_verification(
+                ProofKind::Leg,
+                label,
+                vec![ek_1.0, ek_2.0],
+                vec![med_aff.0],
+                vec![],
+                vec![],
+                mock_opening_beyond_declared_dimension,
+            );
+        });
+    }
+
+    /// Asset key layouts and a leg layout that differs from them, as
+    /// `(real_ek, real_med_ak, claimed_ek, claimed_med_ak)`: dropping a mediator, dropping one of two
+    /// mediators, representing a mediator as an auditor and dropping all keys.
+    fn leaf_shape_cases(
+        label: &[u8],
+    ) -> Vec<(Vec<PallasA>, Vec<PallasA>, Vec<PallasA>, Vec<PallasA>)> {
+        let mut rng = rand::thread_rng();
+        let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into_affine();
+        let sig_key_gen = hash_to_pallas(label, b"sig-key").into_affine();
+        let (_, ek_1) = keygen_enc(&mut rng, enc_key_gen);
+        let (_, ek_2) = keygen_enc(&mut rng, enc_key_gen);
+        let (_, mk_1) = keygen_sig(&mut rng, sig_key_gen);
+        let (_, mk_2) = keygen_sig(&mut rng, sig_key_gen);
+        vec![
+            (
+                vec![ek_1.0, ek_2.0],
+                vec![mk_1.0],
+                vec![ek_1.0, ek_2.0],
+                vec![],
+            ),
+            (
+                vec![ek_1.0, ek_2.0],
+                vec![mk_1.0, mk_2.0],
+                vec![ek_1.0, ek_2.0],
+                vec![mk_1.0],
+            ),
+            (vec![ek_1.0], vec![mk_1.0], vec![ek_1.0, mk_1.0], vec![]),
+            (vec![ek_1.0, ek_2.0], vec![mk_1.0], vec![], vec![]),
+        ]
+    }
+
+    #[test]
+    fn settlement_proof_leaf_suffix_of_other_shape() {
+        // Same as above tests but a settlement proof over the batched asset tree path.
+
+        let label = b"test-label";
+        for (real_ek, real_med_ak, claimed_ek, claimed_med_ak) in leaf_shape_cases(label) {
+            assert_leaf_suffix_of_other_shape_fails_verification(
+                ProofKind::Settlement,
+                label,
+                real_ek,
+                real_med_ak,
+                claimed_ek,
+                claimed_med_ak,
+                mock_leaf_suffix,
+            );
+        }
+    }
+
+    #[test]
+    fn settlement_proof_leaf_opening_beyond_declared_dimension() {
+        // Same as above tests but a settlement proof over the batched asset tree path.
+
+        on_one_thread(|| {
+            let label = b"test-label";
+            for (real_ek, real_med_ak, claimed_ek, claimed_med_ak) in leaf_shape_cases(label) {
+                assert_leaf_suffix_of_other_shape_fails_verification(
+                    ProofKind::Settlement,
+                    label,
+                    real_ek,
+                    real_med_ak,
+                    claimed_ek,
+                    claimed_med_ak,
+                    mock_opening_beyond_declared_dimension,
+                );
+            }
+        });
     }
 }

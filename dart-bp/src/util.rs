@@ -29,8 +29,6 @@ use bulletproofs::r1cs::{
 };
 use bulletproofs::{BulletproofGens, PedersenGens};
 use core::iter::Copied;
-use curve_tree_relations::curve_tree::{Root, SelectAndRerandomizePath};
-use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 #[cfg(feature = "build-tables")]
 use curve_tree_relations::fixed_base_tables::FixedBaseTablesPair;
 use curve_tree_relations::parameters::{SelRerandParametersRef, SelRerandProofParameters};
@@ -38,7 +36,7 @@ use curve_tree_relations::range_proof::range_proof;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use rand_chacha::ChaChaRng;
-use rand_core::{CryptoRng, CryptoRngCore, RngCore, SeedableRng};
+use rand_core::{CryptoRng, RngCore, SeedableRng};
 use schnorr_pok::discrete_log::{PokDiscreteLogProtocol, PokPedersenCommitmentProtocol};
 use schnorr_pok::partial::{
     Partial2PokPedersenCommitment, PartialPokDiscreteLog, PartialSchnorrResponse,
@@ -69,142 +67,6 @@ pub struct BPProof<
 > {
     pub even_proof: R1CSProof<Affine<G0>>,
     pub odd_proof: R1CSProof<Affine<G1>>,
-}
-
-/// Creates two new transcripts and two new provers, one for even level and one for odd.
-/// Also re-randomizes the path and enforces the corresponding constraints. Returns the even prover,
-/// odd prover, re-randomize path and blinding used to re-randomize the leaf
-pub fn initialize_curve_tree_prover<
-    'g,
-    R: CryptoRngCore,
-    const L: usize,
-    F0: PrimeField,
-    F1: PrimeField,
-    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
-    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
->(
-    rng: &mut R,
-    even_label: &'static [u8],
-    odd_label: &'static [u8],
-    leaf_path: CurveTreeWitnessPath<L, G0, G1>,
-    tree_parameters: &'g SelRerandProofParameters<G0, G1>,
-) -> Result<(
-    Prover<'g, MerlinTranscript, Affine<G0>>,
-    Prover<'g, MerlinTranscript, Affine<G1>>,
-    SelectAndRerandomizePath<L, G0, G1>,
-    F0,
-)> {
-    let even_transcript = MerlinTranscript::new(even_label);
-    let odd_transcript = MerlinTranscript::new(odd_label);
-    initialize_curve_tree_prover_with_given_transcripts(
-        rng,
-        leaf_path,
-        tree_parameters,
-        even_transcript,
-        odd_transcript,
-    )
-}
-
-/// Same as `initialize_curve_tree_prover` but accepts the transcripts for
-/// even and odd levels rather than creating new
-pub fn initialize_curve_tree_prover_with_given_transcripts<
-    'g,
-    R: CryptoRngCore,
-    const L: usize,
-    F0: PrimeField,
-    F1: PrimeField,
-    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
-    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
->(
-    rng: &mut R,
-    leaf_path: CurveTreeWitnessPath<L, G0, G1>,
-    tree_parameters: &'g SelRerandProofParameters<G0, G1>,
-    even_transcript: MerlinTranscript,
-    odd_transcript: MerlinTranscript,
-) -> Result<(
-    Prover<'g, MerlinTranscript, Affine<G0>>,
-    Prover<'g, MerlinTranscript, Affine<G1>>,
-    SelectAndRerandomizePath<L, G0, G1>,
-    F0,
-)> {
-    let mut even_prover = Prover::new(
-        &tree_parameters.even_parameters.sl_params.pc_gens(),
-        even_transcript,
-    );
-    let mut odd_prover = Prover::new(
-        &tree_parameters.odd_parameters.sl_params.pc_gens(),
-        odd_transcript,
-    );
-
-    let (re_randomized_path, rerandomization) = leaf_path.select_and_rerandomize_prover_gadget(
-        &mut even_prover,
-        &mut odd_prover,
-        tree_parameters,
-        rng,
-    )?;
-
-    Ok((even_prover, odd_prover, re_randomized_path, rerandomization))
-}
-
-/// Creates two new transcripts and two new verifiers, one for even level and one for odd.
-/// Adds the path commitments and enforces the corresponding constraints.
-/// Returns the even verifier and odd verifier,
-pub fn initialize_curve_tree_verifier<
-    const L: usize,
-    F0: PrimeField,
-    F1: PrimeField,
-    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
-    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
->(
-    even_label: &'static [u8],
-    odd_label: &'static [u8],
-    re_randomized_path: &SelectAndRerandomizePath<L, G0, G1>,
-    tree_root: &Root<L, 1, G0, G1>,
-    tree_parameters: &SelRerandProofParameters<G0, G1>,
-) -> Result<(
-    Verifier<MerlinTranscript, Affine<G0>>,
-    Verifier<MerlinTranscript, Affine<G1>>,
-)> {
-    let even_transcript = MerlinTranscript::new(even_label);
-    let odd_transcript = MerlinTranscript::new(odd_label);
-    initialize_curve_tree_verifier_with_given_transcripts(
-        re_randomized_path,
-        tree_root,
-        tree_parameters,
-        even_transcript,
-        odd_transcript,
-    )
-}
-
-/// Same as `initialize_curve_tree_verifier` but accepts the transcripts for
-/// even and odd levels rather than creating new
-pub fn initialize_curve_tree_verifier_with_given_transcripts<
-    const L: usize,
-    F0: PrimeField,
-    F1: PrimeField,
-    G0: SWCurveConfig<ScalarField = F0, BaseField = F1> + Clone + Copy,
-    G1: SWCurveConfig<ScalarField = F1, BaseField = F0> + Clone + Copy,
->(
-    re_randomized_path: &SelectAndRerandomizePath<L, G0, G1>,
-    tree_root: &Root<L, 1, G0, G1>,
-    tree_parameters: &SelRerandProofParameters<G0, G1>,
-    even_transcript: MerlinTranscript,
-    odd_transcript: MerlinTranscript,
-) -> Result<(
-    Verifier<MerlinTranscript, Affine<G0>>,
-    Verifier<MerlinTranscript, Affine<G1>>,
-)> {
-    let mut even_verifier = Verifier::<_, Affine<G0>>::new(even_transcript);
-    let mut odd_verifier = Verifier::<_, Affine<G1>>::new(odd_transcript);
-
-    re_randomized_path.select_and_rerandomize_verifier_gadget(
-        tree_root,
-        &mut even_verifier,
-        &mut odd_verifier,
-        tree_parameters,
-    )?;
-
-    Ok((even_verifier, odd_verifier))
 }
 
 /// Enforce that balance has correctly changed. If `has_balance_decreased` is true, then `old_bal - new_bal = amount` else `new_bal - old_bal = amount`

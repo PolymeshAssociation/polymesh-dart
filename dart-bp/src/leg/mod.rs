@@ -20,16 +20,18 @@ use crate::{Error, error::Result};
 use ark_ec::scalar_mul::glv::GLVConfig;
 use ark_ec::short_weierstrass::{Affine, Projective, SWCurveConfig};
 use ark_ec::{AffineRepr, CurveConfig, CurveGroup};
-use ark_ff::PrimeField;
+use ark_ff::{PrimeField, Zero};
 use ark_pallas::PallasConfig;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::collections::BTreeMap;
-use ark_std::{string::ToString, vec::Vec};
+use ark_std::{string::ToString, vec, vec::Vec};
 use bulletproofs::BulletproofGens;
 use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
 use core::iter;
 use itertools::Either;
-use polymesh_dart_common::{AssetId, Balance, MAX_ASSET_ID, MAX_BALANCE};
+use polymesh_dart_common::{
+    AssetId, Balance, MAX_ASSET_ENC_KEYS, MAX_ASSET_ID, MAX_ASSET_MEDIATORS, MAX_BALANCE,
+};
 use rand_core::CryptoRngCore;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -60,13 +62,10 @@ pub struct AssetCommitmentParams<
     pub freeze_gen: Affine<G0>,
     /// Generators for the leaf commitment. The first `2 * (1 + num_enc_keys + num_med_keys)`
     /// generators commit both coordinates of the asset-id point, the auditor encryption keys and the
-    /// mediator affirmation keys (the "point block"), 2 generators per point. One trailing generator
-    /// at index `2 * (1 + num_enc_keys + num_med_keys)` commits the mediator count.
+    /// mediator affirmation keys (the "point block"), 2 generators per point. The generator at index
+    /// `2 * (1 + MAX_ASSET_ENC_KEYS + MAX_ASSET_MEDIATORS)` commits the mediator count. Must have at
+    /// least that many plus one generators.
     pub comm_key: Vec<Affine<G1>>,
-    /// Maximum number of (auditor/mediator shared) encryption keys these params are sized for.
-    pub num_enc_keys: u32,
-    /// Maximum number of mediator keys these params are sized for.
-    pub num_med_keys: u32,
 }
 
 impl<
@@ -74,13 +73,63 @@ impl<
     G1: SWCurveConfig<ScalarField = G0::BaseField, BaseField = G0::ScalarField> + Clone + Copy,
 > AssetCommitmentParams<G0, G1>
 {
-    /// Index of the generator committing the mediator count.
-    pub fn count_gen(&self) -> Affine<G1> {
-        self.comm_key[2 * (1 + self.num_enc_keys as usize + self.num_med_keys as usize)]
+    /// Number of generators a leaf commits with. `2 * (1 + MAX_ASSET_ENC_KEYS + MAX_ASSET_MEDIATORS)`
+    /// for the point block and 1 for the mediator count.
+    pub const fn leaf_width() -> usize {
+        2 * (1 + MAX_ASSET_ENC_KEYS as usize + MAX_ASSET_MEDIATORS as usize) + 1
+    }
+
+    /// Errors if `comm_key` has fewer than [`Self::leaf_width`] generators.
+    pub fn ensure_max_keys_supported(&self) -> Result<()> {
+        if self.comm_key.len() < Self::leaf_width() {
+            return Err(Error::InsufficientCommitmentKeyLength(
+                self.comm_key.len(),
+                Self::leaf_width(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Errors if `num_enc_keys` exceeds `MAX_ASSET_ENC_KEYS` or `num_med_keys` exceeds `MAX_ASSET_MEDIATORS`.
+    pub fn ensure_key_counts_supported(num_enc_keys: usize, num_med_keys: usize) -> Result<()> {
+        if num_enc_keys > MAX_ASSET_ENC_KEYS as usize || num_med_keys > MAX_ASSET_MEDIATORS as usize
+        {
+            return Err(Error::TooManyAssetKeys {
+                num_enc_keys,
+                num_med_keys,
+                max_enc_keys: MAX_ASSET_ENC_KEYS as usize,
+                max_med_keys: MAX_ASSET_MEDIATORS as usize,
+            });
+        }
+        Ok(())
+    }
+
+    /// Generator committing the mediator count.
+    pub fn count_gen(&self) -> Result<Affine<G1>> {
+        self.ensure_max_keys_supported()?;
+        Ok(self.comm_key[Self::leaf_width() - 1])
     }
 
     pub fn freeze_gen(&self) -> Affine<G0> {
         self.freeze_gen
+    }
+
+    /// Leaf commitment opening after the point block of a leaf with `num_enc_keys` encryption keys and
+    /// `num_med_keys` mediator keys. Zeros for the unused key slots, then the mediator count. The point
+    /// block and this suffix together span the first [`Self::leaf_width`] generators of `comm_key`.
+    pub fn leaf_suffix(
+        &self,
+        num_enc_keys: usize,
+        num_med_keys: usize,
+    ) -> Result<Vec<G1::ScalarField>> {
+        self.ensure_max_keys_supported()?;
+        Self::ensure_key_counts_supported(num_enc_keys, num_med_keys)?;
+        let num_unused_keys = (MAX_ASSET_ENC_KEYS as usize - num_enc_keys)
+            + (MAX_ASSET_MEDIATORS as usize - num_med_keys);
+        // 2 scalar per point and then 1 final scalar for the mediator count
+        let mut suffix = vec![G1::ScalarField::zero(); 2 * num_unused_keys + 1];
+        suffix[2 * num_unused_keys] = G1::ScalarField::from(num_med_keys as u64);
+        Ok(suffix)
     }
 }
 
@@ -93,18 +142,19 @@ impl<
 > AssetCommitmentParams<PallasConfig, G1>
 {
     /// Need the same generators as used in Bulletproofs of the curve tree system because the verifier "commits" to the x-coordinates using the same key.
-    /// `num_enc_keys` and `num_med_keys` are the maximum auditor/mediator counts the params are sized for.
+    /// `comm_key` is sized for `max_enc_keys` encryption keys and `max_med_keys` mediator keys. These must be
+    /// at least `MAX_ASSET_ENC_KEYS` and `MAX_ASSET_MEDIATORS`.
     pub fn new(
         label: &[u8],
-        num_enc_keys: u32,
-        num_med_keys: u32,
+        max_enc_keys: u32,
+        max_med_keys: u32,
         leaf_layer_bp_gens: &BulletproofGens<Affine<G1>>,
     ) -> Self {
         let j_0 = hash_to_pallas(label, b" : j_0").into_affine();
         let freeze_gen = hash_to_pallas(label, b" : freeze_gen").into_affine();
         // For committing (x,y) coords of asset-id point and enc and mediator keys and one for count
         let comm_key = bp_gens_for_vec_commitment(
-            2 * (1 + num_enc_keys + num_med_keys) + 1,
+            2 * (1 + max_enc_keys + max_med_keys) + 1,
             leaf_layer_bp_gens,
         )
         .collect();
@@ -112,8 +162,6 @@ impl<
             j_0,
             freeze_gen,
             comm_key,
-            num_enc_keys,
-            num_med_keys,
         }
     }
 }
@@ -168,12 +216,8 @@ impl<
     ) -> Result<Self> {
         let n = enc_keys.len();
         let m = med_keys.len();
-        if n > params.num_enc_keys as usize || m > params.num_med_keys as usize {
-            return Err(Error::InsufficientCommitmentKeyLength(
-                params.comm_key.len(),
-                2 * (1 + params.num_enc_keys as usize + params.num_med_keys as usize) + 1,
-            ));
-        }
+        params.ensure_max_keys_supported()?;
+        AssetCommitmentParams::<G0, G1>::ensure_key_counts_supported(n, m)?;
         // Asset id could be kept out of `points` and committed in commitment directly using one of the generators of comm_key
         // but that pushes asset id into the other group which makes the leg creation txn proof quite expensive.
         // Point block: both coordinates of [asset_id, auditor pks, mediator pks] under
@@ -189,7 +233,7 @@ impl<
             scalars.push(y);
         }
         // Mediator count under the trailing generator.
-        gens.push(params.count_gen());
+        gens.push(params.count_gen()?);
         scalars.push(F1::from(m as u64));
         let commitment = G1::msm(&gens, scalars.as_slice()).unwrap();
         Ok(Self {
@@ -236,6 +280,11 @@ impl<
 
     pub fn num_total_keys(&self) -> usize {
         self.enc_keys.len() + self.med_keys.len()
+    }
+
+    /// Leaf commitment opening after the coordinates of [`AssetData::points`].
+    pub fn leaf_suffix(&self, params: &AssetCommitmentParams<G0, G1>) -> Result<Vec<F1>> {
+        params.leaf_suffix(self.num_encryption_keys(), self.num_mediator_keys())
     }
 
     // More efficient update methods can be added in future

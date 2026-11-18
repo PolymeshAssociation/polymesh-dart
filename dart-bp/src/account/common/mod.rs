@@ -227,6 +227,9 @@ impl<
         even_prover: &mut Prover<'a, MerlinTranscript, Affine<G0>>,
         odd_prover: &mut Prover<'a, MerlinTranscript, Affine<G1>>,
     ) -> Result<Self> {
+        #[cfg(not(feature = "ignore_prover_input_sanitation"))]
+        leaf_path.check_height_for_root(account_tree_root)?;
+
         let (re_randomized_path, leaf_rerandomization) = leaf_path
             .select_and_rerandomize_prover_gadget_new::<_, Parameters0, Parameters1>(
                 even_prover,
@@ -795,6 +798,9 @@ impl<
         even_prover: &mut Prover<MerlinTranscript, Affine<G0>>,
         odd_prover: &mut Prover<MerlinTranscript, Affine<G1>>,
     ) -> Result<(Self, Affine<G0>)> {
+        #[cfg(not(feature = "ignore_prover_input_sanitation"))]
+        leaf_path.check_height_for_root(account_tree_root)?;
+
         let (re_randomized_path, rerandomization) = leaf_path
             .select_and_rerandomize_prover_gadget_new::<_, Parameters0, Parameters1>(
                 even_prover,

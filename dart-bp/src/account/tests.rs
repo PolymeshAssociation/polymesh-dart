@@ -60,7 +60,7 @@ use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use curve_tree_relations::parameters::{SelRerandParametersRef, SelRerandProofParametersNew};
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
-use polymesh_dart_common::{AssetId, Balance};
+use polymesh_dart_common::{AssetId, Balance, MAX_ASSET_ENC_KEYS, MAX_ASSET_MEDIATORS};
 use rand_core::CryptoRngCore;
 use std::time::Instant;
 
@@ -212,6 +212,315 @@ fn send_txn() {
 
     // asset-id revealed
     test_with_config(true);
+}
+
+#[cfg(not(feature = "ignore_prover_input_sanitation"))]
+#[test]
+fn account_proofs_reject_root_of_different_height() {
+    // Affirmation and multi-asset state transition proofs whose account-tree path is longer or shorter
+    // than the root's height are rejected by the path length check, and the prover refuses a path whose
+    // height differs from the root's.
+
+    use crate::Error;
+    use curve_tree_relations::error::Error as CurveTreeError;
+
+    fn assert_path_length_mismatch<T>(res: core::result::Result<T, Error>) {
+        match res {
+            Err(Error::CurveTreeError(CurveTreeError::PathLengthMismatch { .. })) => {}
+            Err(e) => panic!("expected PathLengthMismatch, got {e:?}"),
+            Ok(_) => panic!("expected PathLengthMismatch, got Ok"),
+        }
+    }
+
+    fn assert_witness_path_height_mismatch<T>(res: core::result::Result<T, Error>) {
+        match res {
+            Err(Error::CurveTreeError(CurveTreeError::WitnessPathHeightMismatch { .. })) => {}
+            Err(e) => panic!("expected WitnessPathHeightMismatch, got {e:?}"),
+            Ok(_) => panic!("expected WitnessPathHeightMismatch, got Ok"),
+        }
+    }
+
+    let mut rng = rand::thread_rng();
+
+    const NUM_GENS: usize = 1 << 14;
+    const L: usize = 64;
+    const M: usize = 2;
+    const HEIGHT: usize = 4;
+    let (account_tree_params, account_comm_key, enc_gen) = setup_gens_new::<NUM_GENS>(b"testing");
+
+    let (((sk, pk), (sk_e, pk_e)), (_, (_, pk_other_e)), ((_, _), (_, pk_a_e))) = setup_keys(
+        &mut rng,
+        account_comm_key.sk_gen(),
+        account_comm_key.sk_enc_gen(),
+    );
+
+    let amount = 100;
+    let nonce = b"test-nonce";
+    let id = PallasFr::rand(&mut rng);
+    let asset_ids = [1, 2];
+
+    let mut accounts = Vec::new();
+    for asset_id in asset_ids {
+        let (mut account, _, _, _) = new_account(&mut rng, asset_id, pk, pk_e, id);
+        account.balance = 200;
+        accounts.push(account);
+    }
+    let set = accounts
+        .iter()
+        .map(|a| a.commit(account_comm_key.clone()).unwrap().0)
+        .collect::<Vec<_>>();
+
+    // Single path: sender affirmation
+    let (_, send_leg_enc, _) = setup_leg_with_conf(
+        &mut rng,
+        LegEncConfig {
+            visibility: PartyVisibility::FullVisibility,
+            reveal_asset_id: false,
+        },
+        pk_a_e.0,
+        None,
+        amount,
+        asset_ids[0],
+        pk_e.0,
+        pk_other_e.0,
+        account_comm_key.sk_enc_gen(),
+        enc_gen,
+    );
+    let sent_account = accounts[0].get_state_for_send(amount).unwrap();
+    let sent_account_comm = sent_account.commit(account_comm_key.clone()).unwrap();
+    let send_witness = || {
+        AccountTxnWitness::new(
+            sk.0,
+            sk_e.0,
+            accounts[0].clone(),
+            sent_account.clone(),
+            sent_account_comm,
+        )
+    };
+    let send_leg = || {
+        let (c, e) = send_leg_enc.core_and_eph_keys_for_sender();
+        (c, e, amount)
+    };
+
+    let tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
+        &set,
+        &account_tree_params,
+        Some(HEIGHT),
+    );
+    let taller_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
+        &set,
+        &account_tree_params,
+        Some(HEIGHT + 2),
+    );
+    let root = tree.root_node();
+    let taller_root = taller_tree.root_node();
+
+    for (proof_tree, proof_root, other_root) in [
+        (&taller_tree, &taller_root, &root),
+        (&tree, &root, &taller_root),
+    ] {
+        let (proof, nullifier) = AffirmAsSenderTxnProof::new::<_, PallasParams, VestaParams>(
+            &mut rng,
+            send_leg(),
+            send_witness(),
+            proof_tree.get_path_to_leaf_for_proof(0, 0).unwrap(),
+            proof_root,
+            nonce,
+            &account_tree_params,
+            account_comm_key.clone(),
+            enc_gen,
+        )
+        .unwrap();
+        proof
+            .verify(
+                &mut rng,
+                send_leg_enc.core_and_eph_keys_for_sender(),
+                proof_root,
+                sent_account_comm,
+                nullifier,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_gen,
+                None,
+            )
+            .unwrap();
+        assert_path_length_mismatch(proof.verify(
+            &mut rng,
+            send_leg_enc.core_and_eph_keys_for_sender(),
+            other_root,
+            sent_account_comm,
+            nullifier,
+            nonce,
+            &account_tree_params,
+            account_comm_key.clone(),
+            enc_gen,
+            None,
+        ));
+    }
+
+    assert_witness_path_height_mismatch(
+        AffirmAsSenderTxnProof::new::<_, PallasParams, VestaParams>(
+            &mut rng,
+            send_leg(),
+            send_witness(),
+            tree.get_path_to_leaf_for_proof(0, 0).unwrap(),
+            &taller_root,
+            nonce,
+            &account_tree_params,
+            account_comm_key.clone(),
+            enc_gen,
+        ),
+    );
+
+    // Batched paths: receive affirmations for both accounts
+    let mut recv_leg_encs = Vec::new();
+    for asset_id in asset_ids {
+        let (_, leg_enc, _) = setup_leg(
+            &mut rng,
+            pk_a_e.0,
+            None,
+            amount,
+            asset_id,
+            pk_other_e.0,
+            pk_e.0,
+            account_comm_key.sk_enc_gen(),
+            enc_gen,
+        );
+        recv_leg_encs.push(leg_enc);
+    }
+    let received_accounts = accounts
+        .iter()
+        .map(|a| a.get_state_for_receive())
+        .collect::<Vec<_>>();
+    let received_account_comms = received_accounts
+        .iter()
+        .map(|a| a.commit(account_comm_key.clone()).unwrap())
+        .collect::<Vec<_>>();
+    let builders = || {
+        (0..asset_ids.len())
+            .map(|i| {
+                let mut builder = AccountStateTransitionProofBuilder::<
+                    L,
+                    _,
+                    _,
+                    PallasParameters,
+                    VestaParameters,
+                >::init(
+                    AccountTxnWitness::new(
+                        sk.0,
+                        sk_e.0,
+                        accounts[i].clone(),
+                        received_accounts[i].clone(),
+                        received_account_comms[i],
+                    ),
+                    nonce,
+                );
+                builder.add_receive_affirmation({
+                    let (c, e) = recv_leg_encs[i].core_and_eph_keys_for_receiver();
+                    (c, e, amount)
+                });
+                builder
+            })
+            .collect::<Vec<_>>()
+    };
+    let verifiers = |nullifiers: &[PallasA]| {
+        (0..asset_ids.len())
+            .map(|i| {
+                let mut verifier = AccountStateTransitionProofVerifier::<
+                    L,
+                    _,
+                    _,
+                    PallasParameters,
+                    VestaParameters,
+                >::init(
+                    received_account_comms[i], nullifiers[i], nonce
+                );
+                verifier.add_receive_affirmation(recv_leg_encs[i].core_and_eph_keys_for_receiver());
+                verifier
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let batched_tree = CurveTree::<L, M, PallasParameters, VestaParameters>::from_leaves(
+        &set,
+        &account_tree_params,
+        Some(HEIGHT),
+    );
+    let taller_batched_tree = CurveTree::<L, M, PallasParameters, VestaParameters>::from_leaves(
+        &set,
+        &account_tree_params,
+        Some(HEIGHT + 2),
+    );
+    let batched_root = batched_tree.root_node();
+    let taller_batched_root = taller_batched_tree.root_node();
+
+    for (proof_tree, proof_root, other_root) in [
+        (&taller_batched_tree, &taller_batched_root, &batched_root),
+        (&batched_tree, &batched_root, &taller_batched_root),
+    ] {
+        let (proof, nullifiers) =
+            MultiAssetStateTransitionProof::<L, M, _, _, PallasParameters, VestaParameters>::new::<
+                _,
+                PallasParams,
+                VestaParams,
+            >(
+                &mut rng,
+                builders(),
+                vec![proof_tree.get_paths_to_leaves(&[0, 1]).unwrap()],
+                proof_root,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_gen,
+            )
+            .unwrap();
+        let (even_tuple, odd_tuple) = proof
+            .verify_and_return_tuples(
+                verifiers(&nullifiers),
+                proof_root,
+                &account_tree_params,
+                account_comm_key.clone(),
+                enc_gen,
+                &mut rng,
+                None,
+            )
+            .unwrap();
+        batch_verify_bp(
+            vec![even_tuple],
+            vec![odd_tuple],
+            account_tree_params.even_parameters.pc_gens(),
+            account_tree_params.odd_parameters.pc_gens(),
+            account_tree_params.even_parameters.bp_gens(),
+            account_tree_params.odd_parameters.bp_gens(),
+        )
+        .unwrap();
+        assert_path_length_mismatch(proof.verify_and_return_tuples(
+            verifiers(&nullifiers),
+            other_root,
+            &account_tree_params,
+            account_comm_key.clone(),
+            enc_gen,
+            &mut rng,
+            None,
+        ));
+    }
+
+    assert_witness_path_height_mismatch(MultiAssetStateTransitionProof::<
+        L,
+        M,
+        _,
+        _,
+        PallasParameters,
+        VestaParameters,
+    >::new::<_, PallasParams, VestaParams>(
+        &mut rng,
+        builders(),
+        vec![batched_tree.get_paths_to_leaves(&[0, 1]).unwrap()],
+        &taller_batched_root,
+        &account_tree_params,
+        account_comm_key.clone(),
+        enc_gen,
+    ));
 }
 
 #[test]
@@ -1997,8 +2306,8 @@ fn single_shot_swap() {
 
     let asset_comm_params = AssetCommitmentParams::new(
         b"asset-comm-params",
-        1,
-        0,
+        MAX_ASSET_ENC_KEYS,
+        MAX_ASSET_MEDIATORS,
         &account_tree_params.odd_parameters.bp_gens(),
     );
 
@@ -5040,8 +5349,8 @@ fn combined_create_and_send() {
 
     let asset_comm_params = AssetCommitmentParams::new(
         b"asset-comm-params",
-        1,
-        1,
+        MAX_ASSET_ENC_KEYS,
+        MAX_ASSET_MEDIATORS,
         account_tree_params.odd_parameters.bp_gens(),
     );
 
@@ -5764,8 +6073,8 @@ fn swap_settlement() {
 
     let asset_comm_params = AssetCommitmentParams::new(
         b"asset-comm-params",
-        1,
-        1,
+        MAX_ASSET_ENC_KEYS,
+        MAX_ASSET_MEDIATORS,
         account_tree_params.odd_parameters.bp_gens(),
     );
 
@@ -9264,8 +9573,8 @@ pub fn setup_asset_and_account_params_new<const NUM_GENS: usize>() -> (
 
     let asset_comm_params = AssetCommitmentParams::new(
         b"asset-comm-params",
-        1,
-        0,
+        MAX_ASSET_ENC_KEYS,
+        MAX_ASSET_MEDIATORS,
         account_tree_params.odd_parameters.bp_gens(),
     );
 
@@ -9493,8 +9802,8 @@ pub fn setup_single_leg_settlement<const NUM_GENS: usize, const L: usize>(
 
     let asset_comm_params = AssetCommitmentParams::new(
         b"asset-comm-params",
-        1,
-        0,
+        MAX_ASSET_ENC_KEYS,
+        MAX_ASSET_MEDIATORS,
         &account_tree_params.odd_parameters.bp_gens(),
     );
 
@@ -11746,8 +12055,8 @@ fn single_shot_settlement_split_proof() {
 
     let asset_comm_params = AssetCommitmentParams::new(
         b"asset-comm-params",
-        1,
-        0,
+        MAX_ASSET_ENC_KEYS,
+        MAX_ASSET_MEDIATORS,
         &account_tree_params.odd_parameters.bp_gens(),
     );
 
@@ -16945,8 +17254,8 @@ mod leg_party_key_binding {
             .unwrap();
             let asset_comm_params = AssetCommitmentParams::new(
                 b"asset-comm-params",
-                1,
-                0,
+                MAX_ASSET_ENC_KEYS,
+                MAX_ASSET_MEDIATORS,
                 &account_tree_params.odd_parameters.bp_gens(),
             );
             let asset_data =

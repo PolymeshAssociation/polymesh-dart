@@ -948,6 +948,10 @@ impl<
                 "Total paths in leaf_paths does not match number of accounts".to_string(),
             ));
         }
+        #[cfg(not(feature = "ignore_prover_input_sanitation"))]
+        for leaf_path in &leaf_paths {
+            leaf_path.check_height_for_root(tree_root)?;
+        }
 
         let even_transcript = MerlinTranscript::new(crate::TXN_EVEN_LABEL);
         let odd_transcript = MerlinTranscript::new(crate::TXN_ODD_LABEL);

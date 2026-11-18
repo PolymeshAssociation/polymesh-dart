@@ -82,6 +82,17 @@ pub enum Error {
     #[error("Commitment key length is {0} but expected at least {1}")]
     InsufficientCommitmentKeyLength(usize, usize),
 
+    /// Asset has more encryption or mediator keys than supported
+    #[error(
+        "Asset has {num_enc_keys} encryption keys and {num_med_keys} mediator keys but at most {max_enc_keys} and {max_med_keys} are supported"
+    )]
+    TooManyAssetKeys {
+        num_enc_keys: usize,
+        num_med_keys: usize,
+        max_enc_keys: usize,
+        max_med_keys: usize,
+    },
+
     /// Expect same number of randomized points and responses for the points
     #[error("Randomized point count is {0} but expected at least {1}")]
     DifferentNumberOfRandomizedPointsAndResponses(usize, usize),

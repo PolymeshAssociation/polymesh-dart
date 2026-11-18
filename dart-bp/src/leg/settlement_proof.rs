@@ -199,6 +199,10 @@ impl<
                 total_leaf_paths, num_hidden_asset_legs
             )));
         }
+        #[cfg(not(feature = "ignore_prover_input_sanitation"))]
+        for leaf_path in &leaf_paths {
+            leaf_path.check_height_for_root(asset_tree_root)?;
+        }
 
         add_to_transcript!(
             odd_prover.transcript(),
