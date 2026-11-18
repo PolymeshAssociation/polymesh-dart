@@ -60,7 +60,7 @@ use curve_tree_relations::curve_tree_prover::CurveTreeWitnessPath;
 use curve_tree_relations::parameters::{SelRerandParametersRef, SelRerandProofParametersNew};
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
-use polymesh_dart_common::{AssetId, Balance, MAX_ASSET_ENC_KEYS, MAX_ASSET_MEDIATORS};
+use polymesh_dart_common::{AssetId, Balance};
 use rand_core::CryptoRngCore;
 use std::time::Instant;
 
@@ -2310,8 +2310,8 @@ fn single_shot_swap() {
 
     let asset_comm_params = AssetCommitmentParams::new(
         b"asset-comm-params",
-        MAX_ASSET_ENC_KEYS,
-        MAX_ASSET_MEDIATORS,
+        1,
+        0,
         &account_tree_params.odd_parameters.bp_gens(),
     );
 
@@ -5360,8 +5360,8 @@ fn combined_create_and_send() {
 
     let asset_comm_params = AssetCommitmentParams::new(
         b"asset-comm-params",
-        MAX_ASSET_ENC_KEYS,
-        MAX_ASSET_MEDIATORS,
+        1,
+        1,
         account_tree_params.odd_parameters.bp_gens(),
     );
 
@@ -6087,8 +6087,8 @@ fn swap_settlement() {
 
     let asset_comm_params = AssetCommitmentParams::new(
         b"asset-comm-params",
-        MAX_ASSET_ENC_KEYS,
-        MAX_ASSET_MEDIATORS,
+        1,
+        1,
         account_tree_params.odd_parameters.bp_gens(),
     );
 
@@ -9594,8 +9594,8 @@ pub fn setup_asset_and_account_params_new<const NUM_GENS: usize>() -> (
 
     let asset_comm_params = AssetCommitmentParams::new(
         b"asset-comm-params",
-        MAX_ASSET_ENC_KEYS,
-        MAX_ASSET_MEDIATORS,
+        1,
+        0,
         account_tree_params.odd_parameters.bp_gens(),
     );
 
@@ -9825,8 +9825,8 @@ pub fn setup_single_leg_settlement<const NUM_GENS: usize, const L: usize>(
 
     let asset_comm_params = AssetCommitmentParams::new(
         b"asset-comm-params",
-        MAX_ASSET_ENC_KEYS,
-        MAX_ASSET_MEDIATORS,
+        1,
+        0,
         &account_tree_params.odd_parameters.bp_gens(),
     );
 
@@ -12081,8 +12081,8 @@ fn single_shot_settlement_split_proof() {
 
     let asset_comm_params = AssetCommitmentParams::new(
         b"asset-comm-params",
-        MAX_ASSET_ENC_KEYS,
-        MAX_ASSET_MEDIATORS,
+        1,
+        0,
         &account_tree_params.odd_parameters.bp_gens(),
     );
 
@@ -17284,8 +17284,8 @@ mod leg_party_key_binding {
             .unwrap();
             let asset_comm_params = AssetCommitmentParams::new(
                 b"asset-comm-params",
-                MAX_ASSET_ENC_KEYS,
-                MAX_ASSET_MEDIATORS,
+                1,
+                0,
                 &account_tree_params.odd_parameters.bp_gens(),
             );
             let asset_data =

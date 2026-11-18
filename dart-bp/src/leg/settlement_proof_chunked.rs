@@ -394,7 +394,6 @@ mod tests {
     use curve_tree_relations::curve_tree::CurveTree;
     use curve_tree_relations::parameters::SelRerandProofParametersNew;
     use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
-    use polymesh_dart_common::{MAX_ASSET_ENC_KEYS, MAX_ASSET_MEDIATORS};
     use std::time::Instant;
 
     type PallasParameters = PallasConfig;
@@ -450,10 +449,11 @@ mod tests {
         let enc_key_gen = hash_to_pallas(label, b"enc-key-g").into_affine();
         let enc_gen = hash_to_pallas(label, b"enc-key-h").into_affine();
 
+        let num_auditors = 1;
         let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
             b"asset-comm-params",
-            MAX_ASSET_ENC_KEYS,
-            MAX_ASSET_MEDIATORS,
+            num_auditors,
+            0,
             &asset_tree_params.even_parameters.bp_gens(),
         );
 
@@ -785,8 +785,8 @@ mod tests {
 
         let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
             b"asset-comm-params",
-            MAX_ASSET_ENC_KEYS,
-            MAX_ASSET_MEDIATORS,
+            1,
+            0,
             &asset_tree_params.even_parameters.bp_gens(),
         );
 

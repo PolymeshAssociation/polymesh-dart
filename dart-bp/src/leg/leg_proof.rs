@@ -33,7 +33,7 @@ use curve_tree_relations::ped_comm_group_elems::{
 use curve_tree_relations::range_proof::range_proof;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
-use polymesh_dart_common::{BALANCE_BITS, Balance, MAX_ASSET_ENC_KEYS, MAX_ASSET_MEDIATORS};
+use polymesh_dart_common::{BALANCE_BITS, Balance};
 use rand_core::CryptoRngCore;
 use schnorr_pok::discrete_log::{
     PokDiscreteLogProtocol, PokPedersenCommitment, PokPedersenCommitmentProtocol,
@@ -350,7 +350,7 @@ impl<
         for i in 0..(num_enc_keys + num_med_keys) {
             key_indices.insert(i + 1);
         }
-        // Open the leaf at width `2 * (1 + MAX_ASSET_ENC_KEYS + MAX_ASSET_MEDIATORS) + 1`. The unused key
+        // Open the leaf at width `2 * (1 + max_enc_keys + max_med_keys) + 1`. The unused key
         // slots and the mediator count follow the points.
         let leaf_suffix = asset_data.leaf_suffix(asset_comm_params)?;
         add_to_transcript!(
@@ -1336,7 +1336,7 @@ impl<
 
         asset_comm_params.ensure_key_counts_supported(num_enc_keys, num_med_keys)?;
 
-        let max_num_points = 1 + MAX_ASSET_ENC_KEYS as usize + MAX_ASSET_MEDIATORS as usize;
+        let max_num_points = asset_comm_params.max_num_points();
         if self.re_randomized_points.len() > max_num_points {
             return Err(Error::TooManyRandomizedPoints(
                 self.re_randomized_points.len(),
@@ -1488,7 +1488,7 @@ impl<
         for i in 0..(num_enc_keys + num_med_keys) {
             key_indices.insert(i + 1);
         }
-        // Open the leaf at width `2 * (1 + MAX_ASSET_ENC_KEYS + MAX_ASSET_MEDIATORS) + 1`. The unused key
+        // Open the leaf at width `2 * (1 + max_enc_keys + max_med_keys) + 1`. The unused key
         // slots and the mediator count follow the points.
         let leaf_suffix = asset_comm_params.leaf_suffix(num_enc_keys, num_med_keys)?;
         add_to_transcript!(
@@ -2858,7 +2858,6 @@ mod input_sanitation_tests {
     use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
     use curve_tree_relations::curve_tree::CurveTree;
     use curve_tree_relations::parameters::SelRerandProofParametersNew;
-    use polymesh_dart_common::{MAX_ASSET_ENC_KEYS, MAX_ASSET_MEDIATORS};
 
     type PallasParameters = PallasConfig;
     type VestaParameters = VestaConfig;
@@ -2892,8 +2891,8 @@ mod input_sanitation_tests {
 
         let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
             b"asset-comm-params",
-            MAX_ASSET_ENC_KEYS,
-            MAX_ASSET_MEDIATORS,
+            num_auditors as u32,
+            num_mediators as u32,
             &asset_tree_params.even_parameters.bp_gens(),
         );
 
@@ -3025,8 +3024,8 @@ mod input_sanitation_tests {
         let enc_gen = hash_to_pallas(label, b"enc-key-h").into_affine();
         let acp = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
             b"acp",
-            MAX_ASSET_ENC_KEYS,
-            MAX_ASSET_MEDIATORS,
+            1,
+            0,
             &p.even_parameters.bp_gens(),
         );
         let (_, pk_s) = keygen_enc(&mut rng, enc_key_gen);
@@ -3121,8 +3120,8 @@ mod input_sanitation_tests {
         let enc_gen = hash_to_pallas(label, b"enc-key-h").into_affine();
         let acp = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
             b"acp",
-            MAX_ASSET_ENC_KEYS,
-            MAX_ASSET_MEDIATORS,
+            1,
+            0,
             &p.even_parameters.bp_gens(),
         );
         let (_, pk_s) = keygen_enc(&mut rng, enc_key_gen);
@@ -3229,8 +3228,8 @@ mod input_sanitation_tests {
         let nonce = b"nonce";
         let acp = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
             b"asset-comm-params",
-            MAX_ASSET_ENC_KEYS,
-            MAX_ASSET_MEDIATORS,
+            1,
+            0,
             &p.even_parameters.bp_gens(),
         );
         let (_, pk_s) = keygen_enc(&mut rng, enc_key_gen);
@@ -3357,7 +3356,6 @@ mod mocking_tests {
     use curve_tree_relations::parameters::SelRerandProofParametersNew;
     use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
     use mocktopus::mocking::{MockResult, Mockable};
-    use polymesh_dart_common::{MAX_ASSET_ENC_KEYS, MAX_ASSET_MEDIATORS};
     use std::{cell::Cell, rc::Rc};
 
     type PallasParameters = PallasConfig;
@@ -3602,8 +3600,8 @@ mod mocking_tests {
 
         let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
             b"asset-comm-params",
-            MAX_ASSET_ENC_KEYS,
-            MAX_ASSET_MEDIATORS,
+            num_auditors as u32,
+            num_mediators as u32,
             &asset_tree_params.even_parameters.bp_gens(),
         );
 
@@ -3758,8 +3756,8 @@ mod mocking_tests {
 
         let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
             b"asset-comm-params",
-            MAX_ASSET_ENC_KEYS,
-            MAX_ASSET_MEDIATORS,
+            num_auditors as u32,
+            num_mediators as u32,
             &asset_tree_params.even_parameters.bp_gens(),
         );
 
@@ -3889,8 +3887,8 @@ mod mocking_tests {
 
         let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
             b"asset-comm-params",
-            MAX_ASSET_ENC_KEYS,
-            MAX_ASSET_MEDIATORS,
+            num_auditors as u32,
+            num_mediators as u32,
             &asset_tree_params.even_parameters.bp_gens(),
         );
 
@@ -4194,8 +4192,8 @@ mod mocking_tests {
 
         let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
             b"asset-comm-params",
-            MAX_ASSET_ENC_KEYS,
-            MAX_ASSET_MEDIATORS,
+            num_auditors as u32,
+            num_mediators as u32,
             &asset_tree_params.even_parameters.bp_gens(),
         );
 
@@ -4385,8 +4383,8 @@ mod mocking_tests {
 
         let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
             b"asset-comm-params",
-            MAX_ASSET_ENC_KEYS,
-            MAX_ASSET_MEDIATORS,
+            num_auditors as u32,
+            num_mediators as u32,
             &asset_tree_params.even_parameters.bp_gens(),
         );
 
@@ -4565,8 +4563,8 @@ mod mocking_tests {
 
         let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
             b"asset-comm-params",
-            MAX_ASSET_ENC_KEYS,
-            MAX_ASSET_MEDIATORS,
+            num_auditors as u32,
+            num_mediators as u32,
             &asset_tree_params.even_parameters.bp_gens(),
         );
 
@@ -4731,8 +4729,8 @@ mod mocking_tests {
 
         let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
             b"asset-comm-params",
-            MAX_ASSET_ENC_KEYS,
-            MAX_ASSET_MEDIATORS,
+            num_auditors as u32,
+            num_mediators as u32,
             &asset_tree_params.even_parameters.bp_gens(),
         );
 
@@ -4943,8 +4941,8 @@ mod mocking_tests {
 
         let asset_comm_params = AssetCommitmentParams::<PallasParameters, VestaParameters>::new(
             b"asset-comm-params",
-            MAX_ASSET_ENC_KEYS,
-            MAX_ASSET_MEDIATORS,
+            real_ek.len().max(claimed_ek.len()) as u32,
+            real_med_ak.len().max(claimed_med_ak.len()) as u32,
             &asset_tree_params.even_parameters.bp_gens(),
         );
 
