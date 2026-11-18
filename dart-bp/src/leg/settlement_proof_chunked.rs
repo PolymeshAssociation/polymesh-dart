@@ -474,7 +474,8 @@ mod tests {
             &commitments,
             &asset_tree_params,
             Some(height),
-        );
+        )
+        .unwrap();
         let root = asset_tree.root_node();
 
         let (_, pk_s_e) = keygen_enc(&mut rng, enc_key_gen);
@@ -805,7 +806,8 @@ mod tests {
             &[asset_data.commitment],
             &asset_tree_params,
             Some(height),
-        );
+        )
+        .unwrap();
         let root = asset_tree.root_node();
 
         let is_revealed_per_leg = [false, true, false, true, false, true];

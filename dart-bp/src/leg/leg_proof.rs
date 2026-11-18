@@ -2916,7 +2916,8 @@ mod input_sanitation_tests {
             &vec![asset_data.commitment],
             &asset_tree_params,
             Some(2),
-        );
+        )
+        .unwrap();
         let root = asset_tree.root_node();
 
         let leg = Leg::new(
@@ -3030,7 +3031,8 @@ mod input_sanitation_tests {
             &vec![asset_data.commitment],
             &p,
             Some(2),
-        );
+        )
+        .unwrap();
         let root = tree.root_node();
         // Use the identity point as the extra public encryption key.
         let id_pk = ark_pallas::Affine::zero();
@@ -3126,7 +3128,8 @@ mod input_sanitation_tests {
             &vec![asset_data.commitment],
             &p,
             Some(2),
-        );
+        )
+        .unwrap();
         let root = tree.root_node();
         let leg = Leg::new(
             pk_s.0,
@@ -3233,7 +3236,8 @@ mod input_sanitation_tests {
             &vec![asset_data.commitment],
             &p,
             Some(2),
-        );
+        )
+        .unwrap();
         let root = tree.root_node();
         let leg = Leg::new(
             pk_s.0,
@@ -3621,7 +3625,8 @@ mod mocking_tests {
             &vec![asset_data_2.commitment],
             &asset_tree_params,
             Some(2),
-        );
+        )
+        .unwrap();
         let root = asset_tree.root_node();
 
         let leg = Leg::new(
@@ -3776,7 +3781,8 @@ mod mocking_tests {
             &vec![asset_data.commitment],
             &asset_tree_params,
             Some(2),
-        );
+        )
+        .unwrap();
         let root = asset_tree.root_node();
 
         let leg = Leg::new(
@@ -3906,7 +3912,8 @@ mod mocking_tests {
             &vec![asset_data.commitment],
             &asset_tree_params,
             Some(2),
-        );
+        )
+        .unwrap();
         let root = asset_tree.root_node();
 
         let leg = Leg::new(
@@ -4210,7 +4217,8 @@ mod mocking_tests {
             &vec![asset_data.commitment],
             &asset_tree_params,
             Some(2),
-        );
+        )
+        .unwrap();
         let root = asset_tree.root_node();
 
         let leg = Leg::new(
@@ -4400,7 +4408,8 @@ mod mocking_tests {
             &vec![asset_data.commitment],
             &asset_tree_params,
             Some(2),
-        );
+        )
+        .unwrap();
         let root = asset_tree.root_node();
 
         let leg = Leg::new(
@@ -4577,7 +4586,8 @@ mod mocking_tests {
             &vec![asset_data.commitment],
             &asset_tree_params,
             Some(2),
-        );
+        )
+        .unwrap();
         let root = asset_tree.root_node();
 
         let leg = Leg::new(
@@ -4744,7 +4754,8 @@ mod mocking_tests {
             &vec![asset_data.commitment],
             &asset_tree_params,
             Some(2),
-        );
+        )
+        .unwrap();
         let root = asset_tree.root_node();
 
         let leg = Leg::new(
@@ -4957,7 +4968,8 @@ mod mocking_tests {
             &vec![real_data.commitment],
             &asset_tree_params,
             Some(2),
-        );
+        )
+        .unwrap();
         let root = asset_tree.root_node();
 
         let mut prove = |enc_keys: Vec<PallasA>, med_keys: Vec<PallasA>| {

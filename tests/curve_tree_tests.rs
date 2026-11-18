@@ -41,7 +41,7 @@ impl<const L: usize> CurveTreeOld<L> {
     pub fn new_with_capacity(height: NodeLevel) -> Result<Self, Error> {
         let params = AssetTreeConfig::build_parameters();
         Ok(Self {
-            tree: CurveTree::from_leaves(&[VestaA::zero()], &params, Some(height)),
+            tree: CurveTree::from_leaves(&[VestaA::zero()], &params, Some(height)).unwrap(),
             leaves: vec![],
             length: 0,
             height,
@@ -94,7 +94,8 @@ impl<const L: usize> CurveTreeOld<L> {
         }
         let new_cap = last_leaf_index + 1;
         self.leaves.resize(new_cap, VestaA::zero());
-        let new_tree = CurveTree::from_leaves(&self.leaves, &self.params, Some(self.height));
+        let new_tree =
+            CurveTree::from_leaves(&self.leaves, &self.params, Some(self.height)).unwrap();
         self.tree = new_tree;
     }
 

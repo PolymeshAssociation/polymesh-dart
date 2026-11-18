@@ -881,7 +881,8 @@ fn leg_verification() {
             &set,
             &asset_tree_params,
             Some(4),
-        );
+        )
+        .unwrap();
 
         let clock = Instant::now();
 
@@ -1142,12 +1143,14 @@ fn leg_proofs_reject_root_of_different_height() {
         &set,
         &asset_tree_params,
         Some(HEIGHT),
-    );
+    )
+    .unwrap();
     let taller_tree = CurveTree::<L, 1, VestaParameters, PallasParameters>::from_leaves(
         &set,
         &asset_tree_params,
         Some(HEIGHT + 2),
-    );
+    )
+    .unwrap();
     let root = tree.root_node();
     let taller_root = taller_tree.root_node();
 
@@ -1229,12 +1232,14 @@ fn leg_proofs_reject_root_of_different_height() {
         &set,
         &asset_tree_params,
         Some(HEIGHT),
-    );
+    )
+    .unwrap();
     let taller_batched_tree = CurveTree::<L, M, VestaParameters, PallasParameters>::from_leaves(
         &set,
         &asset_tree_params,
         Some(HEIGHT + 2),
-    );
+    )
+    .unwrap();
     let batched_root = batched_tree.root_node();
     let taller_batched_root = taller_batched_tree.root_node();
 
@@ -1388,7 +1393,8 @@ fn leg_verification_with_oversized_params() {
             &[asset_data.commitment],
             &asset_tree_params,
             Some(4),
-        );
+        )
+        .unwrap();
 
         let leg = Leg::new(
             pk_s_e.0,
@@ -1514,7 +1520,8 @@ fn batch_leg_verification() {
             &commitments,
             &asset_tree_params,
             Some(4),
-        );
+        )
+        .unwrap();
         let root = asset_tree.root_node();
 
         let config = LegEncConfig {
@@ -1772,7 +1779,8 @@ fn combined_leg_verification() {
                 &commitments,
                 &asset_tree_params,
                 Some(height),
-            );
+            )
+            .unwrap();
             let root = asset_tree.root_node();
 
             let config = LegEncConfig {
@@ -2045,7 +2053,8 @@ fn settlement_verification() {
         &commitments,
         &asset_tree_params,
         Some(height),
-    );
+    )
+    .unwrap();
 
     let root = asset_tree.root_node();
     let amount = 100;
@@ -2555,7 +2564,8 @@ fn batch_settlement_verification() {
         &commitments,
         &asset_tree_params,
         Some(height),
-    );
+    )
+    .unwrap();
     let root = asset_tree.root_node();
 
     let (_, pk_s_e) = keygen_enc(&mut rng, enc_key_gen);
@@ -2790,7 +2800,8 @@ fn large_settlement_verification() {
         &commitments,
         &asset_tree_params,
         Some(height),
-    );
+    )
+    .unwrap();
     let root = asset_tree.root_node();
 
     let (_, pk_s_e) = keygen_enc(&mut rng, enc_key_gen);
@@ -2938,7 +2949,8 @@ fn combined_settlement_verification() {
         &commitments,
         &asset_tree_params,
         Some(height),
-    );
+    )
+    .unwrap();
     let root = asset_tree.root_node();
 
     let (_, pk_s_e) = keygen_enc(&mut rng, enc_key_gen);
@@ -3193,7 +3205,8 @@ fn six_leg_alternating_settlement() {
         &commitments,
         &asset_tree_params,
         Some(height),
-    );
+    )
+    .unwrap();
     let root = asset_tree.root_node();
 
     let (_, pk_s_e) = keygen_enc(&mut rng, enc_key_gen);
@@ -3346,7 +3359,8 @@ fn six_leg_grouped_settlement() {
         &commitments,
         &asset_tree_params,
         Some(height),
-    );
+    )
+    .unwrap();
     let root = asset_tree.root_node();
 
     let (_, pk_s_e) = keygen_enc(&mut rng, enc_key_gen);
@@ -3501,7 +3515,8 @@ fn leg_creation_proof_rejects_missing_blinding_key() {
         &set,
         &asset_tree_params,
         Some(2),
-    );
+    )
+    .unwrap();
 
     let nonce = b"test-nonce-mb";
     let leg = Leg::new(
@@ -3853,7 +3868,7 @@ proptest! {
         let set = vec![asset_data.commitment];
         let asset_tree = CurveTree::<L, 1, VestaParameters, PallasParameters>::from_leaves(
             &set, &asset_tree_params, Some(HEIGHT),
-        );
+        ).unwrap();
         let root = asset_tree.root_node();
 
         let leg = Leg::new(
@@ -4089,7 +4104,7 @@ proptest! {
                 &vec![asset_data.commitment],
                 &asset_tree_params,
                 Some(2),
-            );
+            ).unwrap();
             let root = asset_tree.root_node();
             let path = asset_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
             let proof = LegCreationProof::<L, PallasScalar, VestaScalar, PallasConfig, VestaParameters>::new::<
@@ -4362,7 +4377,8 @@ mod input_sanitation_disabled {
                 &[frozen_data.commitment],
                 &tree_params,
                 Some(2),
-            );
+            )
+            .unwrap();
             let root = tree.root_node();
             let proof = LegCreationProof::new::<_, PallasParams, VestaParams>(
                 &mut rng,
@@ -4524,7 +4540,8 @@ mod input_sanitation_disabled {
             &set,
             &asset_tree_params,
             Some(2),
-        );
+        )
+        .unwrap();
 
         let amount = 100;
         let nonce = b"test-nonce";
@@ -4737,7 +4754,8 @@ mod input_sanitation_disabled {
             &set,
             &asset_tree_params,
             Some(2),
-        );
+        )
+        .unwrap();
 
         let amount = 100;
         let nonce = b"test-nonce";
@@ -4955,7 +4973,8 @@ mod input_sanitation_disabled {
             &commitments,
             &asset_tree_params,
             Some(2),
-        );
+        )
+        .unwrap();
         let root = asset_tree.root_node();
         let nonce = b"test-nonce";
 

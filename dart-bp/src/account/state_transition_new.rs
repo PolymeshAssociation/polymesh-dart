@@ -3168,7 +3168,8 @@ mod tests {
                 &[alice_account_1_comm.0, alice_account_2_comm.0],
                 &account_tree_params,
                 Some(tree_height),
-            );
+            )
+            .unwrap();
 
             let account_tree_root = account_tree.root_node();
             let leaf_path = account_tree.get_paths_to_leaves(&[0, 1]).unwrap();
@@ -3629,7 +3630,8 @@ mod tests {
                 ],
                 &account_tree_params,
                 Some(tree_height),
-            );
+            )
+            .unwrap();
             let account_tree_root = account_tree.root_node();
 
             // Paths: Alice has leaves [0,1], Bob has leaves [2,3]

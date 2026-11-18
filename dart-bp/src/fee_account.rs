@@ -4612,7 +4612,8 @@ pub mod tests {
             &set,
             &account_tree_params,
             Some(6),
-        );
+        )
+        .unwrap();
 
         let increase_bal_by = 10;
 
@@ -4753,7 +4754,8 @@ pub mod tests {
             &set,
             &account_tree_params,
             Some(6),
-        );
+        )
+        .unwrap();
 
         let increase_bal_by = 10;
         let nonce = b"test-nonce";
@@ -4858,7 +4860,8 @@ pub mod tests {
             &set,
             &account_tree_params,
             Some(6),
-        );
+        )
+        .unwrap();
 
         let increase_bal_by = 10;
         let nonce = b"test-nonce";
@@ -5046,7 +5049,8 @@ pub mod tests {
             &set,
             &account_tree_params,
             Some(6),
-        );
+        )
+        .unwrap();
 
         let fee_amount = 10;
 
@@ -5199,7 +5203,8 @@ pub mod tests {
             &[account_comm.0],
             &account_tree_params,
             Some(6),
-        );
+        )
+        .unwrap();
         let root = account_tree.root_node();
         let nonce = b"test-nonce";
 
@@ -5307,7 +5312,8 @@ pub mod tests {
             &set,
             &account_tree_params,
             Some(4),
-        );
+        )
+        .unwrap();
 
         for i in 0..batch_size {
             let updated_account = accounts[i].get_state_for_payment(fee_amount).unwrap();
@@ -5485,7 +5491,8 @@ pub mod tests {
             &set,
             &account_tree_params,
             Some(6),
-        );
+        )
+        .unwrap();
 
         let fee_amount = 10;
         let nonce = b"test-nonce";
@@ -5604,7 +5611,8 @@ pub mod tests {
             &[account_comm.0],
             &account_tree_params,
             Some(6),
-        );
+        )
+        .unwrap();
         let root = account_tree.root_node();
         let pc_gens = account_tree_params.even_parameters.sl_params.pc_gens();
         let (b_blinding, anchor_gen) = (pc_gens.B_blinding, pc_gens.B);
@@ -5751,7 +5759,8 @@ pub mod tests {
             &[account_comm.0],
             &account_tree_params,
             Some(6),
-        );
+        )
+        .unwrap();
         let root = account_tree.root_node();
         let updated_account = account.get_state_for_payment(fee_amount).unwrap();
         let updated_account_comm = updated_account.commit(&account_comm_key).unwrap();
@@ -5973,7 +5982,8 @@ pub mod tests {
             &set,
             &account_tree_params,
             Some(6),
-        );
+        )
+        .unwrap();
 
         let fee_amount = 10;
         let nonce = b"test-nonce";
@@ -6262,7 +6272,8 @@ pub mod tests {
                 &set,
                 &account_tree_params,
                 Some(3),
-            );
+            )
+            .unwrap();
 
             let increase_bal_by = 10;
 
@@ -6352,7 +6363,8 @@ pub mod tests {
                 &set,
                 &account_tree_params,
                 Some(3),
-            );
+            )
+            .unwrap();
 
             let fee_amount = 10;
             let nonce = b"a_txn_id,a_payee_id";
@@ -6438,7 +6450,8 @@ pub mod tests {
                 &set,
                 &account_tree_params,
                 Some(3),
-            );
+            )
+            .unwrap();
 
             let fee_amount = 10;
             let nonce = b"a_txn_id,a_payee_id";
@@ -6528,7 +6541,8 @@ pub mod tests {
                 &set,
                 &account_tree_params,
                 Some(3),
-            );
+            )
+            .unwrap();
 
             let increase_bal_by = 10;
             let nonce = b"test-nonce";
@@ -6744,7 +6758,8 @@ pub mod tests {
                         &set,
                         &account_tree_params,
                         Some(3),
-                    );
+                    )
+                    .unwrap();
 
                 let increase_bal_by = 10;
                 let nonce = b"test-nonce";
@@ -6859,7 +6874,8 @@ pub mod tests {
                         &set,
                         &account_tree_params,
                         Some(3),
-                    );
+                    )
+                    .unwrap();
 
                 let increase_bal_by = 10;
                 let nonce = b"test-nonce";
@@ -6970,7 +6986,8 @@ pub mod tests {
                         &set,
                         &account_tree_params,
                         Some(3),
-                    );
+                    )
+                    .unwrap();
 
                 let fee_amount = 10;
                 let nonce = b"a_txn_id,a_payee_id";
@@ -7082,7 +7099,8 @@ pub mod tests {
                         &set,
                         &account_tree_params,
                         Some(3),
-                    );
+                    )
+                    .unwrap();
 
                 let fee_amount = 10;
                 let nonce = b"test-nonce";

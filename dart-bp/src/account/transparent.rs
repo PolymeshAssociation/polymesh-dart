@@ -3349,7 +3349,8 @@ mod tests {
             &set,
             &account_tree_params,
             Some(6),
-        );
+        )
+        .unwrap();
 
         for i in 0..batch_size {
             let updated_account = accounts[i].get_state_for_withdraw(withdraw_amount).unwrap();
@@ -3557,7 +3558,8 @@ mod tests {
             &set,
             &account_tree_params,
             Some(5),
-        );
+        )
+        .unwrap();
 
         for i in 0..batch_size {
             let updated_account = accounts[i].get_state_for_withdraw(withdraw_amount).unwrap();
@@ -3777,7 +3779,8 @@ mod tests {
             &set,
             &account_tree_params,
             Some(5),
-        );
+        )
+        .unwrap();
 
         for i in 0..batch_size {
             let updated_account = accounts[i].get_state_for_deposit(deposit_amount).unwrap();
@@ -3985,7 +3988,8 @@ mod tests {
             &set,
             &account_tree_params,
             Some(5),
-        );
+        )
+        .unwrap();
 
         for i in 0..batch_size {
             let updated_account = accounts[i].get_state_for_deposit(deposit_amount).unwrap();

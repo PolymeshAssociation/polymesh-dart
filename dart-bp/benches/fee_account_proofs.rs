@@ -85,7 +85,8 @@ fn create_fee_account_and_tree<R: CryptoRngCore>(
         &set,
         account_tree_params,
         Some(6),
-    );
+    )
+    .unwrap();
 
     (account, account_tree)
 }
