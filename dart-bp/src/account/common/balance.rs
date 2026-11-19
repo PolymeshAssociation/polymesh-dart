@@ -82,28 +82,14 @@ impl<F0: PrimeField, G0: SWCurveConfig<ScalarField = F0> + Clone + Copy>
         pc_gens: &PedersenGens<Affine<G0>>,
         bp_gens: &BulletproofGens<Affine<G0>>,
     ) -> Result<Self> {
-        let mut delta = 0i64;
-        for config in &balance_change_config {
-            if config.has_balance_decreased {
-                delta = delta + (config.amount as i64);
-            } else {
-                delta = delta - (config.amount as i64);
-            }
-        }
-        let (amount, has_balance_decreased) = if delta > 0 {
-            (delta as Balance, true)
-        } else {
-            (-delta as Balance, false)
-        };
-        ensure_correct_balance_change(account, updated_account, amount, has_balance_decreased)?;
-        ensure_peak_within_limit(account.balance(), &balance_change_config)?;
+        ensure_valid_balance_changes(
+            account.balance(),
+            updated_account.balance(),
+            &balance_change_config,
+            amount_blindings.len(),
+        )?;
 
-        let mut amounts = Vec::with_capacity(balance_change_config.len());
-        let mut has_balance_decreased = Vec::with_capacity(balance_change_config.len());
-        for config in balance_change_config {
-            amounts.push(config.amount);
-            has_balance_decreased.push(config.has_balance_decreased);
-        }
+        let (amounts, has_balance_decreased) = amounts_and_directions(&balance_change_config);
 
         let (comm_bp_bal_blinding, comm_bp_bal) = enforce_balance_change_prover(
             rng,
@@ -219,6 +205,62 @@ pub fn ensure_correct_balance_change<G: AffineRepr>(
     }
 }
 
+/// Checks `new_balance = old_balance + \sum increases - \sum decreases`.
+pub fn ensure_correct_net_balance_change(
+    old_balance: Balance,
+    new_balance: Balance,
+    configs: &[BalanceChangeConfig],
+) -> Result<()> {
+    #[cfg(feature = "ignore_prover_input_sanitation")]
+    {
+        return Ok(());
+    }
+
+    #[cfg(not(feature = "ignore_prover_input_sanitation"))]
+    {
+        let mut expected = old_balance as i128;
+        for config in configs {
+            if config.has_balance_decreased {
+                expected -= config.amount as i128;
+            } else {
+                expected += config.amount as i128;
+            }
+        }
+        if expected != new_balance as i128 {
+            return Err(Error::ProofGenerationError(
+                "Balance change incorrect".to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Returns the amounts and the `has_balance_decreased` flags of `configs`, in order.
+fn amounts_and_directions(configs: &[BalanceChangeConfig]) -> (Vec<Balance>, Vec<bool>) {
+    configs
+        .iter()
+        .map(|c| (c.amount, c.has_balance_decreased))
+        .unzip()
+}
+
+/// Checks one amount blinding per balance change, the peak balance and the net balance change.
+fn ensure_valid_balance_changes(
+    old_balance: Balance,
+    new_balance: Balance,
+    configs: &[BalanceChangeConfig],
+    num_amount_blindings: usize,
+) -> Result<()> {
+    if num_amount_blindings != configs.len() {
+        return Err(Error::ProofGenerationError(format!(
+            "amount_blindings length {} does not match number of balance-changing legs {}",
+            num_amount_blindings,
+            configs.len()
+        )));
+    }
+    ensure_peak_within_limit(old_balance, configs)?;
+    ensure_correct_net_balance_change(old_balance, new_balance, configs)
+}
+
 /// Balance change prover for the split (W2/W3) affirmation flow.
 /// Analogous to `BalanceChangeProver` for the non-split (solo) flow. `ct_amount_2` is owned by the
 /// host common protocol; this consumes the shared `amount_blindings` so the balance BP amount slots
@@ -246,20 +288,14 @@ impl<F0: PrimeField, G0: SWCurveConfig<ScalarField = F0> + Clone + Copy>
         pc_gens: &PedersenGens<Affine<G0>>,
         bp_gens: &BulletproofGens<Affine<G0>>,
     ) -> Result<Self> {
-        if amount_blindings.len() != balance_changes.len() {
-            return Err(Error::ProofGenerationError(format!(
-                "amount_blindings length {} does not match number of balance-changing legs {}",
-                amount_blindings.len(),
-                balance_changes.len()
-            )));
-        }
-        ensure_peak_within_limit(old_balance, balance_changes)?;
+        ensure_valid_balance_changes(
+            old_balance,
+            new_balance,
+            balance_changes,
+            amount_blindings.len(),
+        )?;
 
-        let amounts: Vec<Balance> = balance_changes.iter().map(|c| c.amount).collect();
-        let has_decreased: Vec<bool> = balance_changes
-            .iter()
-            .map(|c| c.has_balance_decreased)
-            .collect();
+        let (amounts, has_decreased) = amounts_and_directions(balance_changes);
 
         let (comm_bp_bal_blinding, comm_bp_bal) = enforce_balance_change_prover(
             rng,

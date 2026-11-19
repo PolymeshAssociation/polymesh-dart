@@ -69,8 +69,7 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
 {
     const CHECK_CHUNK_BITS: () = assert!(
         CHUNK_BITS <= 48
-            && ((<G::ScalarField as PrimeField>::MODULUS_BIT_SIZE as usize + CHUNK_BITS - 1)
-                / CHUNK_BITS
+            && ((<G::ScalarField as PrimeField>::MODULUS_BIT_SIZE as usize).div_ceil(CHUNK_BITS)
                 == NUM_CHUNKS)
     );
 

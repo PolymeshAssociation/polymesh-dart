@@ -1932,8 +1932,209 @@ mod tests {
 
     #[test]
     fn test_multi_leg_irreversible_operations() {
-        // Alice's single proof combining an irreversible send and an irreversible receive (one-shot ops that bump
-        // balance without leaving a reversible counter), vs the reversible send/receive used elsewhere.
+        let test_with_amount = |alice_to_bob_amount: u64, carol_to_alice_amount: u64| {
+            // Alice's single proof combining an irreversible send and an irreversible receive (one-shot ops that bump
+            // balance without leaving a reversible counter), vs the reversible send/receive used elsewhere.
+            let mut rng = thread_rng();
+
+            const NUM_GENS: usize = 1 << 13;
+            const L: usize = 64;
+            let (account_tree_params, account_comm_key, enc_gen) =
+                setup_gens_new::<NUM_GENS>(b"test");
+
+            let enc_key_gen = account_comm_key.sk_enc_gen();
+
+            // Setup keys for Alice, Bob, Carol, and auditor
+            let (
+                ((sk_alice, pk_alice), (sk_alice_e, pk_alice_e)),
+                (_, (_, pk_bob_e)),
+                (_, (_, pk_carol_e)),
+            ) = setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
+            let (_, _, (_, (_, pk_auditor_e))) =
+                setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
+
+            let asset_id = 1u32;
+
+            let mut test_with_config = |reveal_asset_id: bool| {
+                let conf = LegEncConfig {
+                    visibility: PartyVisibility::FullVisibility,
+                    reveal_asset_id,
+                };
+
+                // Create legs
+                let leg_1 = Leg::new(
+                    pk_alice_e.0,
+                    pk_bob_e.0,
+                    alice_to_bob_amount,
+                    asset_id,
+                    vec![pk_auditor_e.0],
+                    vec![],
+                    vec![],
+                )
+                .unwrap();
+                let (leg_enc_1, _) = leg_1
+                    .encrypt(&mut rng, conf.clone(), enc_key_gen, enc_gen)
+                    .unwrap();
+
+                let leg_2 = Leg::new(
+                    pk_carol_e.0,
+                    pk_alice_e.0,
+                    carol_to_alice_amount,
+                    asset_id,
+                    vec![pk_auditor_e.0],
+                    vec![],
+                    vec![],
+                )
+                .unwrap();
+                let (leg_enc_2, _) = leg_2
+                    .encrypt(&mut rng, conf.clone(), enc_key_gen, enc_gen)
+                    .unwrap();
+
+                // Create Alice's account
+                let alice_id = PallasFr::rand(&mut rng);
+                let (mut alice_account, _, _, _) = new_account(
+                    &mut rng,
+                    asset_id,
+                    pk_alice.clone(),
+                    pk_alice_e.clone(),
+                    alice_id,
+                );
+                alice_account.balance = 1000;
+
+                let account_tree = get_tree_with_account_comm::<L, _>(
+                    &alice_account,
+                    account_comm_key.clone(),
+                    &account_tree_params,
+                    6,
+                )
+                .unwrap();
+
+                let alice_leaf_path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+                let account_tree_root = account_tree.root_node();
+                let nonce = b"alice_nonce_irreversible";
+
+                // Alice does 2 irreversible operations in one proof
+                let mut builder = AccountStateBuilder::init(alice_account.clone());
+                builder
+                    .update_for_irreversible_send(alice_to_bob_amount)
+                    .unwrap();
+                builder
+                    .update_for_irreversible_receive(carol_to_alice_amount)
+                    .unwrap();
+                let alice_updated = builder.finalize();
+                assert_eq!(
+                    alice_updated.balance,
+                    alice_account.balance + carol_to_alice_amount - alice_to_bob_amount
+                );
+                let alice_updated_comm = alice_updated.commit(account_comm_key.clone()).unwrap();
+
+                let mut alice_builder = AccountStateTransitionProofBuilder::<
+                    L,
+                    _,
+                    _,
+                    PallasParameters,
+                    VestaParameters,
+                >::init(
+                    AccountTxnWitness::new(
+                        sk_alice.0,
+                        sk_alice_e.0,
+                        alice_account.clone(),
+                        alice_updated.clone(),
+                        alice_updated_comm,
+                    ),
+                    nonce,
+                );
+                alice_builder.add_irreversible_send({
+                    let (c, e) = leg_enc_1.core_and_eph_keys_for_sender();
+                    (c, e, alice_to_bob_amount)
+                });
+                alice_builder.add_irreversible_receive({
+                    let (c, e) = leg_enc_2.core_and_eph_keys_for_receiver();
+                    (c, e, carol_to_alice_amount)
+                });
+
+                let start = Instant::now();
+                let (alice_proof, alice_nullifier) = alice_builder
+                    .finalize::<_, PallasParams, VestaParams>(
+                        &mut rng,
+                        alice_leaf_path.clone(),
+                        &account_tree_root,
+                        &account_tree_params,
+                        account_comm_key.clone(),
+                        enc_gen,
+                    )
+                    .unwrap();
+                let proving_time = start.elapsed();
+
+                // Verify Alice's proof
+                let mut alice_verifier = AccountStateTransitionProofVerifier::init(
+                    alice_updated_comm,
+                    alice_nullifier,
+                    nonce,
+                );
+                alice_verifier.add_irreversible_receive(leg_enc_2.core_and_eph_keys_for_receiver());
+                alice_verifier.add_irreversible_send(leg_enc_1.core_and_eph_keys_for_sender());
+
+                let start = Instant::now();
+                alice_verifier
+                    .verify::<_, PallasParams, VestaParams>(
+                        &mut rng,
+                        &alice_proof,
+                        &account_tree_root,
+                        &account_tree_params,
+                        account_comm_key.clone(),
+                        enc_gen,
+                        None,
+                    )
+                    .unwrap();
+                let verification_time = start.elapsed();
+                let proof_size = alice_proof.compressed_size();
+                let mut alice_verifier = AccountStateTransitionProofVerifier::init(
+                    alice_updated_comm,
+                    alice_nullifier,
+                    nonce,
+                );
+                alice_verifier.add_irreversible_receive(leg_enc_2.core_and_eph_keys_for_receiver());
+                alice_verifier.add_irreversible_send(leg_enc_1.core_and_eph_keys_for_sender());
+                let mut rmc_1 = RandomizedMultChecker::new(PallasFr::rand(&mut rng));
+                let mut rmc_0 = RandomizedMultChecker::new(VestaFr::rand(&mut rng));
+                let start = Instant::now();
+                alice_verifier
+                    .verify::<_, PallasParams, VestaParams>(
+                        &mut rng,
+                        &alice_proof,
+                        &account_tree_root,
+                        &account_tree_params,
+                        account_comm_key.clone(),
+                        enc_gen,
+                        Some((&mut rmc_1, &mut rmc_0)),
+                    )
+                    .unwrap();
+                verify_rmc(rmc_0, rmc_1).unwrap();
+                let verification_time_rmc = start.elapsed();
+                println!(
+                    "reveal_asset_id={reveal_asset_id}: Proving time = {:?}, verification time = {:?}, verification time (RMC) = {:?}, proof size = {} bytes",
+                    proving_time, verification_time, verification_time_rmc, proof_size
+                );
+            };
+
+            test_with_config(false);
+
+            test_with_config(true);
+        };
+
+        for (alice_to_bob_amount, carol_to_alice_amount) in [(200, 300), (250, 250), (0, 0)] {
+            test_with_amount(alice_to_bob_amount, carol_to_alice_amount);
+        }
+    }
+
+    #[test]
+    fn test_multi_leg_net_zero_claim_and_send() {
+        // Claim a receive-affirmed leg and send an equal amount in one proof. Balance and
+        // counter are unchanged.
+        let alice_to_bob_amount = 150u64;
+        let carol_to_alice_amount = 150u64;
+
         let mut rng = thread_rng();
 
         const NUM_GENS: usize = 1 << 13;
@@ -1952,8 +2153,6 @@ mod tests {
             setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
 
         let asset_id = 1u32;
-        let alice_to_bob_amount = 200u64;
-        let carol_to_alice_amount = 300u64;
 
         let mut test_with_config = |reveal_asset_id: bool| {
             let conf = LegEncConfig {
@@ -2000,6 +2199,7 @@ mod tests {
                 alice_id,
             );
             alice_account.balance = 1000;
+            alice_account.counter = 1;
 
             let account_tree = get_tree_with_account_comm::<L, _>(
                 &alice_account,
@@ -2011,17 +2211,17 @@ mod tests {
 
             let alice_leaf_path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
             let account_tree_root = account_tree.root_node();
-            let nonce = b"alice_nonce_irreversible";
+            let nonce = b"alice_nonce_net_zero_claim_send";
 
-            // Alice does 2 irreversible operations in one proof
+            // Alice claims a receive and sends an equal amount in one proof
             let mut builder = AccountStateBuilder::init(alice_account.clone());
             builder
-                .update_for_irreversible_send(alice_to_bob_amount)
+                .update_for_claiming_received(carol_to_alice_amount)
                 .unwrap();
-            builder
-                .update_for_irreversible_receive(carol_to_alice_amount)
-                .unwrap();
+            builder.update_for_send(alice_to_bob_amount).unwrap();
             let alice_updated = builder.finalize();
+            assert_eq!(alice_updated.balance, alice_account.balance);
+            assert_eq!(alice_updated.counter, alice_account.counter);
             let alice_updated_comm = alice_updated.commit(account_comm_key.clone()).unwrap();
 
             let mut alice_builder = AccountStateTransitionProofBuilder::<
@@ -2040,13 +2240,13 @@ mod tests {
                 ),
                 nonce,
             );
-            alice_builder.add_irreversible_send({
-                let (c, e) = leg_enc_1.core_and_eph_keys_for_sender();
-                (c, e, alice_to_bob_amount)
-            });
-            alice_builder.add_irreversible_receive({
+            alice_builder.add_claim_received({
                 let (c, e) = leg_enc_2.core_and_eph_keys_for_receiver();
                 (c, e, carol_to_alice_amount)
+            });
+            alice_builder.add_send_affirmation({
+                let (c, e) = leg_enc_1.core_and_eph_keys_for_sender();
+                (c, e, alice_to_bob_amount)
             });
 
             let start = Instant::now();
@@ -2068,8 +2268,8 @@ mod tests {
                 alice_nullifier,
                 nonce,
             );
-            alice_verifier.add_irreversible_receive(leg_enc_2.core_and_eph_keys_for_receiver());
-            alice_verifier.add_irreversible_send(leg_enc_1.core_and_eph_keys_for_sender());
+            alice_verifier.add_claim_received(leg_enc_2.core_and_eph_keys_for_receiver());
+            alice_verifier.add_send_affirmation(leg_enc_1.core_and_eph_keys_for_sender());
 
             let start = Instant::now();
             alice_verifier
@@ -2090,8 +2290,8 @@ mod tests {
                 alice_nullifier,
                 nonce,
             );
-            alice_verifier.add_irreversible_receive(leg_enc_2.core_and_eph_keys_for_receiver());
-            alice_verifier.add_irreversible_send(leg_enc_1.core_and_eph_keys_for_sender());
+            alice_verifier.add_claim_received(leg_enc_2.core_and_eph_keys_for_receiver());
+            alice_verifier.add_send_affirmation(leg_enc_1.core_and_eph_keys_for_sender());
             let mut rmc_1 = RandomizedMultChecker::new(PallasFr::rand(&mut rng));
             let mut rmc_0 = RandomizedMultChecker::new(VestaFr::rand(&mut rng));
             let start = Instant::now();

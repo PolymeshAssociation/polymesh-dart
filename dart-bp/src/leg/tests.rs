@@ -3961,7 +3961,7 @@ proptest! {
             )
             .unwrap();
             let asset_tree = CurveTree::<L, 1, VestaParameters, PallasParameters>::from_leaves(
-                &vec![asset_data.commitment],
+                &[asset_data.commitment],
                 &asset_tree_params,
                 Some(2),
             ).unwrap();

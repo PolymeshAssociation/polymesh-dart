@@ -66,6 +66,10 @@ pub enum Error {
     #[error("Amount is too large: {0}")]
     AmountTooLarge(Balance),
 
+    /// Amount is zero.
+    #[error("Amount must be non-zero")]
+    ZeroAmount,
+
     /// Asset ID is too large.
     #[error("Asset ID is too large: {0}")]
     AssetIdTooLarge(AssetId),

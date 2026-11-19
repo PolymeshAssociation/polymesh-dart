@@ -154,7 +154,7 @@ pub fn is_nonzero_gadget<F: Field, CS: ConstraintSystem<F>>(
     cs.constrain(o1.into());
 
     // x * x_inv = y
-    let inv_lc: LinearCombination<F> = vec![(x_inv.variable, F::one())].iter().collect();
+    let inv_lc: LinearCombination<F> = [(x_inv.variable, F::one())].iter().collect();
     let (_, _, o2) = cs.multiply(x_lc.clone(), inv_lc.clone());
     // Output wire should have value `y`
     cs.constrain(o2 - y_lc);

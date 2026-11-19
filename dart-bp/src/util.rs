@@ -1317,6 +1317,7 @@ pub(crate) fn generate_account_commitment_responses<
     t_acc_new: &SchnorrCommitment<Affine<G0>>,
     is_asset_id_revealed: bool,
     include_sk: bool,
+    has_balance_changed: bool,
     // None for include_sk=false
     sk: Option<F0>,
     // None for include_sk=false
@@ -1356,7 +1357,6 @@ pub(crate) fn generate_account_commitment_responses<
     let resp_acc_old = t_acc_old.response(&old_wits, prover_challenge)?;
     Zeroize::zeroize(&mut old_wits);
 
-    let has_balance_changed = account.balance != updated_account.balance;
     let asset_id_offset = if is_asset_id_revealed { 1 } else { 0 };
     // When include_sk=true, t_acc_new has sk at index 0, so indices match the *_GEN_INDEX constants.
     // When include_sk=false, sk is absent from t_acc_new, so all indices shift down by 1.
@@ -1433,6 +1433,7 @@ pub(crate) fn generate_sigma_responses_without_leg_link<
     t_null: PokDiscreteLogProtocol<Affine<G0>>,
     t_bp_randomness_relations: &SchnorrCommitment<Affine<G0>>,
     is_asset_id_revealed: bool,
+    has_balance_changed: bool,
     prover_challenge: &F0,
 ) -> Result<(
     SchnorrResponse<Affine<G0>>,
@@ -1447,6 +1448,7 @@ pub(crate) fn generate_sigma_responses_without_leg_link<
         t_acc_new,
         is_asset_id_revealed,
         true, // include_sk
+        has_balance_changed,
         Some(sk_aff),
         Some(sk_enc),
         Some(leaf_rerandomization),
@@ -1499,6 +1501,7 @@ pub(crate) fn generate_sigma_responses_for_common_state_change<
     t_leg_link: Vec<LegAccountLinkProtocol<G0>>,
     t_bp_randomness_relations: &SchnorrCommitment<Affine<G0>>,
     is_asset_id_revealed: bool,
+    has_balance_changed: bool,
     prover_challenge: &F0,
 ) -> Result<(
     SchnorrResponse<Affine<G0>>,
@@ -1521,6 +1524,7 @@ pub(crate) fn generate_sigma_responses_for_common_state_change<
             t_null,
             t_bp_randomness_relations,
             is_asset_id_revealed,
+            has_balance_changed,
             prover_challenge,
         )?;
 

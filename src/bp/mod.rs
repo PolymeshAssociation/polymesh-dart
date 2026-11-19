@@ -1672,29 +1672,6 @@ mod tests {
         (leg_enc, leg_ref, tree)
     }
 
-    fn make_leg_and_tree<R: rand_core::RngCore + rand_core::CryptoRng>(
-        rng: &mut R,
-        sender_enc: EncryptionPublicKey,
-        receiver_enc: EncryptionPublicKey,
-        asset_id: AssetId,
-        amount: Balance,
-        state_leaf: AccountStateCommitment,
-    ) -> (
-        LegEncrypted,
-        LegRef,
-        ProverCurveTree<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>,
-    ) {
-        make_leg_and_tree_with_config(
-            rng,
-            sender_enc,
-            receiver_enc,
-            asset_id,
-            amount,
-            false,
-            state_leaf,
-        )
-    }
-
     #[test]
     fn test_settlement_revealed_asset_id() {
         let mut rng = rand::rngs::StdRng::from_entropy();
@@ -1889,7 +1866,7 @@ mod tests {
 
     #[test]
     fn test_sender_affirmation_split() {
-        let test_with_config = |reveal_asset_id: bool| {
+        let test_with_config = |reveal_asset_id: bool, amount: Balance| {
             let mut rng = rand::thread_rng();
             let asset_id: AssetId = 1;
             let counter: NullifierSkGenCounter = 0;
@@ -1899,7 +1876,6 @@ mod tests {
                 b"test-sender-affirm-split"
             };
             let mint_amount: Balance = 1000;
-            let send_amount: Balance = 300;
 
             let sender_keys = AccountKeys::rand(&mut rng).unwrap();
             let receiver_keys = AccountKeys::rand(&mut rng).unwrap();
@@ -1915,7 +1891,7 @@ mod tests {
                 sender_keys.enc.public,
                 receiver_keys.enc.public,
                 asset_id,
-                send_amount,
+                amount,
                 reveal_asset_id,
                 leaf,
             );
@@ -1926,7 +1902,7 @@ mod tests {
                     &mut sender_state,
                     &leg_ref,
                     &leg_enc,
-                    send_amount,
+                    amount,
                     &account_tree,
                 )
                 .unwrap();
@@ -1956,13 +1932,16 @@ mod tests {
             proof.verify(&leg_enc, &root, &mut rng).unwrap();
         };
 
-        test_with_config(false);
-        test_with_config(true);
+        for reveal_asset_id in [false, true] {
+            for amount in [300, 0] {
+                test_with_config(reveal_asset_id, amount);
+            }
+        }
     }
 
     #[test]
     fn test_receiver_affirmation_split() {
-        let test_with_config = |reveal_asset_id: bool| {
+        let test_with_config = |reveal_asset_id: bool, amount: Balance| {
             let mut rng = rand::thread_rng();
             let asset_id: AssetId = 1;
             let counter: NullifierSkGenCounter = 0;
@@ -1971,7 +1950,6 @@ mod tests {
             } else {
                 b"test-receiver-affirm-split"
             };
-            let receive_amount: Balance = 300;
 
             let sender_keys = AccountKeys::rand(&mut rng).unwrap();
             let receiver_keys = AccountKeys::rand(&mut rng).unwrap();
@@ -1986,7 +1964,7 @@ mod tests {
                 sender_keys.enc.public,
                 receiver_keys.enc.public,
                 asset_id,
-                receive_amount,
+                amount,
                 reveal_asset_id,
                 leaf,
             );
@@ -1997,7 +1975,7 @@ mod tests {
                     &mut receiver_state,
                     &leg_ref,
                     &leg_enc,
-                    receive_amount,
+                    amount,
                     &account_tree,
                 )
                 .unwrap();
@@ -2027,362 +2005,410 @@ mod tests {
             proof.verify(&leg_enc, &root, &mut rng).unwrap();
         };
 
-        test_with_config(false);
-        test_with_config(true);
+        for reveal_asset_id in [false, true] {
+            for amount in [300, 0] {
+                test_with_config(reveal_asset_id, amount);
+            }
+        }
     }
 
     #[test]
     fn test_claim_received_split() {
-        let mut rng = rand::thread_rng();
-        let asset_id: AssetId = 1;
-        let counter: NullifierSkGenCounter = 0;
-        let ctx = b"test-claim-received-split";
-        let claim_amount: Balance = 300;
+        let test_with_config = |reveal_asset_id: bool, amount: Balance| {
+            let mut rng = rand::thread_rng();
+            let asset_id: AssetId = 1;
+            let counter: NullifierSkGenCounter = 0;
+            let ctx = b"test-claim-received-split";
 
-        let sender_keys = AccountKeys::rand(&mut rng).unwrap();
-        let receiver_keys = AccountKeys::rand(&mut rng).unwrap();
+            let sender_keys = AccountKeys::rand(&mut rng).unwrap();
+            let receiver_keys = AccountKeys::rand(&mut rng).unwrap();
 
-        let (mut receiver_state, _) = receiver_keys
-            .init_asset_state(asset_id, counter, ctx)
-            .unwrap();
-        receiver_state.current_state.counter = 1;
+            let (mut receiver_state, _) = receiver_keys
+                .init_asset_state(asset_id, counter, ctx)
+                .unwrap();
+            receiver_state.current_state.counter = 1;
 
-        let leaf = receiver_state.current_commitment().unwrap();
-        let (leg_enc, leg_ref, account_tree) = make_leg_and_tree(
-            &mut rng,
-            sender_keys.enc.public,
-            receiver_keys.enc.public,
-            asset_id,
-            claim_amount,
-            leaf,
-        );
+            let leaf = receiver_state.current_commitment().unwrap();
+            let (leg_enc, leg_ref, account_tree) = make_leg_and_tree_with_config(
+                &mut rng,
+                sender_keys.enc.public,
+                receiver_keys.enc.public,
+                asset_id,
+                amount,
+                reveal_asset_id,
+                leaf,
+            );
 
-        let (protocol, device_request) = ReceiverClaimHostProtocol::<AccountTreeConfig>::init(
-            &mut rng,
-            &mut receiver_state,
-            &leg_ref,
-            &leg_enc,
-            claim_amount,
-            &account_tree,
-        )
-        .unwrap();
-
-        let tree_params = AccountTreeConfig::parameters();
-        let comm_re_rand_gen = tree_params.even_parameters.pc_gens().B_blinding;
-        let anchor_gen = tree_params.even_parameters.pc_gens().B;
-
-        let device_response = make_affirmation_device_response(
-            &mut rng,
-            &receiver_keys,
-            &device_request,
-            comm_re_rand_gen,
-            anchor_gen,
-        );
-        let proof = protocol
-            .finish::<_, ()>(&mut rng, &device_response)
+            let (protocol, device_request) = ReceiverClaimHostProtocol::<AccountTreeConfig>::init(
+                &mut rng,
+                &mut receiver_state,
+                &leg_ref,
+                &leg_enc,
+                amount,
+                &account_tree,
+            )
             .unwrap();
 
-        let root = account_tree.root().unwrap();
-        proof.verify(&leg_enc, &root, &mut rng).unwrap();
+            let tree_params = AccountTreeConfig::parameters();
+            let comm_re_rand_gen = tree_params.even_parameters.pc_gens().B_blinding;
+            let anchor_gen = tree_params.even_parameters.pc_gens().B;
+
+            let device_response = make_affirmation_device_response(
+                &mut rng,
+                &receiver_keys,
+                &device_request,
+                comm_re_rand_gen,
+                anchor_gen,
+            );
+            let proof = protocol
+                .finish::<_, ()>(&mut rng, &device_response)
+                .unwrap();
+
+            let root = account_tree.root().unwrap();
+            proof.verify(&leg_enc, &root, &mut rng).unwrap();
+        };
+
+        for reveal_asset_id in [false, true] {
+            for amount in [300, 0] {
+                test_with_config(reveal_asset_id, amount);
+            }
+        }
     }
 
     #[test]
     fn test_sender_reverse_split() {
-        let mut rng = rand::thread_rng();
-        let asset_id: AssetId = 1;
-        let counter: NullifierSkGenCounter = 0;
-        let ctx = b"test-sender-reverse-split";
-        let reverse_amount: Balance = 300;
+        let test_with_config = |reveal_asset_id: bool, amount: Balance| {
+            let mut rng = rand::thread_rng();
+            let asset_id: AssetId = 1;
+            let counter: NullifierSkGenCounter = 0;
+            let ctx = b"test-sender-reverse-split";
 
-        let sender_keys = AccountKeys::rand(&mut rng).unwrap();
-        let receiver_keys = AccountKeys::rand(&mut rng).unwrap();
+            let sender_keys = AccountKeys::rand(&mut rng).unwrap();
+            let receiver_keys = AccountKeys::rand(&mut rng).unwrap();
 
-        let (mut sender_state, _) = sender_keys
-            .init_asset_state(asset_id, counter, ctx)
-            .unwrap();
-        sender_state.current_state.counter = 1;
+            let (mut sender_state, _) = sender_keys
+                .init_asset_state(asset_id, counter, ctx)
+                .unwrap();
+            sender_state.current_state.counter = 1;
 
-        let leaf = sender_state.current_commitment().unwrap();
-        let (leg_enc, leg_ref, account_tree) = make_leg_and_tree(
-            &mut rng,
-            sender_keys.enc.public,
-            receiver_keys.enc.public,
-            asset_id,
-            reverse_amount,
-            leaf,
-        );
-
-        let (protocol, device_request) =
-            SenderRevertAffirmationHostProtocol::<AccountTreeConfig>::init(
+            let leaf = sender_state.current_commitment().unwrap();
+            let (leg_enc, leg_ref, account_tree) = make_leg_and_tree_with_config(
                 &mut rng,
-                &mut sender_state,
-                &leg_ref,
-                &leg_enc,
-                reverse_amount,
-                &account_tree,
-            )
-            .unwrap();
+                sender_keys.enc.public,
+                receiver_keys.enc.public,
+                asset_id,
+                amount,
+                reveal_asset_id,
+                leaf,
+            );
 
-        let tree_params = AccountTreeConfig::parameters();
-        let comm_re_rand_gen = tree_params.even_parameters.pc_gens().B_blinding;
-        let anchor_gen = tree_params.even_parameters.pc_gens().B;
+            let (protocol, device_request) =
+                SenderRevertAffirmationHostProtocol::<AccountTreeConfig>::init(
+                    &mut rng,
+                    &mut sender_state,
+                    &leg_ref,
+                    &leg_enc,
+                    amount,
+                    &account_tree,
+                )
+                .unwrap();
 
-        let device_response = make_affirmation_device_response(
-            &mut rng,
-            &sender_keys,
-            &device_request,
-            comm_re_rand_gen,
-            anchor_gen,
-        );
-        let proof = protocol
-            .finish::<_, ()>(&mut rng, &device_response)
-            .unwrap();
+            let tree_params = AccountTreeConfig::parameters();
+            let comm_re_rand_gen = tree_params.even_parameters.pc_gens().B_blinding;
+            let anchor_gen = tree_params.even_parameters.pc_gens().B;
 
-        let root = account_tree.root().unwrap();
-        proof.verify(&leg_enc, &root, &mut rng).unwrap();
+            let device_response = make_affirmation_device_response(
+                &mut rng,
+                &sender_keys,
+                &device_request,
+                comm_re_rand_gen,
+                anchor_gen,
+            );
+            let proof = protocol
+                .finish::<_, ()>(&mut rng, &device_response)
+                .unwrap();
+
+            let root = account_tree.root().unwrap();
+            proof.verify(&leg_enc, &root, &mut rng).unwrap();
+        };
+
+        for reveal_asset_id in [false, true] {
+            for amount in [300, 0] {
+                test_with_config(reveal_asset_id, amount);
+            }
+        }
     }
 
     #[test]
     fn test_sender_counter_update_split() {
-        let mut rng = rand::thread_rng();
-        let asset_id: AssetId = 1;
-        let counter: NullifierSkGenCounter = 0;
-        let ctx = b"test-sender-counter-update";
+        let test_with_config = |reveal_asset_id: bool, amount: Balance| {
+            let mut rng = rand::thread_rng();
+            let asset_id: AssetId = 1;
+            let counter: NullifierSkGenCounter = 0;
+            let ctx = b"test-sender-counter-update";
 
-        let sender_keys = AccountKeys::rand(&mut rng).unwrap();
-        let receiver_keys = AccountKeys::rand(&mut rng).unwrap();
+            let sender_keys = AccountKeys::rand(&mut rng).unwrap();
+            let receiver_keys = AccountKeys::rand(&mut rng).unwrap();
 
-        let (mut sender_state, _) = sender_keys
-            .init_asset_state(asset_id, counter, ctx)
-            .unwrap();
-        sender_state.current_state.counter = 1;
+            let (mut sender_state, _) = sender_keys
+                .init_asset_state(asset_id, counter, ctx)
+                .unwrap();
+            sender_state.current_state.counter = 1;
 
-        let leaf = sender_state.current_commitment().unwrap();
+            let leaf = sender_state.current_commitment().unwrap();
 
-        let (leg_enc, leg_ref, account_tree) = make_leg_and_tree(
-            &mut rng,
-            sender_keys.enc.public,
-            receiver_keys.enc.public,
-            asset_id,
-            0,
-            leaf,
-        );
-
-        let (protocol, device_request) =
-            SenderCounterUpdateHostProtocol::<AccountTreeConfig>::init(
+            let (leg_enc, leg_ref, account_tree) = make_leg_and_tree_with_config(
                 &mut rng,
-                &mut sender_state,
-                &leg_ref,
-                &leg_enc,
-                0,
-                &account_tree,
-            )
-            .unwrap();
+                sender_keys.enc.public,
+                receiver_keys.enc.public,
+                asset_id,
+                amount,
+                reveal_asset_id,
+                leaf,
+            );
 
-        let tree_params = AccountTreeConfig::parameters();
-        let comm_re_rand_gen = tree_params.even_parameters.pc_gens().B_blinding;
-        let anchor_gen = tree_params.even_parameters.pc_gens().B;
+            let (protocol, device_request) =
+                SenderCounterUpdateHostProtocol::<AccountTreeConfig>::init(
+                    &mut rng,
+                    &mut sender_state,
+                    &leg_ref,
+                    &leg_enc,
+                    amount,
+                    &account_tree,
+                )
+                .unwrap();
 
-        let device_response = make_affirmation_device_response(
-            &mut rng,
-            &sender_keys,
-            &device_request,
-            comm_re_rand_gen,
-            anchor_gen,
-        );
-        let proof = protocol
-            .finish::<_, ()>(&mut rng, &device_response)
-            .unwrap();
+            let tree_params = AccountTreeConfig::parameters();
+            let comm_re_rand_gen = tree_params.even_parameters.pc_gens().B_blinding;
+            let anchor_gen = tree_params.even_parameters.pc_gens().B;
 
-        let root = account_tree.root().unwrap();
-        proof.verify(&leg_enc, &root, &mut rng).unwrap();
+            let device_response = make_affirmation_device_response(
+                &mut rng,
+                &sender_keys,
+                &device_request,
+                comm_re_rand_gen,
+                anchor_gen,
+            );
+            let proof = protocol
+                .finish::<_, ()>(&mut rng, &device_response)
+                .unwrap();
+
+            let root = account_tree.root().unwrap();
+            proof.verify(&leg_enc, &root, &mut rng).unwrap();
+        };
+
+        for reveal_asset_id in [false, true] {
+            for amount in [300, 0] {
+                test_with_config(reveal_asset_id, amount);
+            }
+        }
     }
 
     #[test]
     fn test_receiver_counter_update_split() {
-        let mut rng = rand::thread_rng();
-        let asset_id: AssetId = 1;
-        let counter: NullifierSkGenCounter = 0;
-        let ctx = b"test-receiver-counter-update";
+        let test_with_config = |reveal_asset_id: bool, amount: Balance| {
+            let mut rng = rand::thread_rng();
+            let asset_id: AssetId = 1;
+            let counter: NullifierSkGenCounter = 0;
+            let ctx = b"test-receiver-counter-update";
 
-        let sender_keys = AccountKeys::rand(&mut rng).unwrap();
-        let receiver_keys = AccountKeys::rand(&mut rng).unwrap();
+            let sender_keys = AccountKeys::rand(&mut rng).unwrap();
+            let receiver_keys = AccountKeys::rand(&mut rng).unwrap();
 
-        let (mut receiver_state, _) = receiver_keys
-            .init_asset_state(asset_id, counter, ctx)
+            let (mut receiver_state, _) = receiver_keys
+                .init_asset_state(asset_id, counter, ctx)
+                .unwrap();
+            receiver_state.current_state.counter = 1;
+
+            let leg = Leg::new(
+                sender_keys.enc.public,
+                receiver_keys.enc.public,
+                asset_id,
+                amount,
+            )
             .unwrap();
-        receiver_state.current_state.counter = 1;
+            let mut leg_config = LegConfig::default();
+            leg_config.reveal_asset_id = reveal_asset_id;
+            let (_, leg_enc, _) = leg
+                .encrypt(&mut rng, leg_config.into(), vec![], vec![], vec![])
+                .unwrap();
+            let leg_ref = LegRef::new(SettlementRef([8u8; 32]), 0);
 
-        let leg = Leg::new(
-            sender_keys.enc.public,
-            receiver_keys.enc.public,
-            asset_id,
-            0,
-        )
-        .unwrap();
-        let (_, leg_enc, _) = leg
-            .encrypt(
+            let mut account_tree =
+                ProverCurveTree::<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>::new(
+                    ACCOUNT_TREE_HEIGHT,
+                )
+                .unwrap();
+            let leaf = receiver_state
+                .current_commitment()
+                .unwrap()
+                .as_leaf_value()
+                .unwrap();
+            account_tree.insert(leaf).unwrap();
+            account_tree.store_root().unwrap();
+
+            let (protocol, device_request) =
+                ReceiverRevertAffirmationHostProtocol::<AccountTreeConfig>::init(
+                    &mut rng,
+                    &mut receiver_state,
+                    &leg_ref,
+                    &leg_enc,
+                    amount,
+                    &account_tree,
+                )
+                .unwrap();
+
+            let tree_params = AccountTreeConfig::parameters();
+            let comm_re_rand_gen = tree_params.even_parameters.pc_gens().B_blinding;
+            let anchor_gen = tree_params.even_parameters.pc_gens().B;
+
+            let device_response = make_affirmation_device_response(
                 &mut rng,
-                LegConfig::default().into(),
-                vec![],
-                vec![],
-                vec![],
-            )
-            .unwrap();
-        let leg_ref = LegRef::new(SettlementRef([8u8; 32]), 0);
+                &receiver_keys,
+                &device_request,
+                comm_re_rand_gen,
+                anchor_gen,
+            );
+            let proof = protocol
+                .finish::<_, ()>(&mut rng, &device_response)
+                .unwrap();
 
-        let mut account_tree =
-            ProverCurveTree::<ACCOUNT_TREE_L, ACCOUNT_TREE_M, AccountTreeConfig>::new(
-                ACCOUNT_TREE_HEIGHT,
-            )
-            .unwrap();
-        let leaf = receiver_state
-            .current_commitment()
-            .unwrap()
-            .as_leaf_value()
-            .unwrap();
-        account_tree.insert(leaf).unwrap();
-        account_tree.store_root().unwrap();
+            let root = account_tree.root().unwrap();
+            proof.verify(&leg_enc, &root, &mut rng).unwrap();
+        };
 
-        let (protocol, device_request) =
-            ReceiverRevertAffirmationHostProtocol::<AccountTreeConfig>::init(
-                &mut rng,
-                &mut receiver_state,
-                &leg_ref,
-                &leg_enc,
-                0,
-                &account_tree,
-            )
-            .unwrap();
-
-        let tree_params = AccountTreeConfig::parameters();
-        let comm_re_rand_gen = tree_params.even_parameters.pc_gens().B_blinding;
-        let anchor_gen = tree_params.even_parameters.pc_gens().B;
-
-        let device_response = make_affirmation_device_response(
-            &mut rng,
-            &receiver_keys,
-            &device_request,
-            comm_re_rand_gen,
-            anchor_gen,
-        );
-        let proof = protocol
-            .finish::<_, ()>(&mut rng, &device_response)
-            .unwrap();
-
-        let root = account_tree.root().unwrap();
-        proof.verify(&leg_enc, &root, &mut rng).unwrap();
+        for reveal_asset_id in [false, true] {
+            for amount in [300, 0] {
+                test_with_config(reveal_asset_id, amount);
+            }
+        }
     }
 
     #[test]
     fn test_instant_sender_affirmation_split() {
-        let mut rng = rand::thread_rng();
-        let asset_id: AssetId = 1;
-        let counter: NullifierSkGenCounter = 0;
-        let ctx = b"test-instant-sender-affirm";
-        let send_amount: Balance = 300;
+        let test_with_config = |reveal_asset_id: bool, amount: Balance| {
+            let mut rng = rand::thread_rng();
+            let asset_id: AssetId = 1;
+            let counter: NullifierSkGenCounter = 0;
+            let ctx = b"test-instant-sender-affirm";
 
-        let sender_keys = AccountKeys::rand(&mut rng).unwrap();
-        let receiver_keys = AccountKeys::rand(&mut rng).unwrap();
+            let sender_keys = AccountKeys::rand(&mut rng).unwrap();
+            let receiver_keys = AccountKeys::rand(&mut rng).unwrap();
 
-        let (mut sender_state, _) = sender_keys
-            .init_asset_state(asset_id, counter, ctx)
-            .unwrap();
-        sender_state.current_state.balance = 1000;
+            let (mut sender_state, _) = sender_keys
+                .init_asset_state(asset_id, counter, ctx)
+                .unwrap();
+            sender_state.current_state.balance = 1000;
 
-        let leaf = sender_state.current_commitment().unwrap();
-        let (leg_enc, leg_ref, account_tree) = make_leg_and_tree(
-            &mut rng,
-            sender_keys.enc.public,
-            receiver_keys.enc.public,
-            asset_id,
-            send_amount,
-            leaf,
-        );
-
-        let (protocol, device_request) =
-            InstantSenderAffirmationHostProtocol::<AccountTreeConfig>::init(
+            let leaf = sender_state.current_commitment().unwrap();
+            let (leg_enc, leg_ref, account_tree) = make_leg_and_tree_with_config(
                 &mut rng,
-                &mut sender_state,
-                &leg_ref,
-                &leg_enc,
-                send_amount,
-                &account_tree,
-            )
-            .unwrap();
+                sender_keys.enc.public,
+                receiver_keys.enc.public,
+                asset_id,
+                amount,
+                reveal_asset_id,
+                leaf,
+            );
 
-        let tree_params = AccountTreeConfig::parameters();
-        let comm_re_rand_gen = tree_params.even_parameters.pc_gens().B_blinding;
-        let anchor_gen = tree_params.even_parameters.pc_gens().B;
+            let (protocol, device_request) =
+                InstantSenderAffirmationHostProtocol::<AccountTreeConfig>::init(
+                    &mut rng,
+                    &mut sender_state,
+                    &leg_ref,
+                    &leg_enc,
+                    amount,
+                    &account_tree,
+                )
+                .unwrap();
 
-        let device_response = make_affirmation_device_response(
-            &mut rng,
-            &sender_keys,
-            &device_request,
-            comm_re_rand_gen,
-            anchor_gen,
-        );
-        let proof = protocol
-            .finish::<_, ()>(&mut rng, &device_response)
-            .unwrap();
+            let tree_params = AccountTreeConfig::parameters();
+            let comm_re_rand_gen = tree_params.even_parameters.pc_gens().B_blinding;
+            let anchor_gen = tree_params.even_parameters.pc_gens().B;
 
-        let root = account_tree.root().unwrap();
-        proof.verify(&leg_enc, &root, &mut rng).unwrap();
+            let device_response = make_affirmation_device_response(
+                &mut rng,
+                &sender_keys,
+                &device_request,
+                comm_re_rand_gen,
+                anchor_gen,
+            );
+            let proof = protocol
+                .finish::<_, ()>(&mut rng, &device_response)
+                .unwrap();
+
+            let root = account_tree.root().unwrap();
+            proof.verify(&leg_enc, &root, &mut rng).unwrap();
+        };
+
+        for reveal_asset_id in [false, true] {
+            for amount in [300, 0] {
+                test_with_config(reveal_asset_id, amount);
+            }
+        }
     }
 
     #[test]
     fn test_instant_receiver_affirmation_split() {
-        let mut rng = rand::thread_rng();
-        let asset_id: AssetId = 1;
-        let counter: NullifierSkGenCounter = 0;
-        let ctx = b"test-instant-receiver-affirm";
-        let receive_amount: Balance = 300;
+        let test_with_config = |reveal_asset_id: bool, amount: Balance| {
+            let mut rng = rand::thread_rng();
+            let asset_id: AssetId = 1;
+            let counter: NullifierSkGenCounter = 0;
+            let ctx = b"test-instant-receiver-affirm";
 
-        let sender_keys = AccountKeys::rand(&mut rng).unwrap();
-        let receiver_keys = AccountKeys::rand(&mut rng).unwrap();
+            let sender_keys = AccountKeys::rand(&mut rng).unwrap();
+            let receiver_keys = AccountKeys::rand(&mut rng).unwrap();
 
-        let (mut receiver_state, _) = receiver_keys
-            .init_asset_state(asset_id, counter, ctx)
-            .unwrap();
+            let (mut receiver_state, _) = receiver_keys
+                .init_asset_state(asset_id, counter, ctx)
+                .unwrap();
 
-        let leaf = receiver_state.current_commitment().unwrap();
-        let (leg_enc, leg_ref, account_tree) = make_leg_and_tree(
-            &mut rng,
-            sender_keys.enc.public,
-            receiver_keys.enc.public,
-            asset_id,
-            receive_amount,
-            leaf,
-        );
-
-        let (protocol, device_request) =
-            InstantReceiverAffirmationHostProtocol::<AccountTreeConfig>::init(
+            let leaf = receiver_state.current_commitment().unwrap();
+            let (leg_enc, leg_ref, account_tree) = make_leg_and_tree_with_config(
                 &mut rng,
-                &mut receiver_state,
-                &leg_ref,
-                &leg_enc,
-                receive_amount,
-                &account_tree,
-            )
-            .unwrap();
+                sender_keys.enc.public,
+                receiver_keys.enc.public,
+                asset_id,
+                amount,
+                reveal_asset_id,
+                leaf,
+            );
 
-        let tree_params = AccountTreeConfig::parameters();
-        let comm_re_rand_gen = tree_params.even_parameters.pc_gens().B_blinding;
-        let anchor_gen = tree_params.even_parameters.pc_gens().B;
+            let (protocol, device_request) =
+                InstantReceiverAffirmationHostProtocol::<AccountTreeConfig>::init(
+                    &mut rng,
+                    &mut receiver_state,
+                    &leg_ref,
+                    &leg_enc,
+                    amount,
+                    &account_tree,
+                )
+                .unwrap();
 
-        let device_response = make_affirmation_device_response(
-            &mut rng,
-            &receiver_keys,
-            &device_request,
-            comm_re_rand_gen,
-            anchor_gen,
-        );
-        let proof = protocol
-            .finish::<_, ()>(&mut rng, &device_response)
-            .unwrap();
+            let tree_params = AccountTreeConfig::parameters();
+            let comm_re_rand_gen = tree_params.even_parameters.pc_gens().B_blinding;
+            let anchor_gen = tree_params.even_parameters.pc_gens().B;
 
-        let root = account_tree.root().unwrap();
-        proof.verify(&leg_enc, &root, &mut rng).unwrap();
+            let device_response = make_affirmation_device_response(
+                &mut rng,
+                &receiver_keys,
+                &device_request,
+                comm_re_rand_gen,
+                anchor_gen,
+            );
+            let proof = protocol
+                .finish::<_, ()>(&mut rng, &device_response)
+                .unwrap();
+
+            let root = account_tree.root().unwrap();
+            proof.verify(&leg_enc, &root, &mut rng).unwrap();
+        };
+
+        for reveal_asset_id in [false, true] {
+            for amount in [300, 0] {
+                test_with_config(reveal_asset_id, amount);
+            }
+        }
     }
 
     #[test]
