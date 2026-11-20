@@ -146,6 +146,8 @@ pub struct CommonStateChangeProver<
     /// balance BP and the leg-link `ct_amount` use the same blinding for `v`
     pub balance_amount_blindings: Vec<F0>,
     pub is_asset_id_revealed: bool,
+    /// True if any leg changes the balance
+    pub has_balance_changed: bool,
 }
 
 impl<
@@ -456,6 +458,7 @@ impl<
             new_balance_blinding,
             balance_amount_blindings: amount_blindings,
             is_asset_id_revealed,
+            has_balance_changed,
         })
     }
 
@@ -526,6 +529,7 @@ impl<
                 self.t_leg_link.clone(),
                 &self.t_bp_randomness_relations,
                 self.is_asset_id_revealed,
+                self.has_balance_changed,
                 challenge,
             )?;
 
@@ -589,6 +593,8 @@ pub struct AccountCommitmentsHostProtocol<G: SWCurveConfig + Clone + Copy> {
     pub t_acc_new: SchnorrCommitment<Affine<G>>,
     /// Whether asset_id is revealed in this transaction
     pub is_asset_id_revealed: bool,
+    /// True if any leg changes the balance
+    pub has_balance_changed: bool,
     // Blindings shared with BP and auth proof
     pub old_balance_blinding: G::ScalarField,
     pub new_balance_blinding: G::ScalarField,
@@ -675,6 +681,7 @@ impl<G: SWCurveConfig + Clone + Copy> AccountCommitmentsHostProtocol<G> {
                 t_acc_old,
                 t_acc_new,
                 is_asset_id_revealed,
+                has_balance_changed,
                 old_balance_blinding,
                 new_balance_blinding,
                 old_counter_blinding,
@@ -724,6 +731,7 @@ impl<G: SWCurveConfig + Clone + Copy> AccountCommitmentsHostProtocol<G> {
             &self.t_acc_new,
             self.is_asset_id_revealed,
             false, // include_sk: host mode
+            self.has_balance_changed,
             None,
             None,
             None,
@@ -1061,6 +1069,8 @@ impl<
         let (acc_host_proto, asset_id_blinding, b_blinding) =
             Self::validate_and_init_comm_protocol(
                 rng,
+                account,
+                updated_account,
                 &legs_with_conf,
                 k_asset_ids.len(),
                 account_comm_key.clone(),
@@ -1138,6 +1148,8 @@ impl<
         let (acc_host_proto, asset_id_blinding, b_blinding) =
             Self::validate_and_init_comm_protocol(
                 rng,
+                account,
+                updated_account,
                 &legs_with_conf,
                 k_asset_ids.len(),
                 account_comm_key.clone(),
@@ -1194,6 +1206,8 @@ impl<
         Parameters1: DiscreteLogParameters,
     >(
         rng: &mut R,
+        account: &AccountState<Affine<G0>>,
+        updated_account: &AccountState<Affine<G0>>,
         legs_with_conf: &[LegProverConfig<Affine<G0>>],
         expected_hidden_asset_ids: usize,
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
@@ -1218,6 +1232,7 @@ impl<
         }
 
         let has_balance_changed = LegProverConfig::has_balance_changed(legs_with_conf);
+        ensure_same_accounts(account, updated_account, has_balance_changed)?;
         let pc_gens = account_tree_params.even_parameters.sl_params.pc_gens();
         let b_blinding = pc_gens.B_blinding;
 
@@ -1360,10 +1375,7 @@ impl<
             let mut new_wits = old_wits;
             let last = new_wits.len() - 1;
             new_wits[last] = -acc_host_proto.rand_new_comm;
-            let has_balance_changed = account.balance() != updated_account.balance();
-            if has_balance_changed {
-                new_wits[0] = updated_account.balance().into();
-            }
+            new_wits[0] = updated_account.balance().into();
             let current_rho_idx = if is_asset_id_revealed { 3 } else { 4 };
             let current_randomness_idx = if is_asset_id_revealed { 5 } else { 6 };
             new_wits[current_rho_idx] = updated_account.current_rho();
@@ -1381,9 +1393,7 @@ impl<
                 // fields that differ (balance if changed, current_rho, current_randomness,
                 // B_blinding term).
                 let mut diff_wits = vec![F0::zero(); gens_new.len()];
-                if has_balance_changed {
-                    diff_wits[0] = balance - F0::from(updated_account.balance());
-                }
+                diff_wits[0] = balance - F0::from(updated_account.balance());
                 diff_wits[current_rho_idx] = account.current_rho() - updated_account.current_rho();
                 diff_wits[current_randomness_idx] =
                     account.current_randomness() - updated_account.current_randomness();
@@ -1660,6 +1670,23 @@ impl<
     }
 }
 
+pub fn ensure_non_zero_amount(amount: Balance) -> Result<()> {
+    #[cfg(feature = "ignore_prover_input_sanitation")]
+    {
+        return Ok(());
+    }
+
+    #[cfg(not(feature = "ignore_prover_input_sanitation"))]
+    {
+        if amount == 0 {
+            return Err(Error::ZeroAmount);
+        }
+        Ok(())
+    }
+}
+
+// `has_balance_changed` is true if some leg's transaction type changes the balance, even when the
+// balance values are equal.
 pub fn ensure_same_accounts<G: AffineRepr>(
     old_state: &AccountState<G>,
     new_state: &AccountState<G>,
@@ -1698,18 +1725,10 @@ pub fn ensure_same_accounts<G: AffineRepr>(
                 "Initial rho mismatch between old and new account states".to_string(),
             ));
         }
-        if has_balance_changed {
-            if old_state.balance == new_state.balance {
-                return Err(Error::ProofGenerationError(
-                    "Balance should have changed but it hasn't".to_string(),
-                ));
-            }
-        } else {
-            if old_state.balance != new_state.balance {
-                return Err(Error::ProofGenerationError(
-                    "Balance shouldn't have changed but it has".to_string(),
-                ));
-            }
+        if !has_balance_changed && old_state.balance != new_state.balance {
+            return Err(Error::ProofGenerationError(
+                "Balance shouldn't have changed but it has".to_string(),
+            ));
         }
         if old_state.current_rho * old_state.rho != new_state.current_rho {
             return Err(Error::ProofGenerationError(

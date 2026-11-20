@@ -66,6 +66,15 @@ use std::time::Instant;
 
 #[test]
 fn send_txn() {
+    send_txn_with_amount(100);
+}
+
+#[test]
+fn send_txn_zero_amount() {
+    send_txn_with_amount(0);
+}
+
+fn send_txn_with_amount(amount: Balance) {
     let mut rng = rand::thread_rng();
 
     // Setup begins
@@ -81,7 +90,6 @@ fn send_txn() {
     );
 
     let asset_id = 1;
-    let amount = 100;
 
     // Sender account
     let id = PallasFr::rand(&mut rng);
@@ -801,6 +809,15 @@ fn receive_txn() {
 
 #[test]
 fn claim_received_funds() {
+    claim_received_funds_with_amount(100);
+}
+
+#[test]
+fn claim_received_funds_zero_amount() {
+    claim_received_funds_with_amount(0);
+}
+
+fn claim_received_funds_with_amount(amount: Balance) {
     // This is what report calls txn_cu (counter update) done by receiver
     let mut rng = rand::thread_rng();
 
@@ -817,7 +834,6 @@ fn claim_received_funds() {
     );
 
     let asset_id = 1;
-    let amount = 100;
 
     // Receiver account
     let id = PallasFr::rand(&mut rng);
@@ -1099,6 +1115,15 @@ fn counter_update_txn_by_sender() {
 
 #[test]
 fn reverse_send_txn() {
+    reverse_send_txn_with_amount(100);
+}
+
+#[test]
+fn reverse_send_txn_zero_amount() {
+    reverse_send_txn_with_amount(0);
+}
+
+fn reverse_send_txn_with_amount(amount: Balance) {
     // Sender rolls back a pending send: decrements its counter AND restores the locked amount back into balance.
     let mut rng = rand::thread_rng();
 
@@ -1114,7 +1139,6 @@ fn reverse_send_txn() {
     );
 
     let asset_id = 1;
-    let amount = 100;
 
     // Sender account
     let id = PallasFr::rand(&mut rng);
@@ -10897,6 +10921,15 @@ macro_rules! verify_split_proof {
 
 #[test]
 fn send_txn_split_proof() {
+    send_txn_split_proof_with_amount(100);
+}
+
+#[test]
+fn send_txn_split_proof_zero_amount() {
+    send_txn_split_proof_with_amount(0);
+}
+
+fn send_txn_split_proof_with_amount(amount: Balance) {
     // Sender's send proof produced jointly by a host (knows witnesses, not the secret key) and a secure device
     // (holds sk); exercises both the parallel (W2) and sequential (W3) combine flows, hidden & revealed asset-id.
     let mut rng = rand::thread_rng();
@@ -10914,7 +10947,6 @@ fn send_txn_split_proof() {
     );
 
     let asset_id: AssetId = 1;
-    let amount: Balance = 100;
 
     let id = PallasFr::rand(&mut rng);
     let sk_s_scalar = sk_s.0;
@@ -11213,6 +11245,15 @@ fn receive_txn_split_proof() {
 
 #[test]
 fn claim_received_funds_split_proof() {
+    claim_received_funds_split_proof_with_amount(100);
+}
+
+#[test]
+fn claim_received_funds_split_proof_zero_amount() {
+    claim_received_funds_split_proof_with_amount(0);
+}
+
+fn claim_received_funds_split_proof_with_amount(amount: Balance) {
     // Receiver's claim (folds an affirmed amount into spendable balance, decrements counter) built jointly by
     // host + secure device (holds sk); covers both parallel (W2) and sequential (W3) flows and both asset-id modes.
     let mut rng = rand::thread_rng();
@@ -11230,7 +11271,6 @@ fn claim_received_funds_split_proof() {
     );
 
     let asset_id: AssetId = 1;
-    let amount: Balance = 100;
 
     let id = PallasFr::rand(&mut rng);
     let sk_r_scalar = sk_r.0;
@@ -11495,6 +11535,15 @@ fn counter_update_txn_by_sender_split_proof() {
 
 #[test]
 fn reverse_send_txn_split_proof() {
+    reverse_send_txn_split_proof_with_amount(100);
+}
+
+#[test]
+fn reverse_send_txn_split_proof_zero_amount() {
+    reverse_send_txn_split_proof_with_amount(0);
+}
+
+fn reverse_send_txn_split_proof_with_amount(amount: Balance) {
     // Sender's send-reversal (counter down + amount restored to balance) built jointly by host + secure device;
     // covers both parallel (W2) and sequential (W3) flows and both asset-id modes.
     let mut rng = rand::thread_rng();
@@ -11512,7 +11561,6 @@ fn reverse_send_txn_split_proof() {
     );
 
     let asset_id: AssetId = 1;
-    let amount: Balance = 100;
 
     let id = PallasFr::rand(&mut rng);
     let sk_s_scalar = sk_s.0;
@@ -11777,6 +11825,15 @@ fn reverse_receive_txn_split_proof() {
 
 #[test]
 fn irreversible_send_txn_split_proof() {
+    irreversible_send_txn_split_proof_with_amount(100);
+}
+
+#[test]
+fn irreversible_send_txn_split_proof_zero_amount() {
+    irreversible_send_txn_split_proof_with_amount(0);
+}
+
+fn irreversible_send_txn_split_proof_with_amount(amount: Balance) {
     // Sender's IRREVERSIBLE send (amount deducted immediately, no counter for later reversal) built jointly by host
     // + secure device; covers both parallel (W2) and sequential (W3) flows and both asset-id modes.
     let mut rng = rand::thread_rng();
@@ -11794,7 +11851,6 @@ fn irreversible_send_txn_split_proof() {
     );
 
     let asset_id: AssetId = 1;
-    let amount: Balance = 100;
 
     let id = PallasFr::rand(&mut rng);
     let sk_s_scalar = sk_s.0;
@@ -11917,6 +11973,15 @@ fn irreversible_send_txn_split_proof() {
 
 #[test]
 fn irreversible_receive_txn_split_proof() {
+    irreversible_receive_txn_split_proof_with_amount(100);
+}
+
+#[test]
+fn irreversible_receive_txn_split_proof_zero_amount() {
+    irreversible_receive_txn_split_proof_with_amount(0);
+}
+
+fn irreversible_receive_txn_split_proof_with_amount(amount: Balance) {
     // Receiver's IRREVERSIBLE receive (amount credited immediately, no separate claim step) built jointly by host +
     // secure device; covers both parallel (W2) and sequential (W3) flows and both asset-id modes.
     let mut rng = rand::thread_rng();
@@ -11934,7 +11999,6 @@ fn irreversible_receive_txn_split_proof() {
     );
 
     let asset_id: AssetId = 1;
-    let amount: Balance = 100;
 
     let id = PallasFr::rand(&mut rng);
     let sk_r_scalar = sk_r.0;

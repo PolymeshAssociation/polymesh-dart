@@ -163,7 +163,7 @@ fn test_mint_and_transfer_with_mediator() -> Result<()> {
 fn test_mint_and_transfer_with_auditor() -> Result<()> {
     let mut rng = rand::thread_rng();
 
-    let mut test_with_config = |reveal_asset_id: bool| -> Result<()> {
+    let mut test_with_config = |reveal_asset_id: bool, amount: Balance| -> Result<()> {
         // Setup chain state.
         let mut chain = DartChainState::new()?;
 
@@ -223,7 +223,7 @@ fn test_mint_and_transfer_with_auditor() -> Result<()> {
                 sender: issuer_acct.public_keys(),
                 receiver: investor1_acct.public_keys(),
                 asset,
-                amount: 500,
+                amount,
                 config,
                 public_enc_keys: vec![],
             })
@@ -243,7 +243,7 @@ fn test_mint_and_transfer_with_auditor() -> Result<()> {
             account_tree.prover_account_tree(),
             &leg_ref,
             asset_id,
-            500,
+            amount,
         )?;
 
         // The investor affirms the settlement as the receiver.
@@ -253,7 +253,7 @@ fn test_mint_and_transfer_with_auditor() -> Result<()> {
             account_tree.prover_account_tree(),
             &leg_ref,
             asset_id,
-            500,
+            amount,
         )?;
 
         // The auditor decrypts the leg details (possible regardless of reveal_asset_id).
@@ -262,7 +262,7 @@ fn test_mint_and_transfer_with_auditor() -> Result<()> {
         assert_eq!(leg.sender()?, issuer_acct.public_keys().enc);
         assert_eq!(leg.receiver()?, investor1_acct.public_keys().enc);
         assert_eq!(leg.asset_id(), asset_id);
-        assert_eq!(leg.amount(), 500);
+        assert_eq!(leg.amount(), amount);
 
         // End the block to finalize the new accounts.
         chain.end_block()?;
@@ -293,11 +293,11 @@ fn test_mint_and_transfer_with_auditor() -> Result<()> {
         Ok(())
     };
 
-    // asset-id hidden
-    test_with_config(false)?;
-
-    // asset-id revealed
-    test_with_config(true)?;
+    for reveal_asset_id in [false, true] {
+        for amount in [500, 0] {
+            test_with_config(reveal_asset_id, amount)?;
+        }
+    }
 
     Ok(())
 }
@@ -307,7 +307,7 @@ fn test_mint_and_transfer_with_auditor() -> Result<()> {
 fn test_instant_settlement_with_auditor() -> Result<()> {
     let mut rng = rand::thread_rng();
 
-    let mut test_with_config = |reveal_asset_id: bool| -> Result<()> {
+    let mut test_with_config = |reveal_asset_id: bool, amount: Balance| -> Result<()> {
         // Setup chain state.
         let mut chain = DartChainState::new()?;
 
@@ -367,7 +367,7 @@ fn test_instant_settlement_with_auditor() -> Result<()> {
                 sender: issuer_acct.public_keys(),
                 receiver: investor1_acct.public_keys(),
                 asset,
-                amount: 500,
+                amount,
                 config,
                 public_enc_keys: vec![],
             })
@@ -388,7 +388,7 @@ fn test_instant_settlement_with_auditor() -> Result<()> {
             account_tree.prover_account_tree(),
             &leg_ref,
             asset_id,
-            500,
+            amount,
         )?;
 
         // The investor affirms the settlement as the receiver.
@@ -398,7 +398,7 @@ fn test_instant_settlement_with_auditor() -> Result<()> {
             account_tree.prover_account_tree(),
             &leg_ref,
             asset_id,
-            500,
+            amount,
         )?;
 
         // Build the instant settlement proof.
@@ -423,7 +423,7 @@ fn test_instant_settlement_with_auditor() -> Result<()> {
         assert_eq!(leg.sender()?, issuer_acct.public_keys().enc);
         assert_eq!(leg.receiver()?, investor1_acct.public_keys().enc);
         assert_eq!(leg.asset_id(), asset_id);
-        assert_eq!(leg.amount(), 500);
+        assert_eq!(leg.amount(), amount);
 
         // End the block to finalize the new accounts.
         chain.end_block()?;
@@ -462,11 +462,11 @@ fn test_instant_settlement_with_auditor() -> Result<()> {
         Ok(())
     };
 
-    // asset-id hidden
-    test_with_config(false)?;
-
-    // asset-id revealed
-    test_with_config(true)?;
+    for reveal_asset_id in [false, true] {
+        for amount in [500, 0] {
+            test_with_config(reveal_asset_id, amount)?;
+        }
+    }
 
     Ok(())
 }

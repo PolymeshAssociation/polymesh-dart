@@ -1,6 +1,6 @@
 use crate::AUTH_PROOF_LABEL;
 use crate::account::common::balance::ensure_correct_balance_change;
-use crate::account::common::ensure_same_accounts;
+use crate::account::common::{ensure_non_zero_amount, ensure_same_accounts};
 use crate::account::state::{CURRENT_RANDOMNESS_GEN_INDEX, CURRENT_RHO_GEN_INDEX, NUM_GENERATORS};
 use crate::account::{AccountCommitmentKeyTrait, AccountState, AccountStateCommitment};
 use crate::auth_proofs::{AuthProofOnlySks, AuthProofOnlySksProtocol, DeviceTxnType};
@@ -125,6 +125,8 @@ impl<
         even_prover: &mut Prover<MerlinTranscript, Affine<G0>>,
         odd_prover: &mut Prover<MerlinTranscript, Affine<G1>>,
     ) -> Result<(Self, Affine<G0>)> {
+        ensure_non_zero_amount(increase_bal_by)?;
+
         #[cfg(not(feature = "ignore_prover_input_sanitation"))]
         {
             if increase_bal_by > MAX_BALANCE {
@@ -618,6 +620,9 @@ impl<
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         challenge: &F0,
     ) -> Result<()> {
+        if increase_bal_by == 0 {
+            return Err(Error::ZeroAmount);
+        }
         if self.resp_acc_old.len() != NUM_GENERATORS - 3 {
             return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(
                 NUM_GENERATORS - 3,
@@ -1307,6 +1312,57 @@ mod tests {
     }
 
     #[test]
+    fn mint_prover_rejects_zero_amount() {
+        let mut rng = rand::thread_rng();
+
+        const NUM_GENS: usize = 1 << 12;
+        const L: usize = 64;
+        let (account_tree_params, account_comm_key, _) = setup_gens_new::<NUM_GENS>(b"testing");
+
+        let asset_id = 1;
+
+        let (sk_aff, pk_aff) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+        let (sk_enc, pk_enc) = keygen_enc(&mut rng, account_comm_key.sk_enc_gen());
+
+        let id = PallasFr::rand(&mut rng);
+        let (account, _, _, _) = new_account(&mut rng, asset_id, pk_aff, pk_enc, id);
+
+        let account_tree = get_tree_with_account_comm::<L, _>(
+            &account,
+            account_comm_key.clone(),
+            &account_tree_params,
+            6,
+        )
+        .unwrap();
+
+        let nonce = b"test-nonce";
+
+        let updated_account = account.get_state_for_mint(0).unwrap();
+        let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
+
+        let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+        let root = account_tree.root_node();
+
+        assert_err!(
+            MintTxnProof::new::<_, PallasParams, VestaParams>(
+                &mut rng,
+                sk_aff.0,
+                sk_enc.0,
+                0,
+                &account,
+                &updated_account,
+                updated_account_comm,
+                path,
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+            ),
+            Error::ZeroAmount
+        );
+    }
+
+    #[test]
     fn increase_supply_txn() {
         let mut rng = rand::thread_rng();
 
@@ -1830,256 +1886,335 @@ mod tests {
         );
     }
 
-    #[cfg(all(
-        feature = "ignore_prover_input_sanitation",
-        feature = "nightly_mocking_tests"
-    ))]
-    mod mocking_tests {
+    #[cfg(feature = "ignore_prover_input_sanitation")]
+    mod input_sanitation_disabled {
         use super::*;
-        use mocktopus::mocking::{MockResult, Mockable};
-
-        const L: usize = 64;
-
-        fn clear_mocks<CK: AccountCommitmentKeyTrait<PallasA>>(_: &CK) {
-            AccountState::<PallasA>::nullifier::<CK>.clear_mock();
-            MintTxnProofPartialProtocol::<
-                PallasFr,
-                ark_vesta::Fr,
-                ark_pallas::PallasConfig,
-                ark_vesta::VestaConfig,
-                L,
-            >::nullifier_proto
-                .clear_mock();
-            MintTxnProofPartialProtocol::<
-                PallasFr,
-                ark_vesta::Fr,
-                ark_pallas::PallasConfig,
-                ark_vesta::VestaConfig,
-                L,
-            >::enforce_constraints_and_init_proto::<rand::rngs::ThreadRng, PallasParams, VestaParams>
-                .clear_mock();
-        }
 
         #[test]
-        fn mint_with_mocked_nullifier_input_fails_verification() {
-            // Prover mocks the nullifier to use current_rho+1, so the published nullifier no longer
-            // matches the committed account's rho; verification must reject.
+        fn mint_rejects_zero_amount() {
             let mut rng = rand::thread_rng();
 
             const NUM_GENS: usize = 1 << 12;
+            const L: usize = 64;
+            let (account_tree_params, account_comm_key, _) = setup_gens_new::<NUM_GENS>(b"testing");
 
-            fn mock_nullifier_for_ck<CK: AccountCommitmentKeyTrait<PallasA>>(
-                _: &CK,
-                expected_nullifier: PallasA,
-            ) {
-                AccountState::<PallasA>::nullifier::<CK>
-                    .mock_safe(move |_, _| MockResult::Return(expected_nullifier));
+            let asset_id = 1;
+
+            let (sk_aff, pk_aff) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+            let (sk_enc, pk_enc) = keygen_enc(&mut rng, account_comm_key.sk_enc_gen());
+
+            let id = PallasFr::rand(&mut rng);
+            let (account, _, _, _) = new_account(&mut rng, asset_id, pk_aff, pk_enc, id);
+
+            let account_tree = get_tree_with_account_comm::<L, _>(
+                &account,
+                account_comm_key.clone(),
+                &account_tree_params,
+                6,
+            )
+            .unwrap();
+
+            let nonce = b"test-nonce";
+
+            let updated_account = account.get_state_for_mint(0).unwrap();
+            let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
+
+            let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+            let root = account_tree.root_node();
+
+            let (proof, nullifier) = MintTxnProof::new::<_, PallasParams, VestaParams>(
+                &mut rng,
+                sk_aff.0,
+                sk_enc.0,
+                0,
+                &account,
+                &updated_account,
+                updated_account_comm,
+                path,
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+            )
+            .unwrap();
+
+            assert_err!(
+                proof.verify::<_, PallasParams, VestaParams>(
+                    pk_aff.0,
+                    pk_enc.0,
+                    id,
+                    asset_id,
+                    0,
+                    updated_account_comm,
+                    nullifier,
+                    &root,
+                    nonce,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    &mut rng,
+                ),
+                Error::ZeroAmount
+            );
+        }
+
+        #[cfg(feature = "nightly_mocking_tests")]
+        mod mocking_tests {
+            use super::*;
+            use mocktopus::mocking::{MockResult, Mockable};
+
+            const L: usize = 64;
+
+            fn clear_mocks<CK: AccountCommitmentKeyTrait<PallasA>>(_: &CK) {
+                AccountState::<PallasA>::nullifier::<CK>.clear_mock();
+                MintTxnProofPartialProtocol::<
+                    PallasFr,
+                    ark_vesta::Fr,
+                    ark_pallas::PallasConfig,
+                    ark_vesta::VestaConfig,
+                    L,
+                >::nullifier_proto
+                    .clear_mock();
+                MintTxnProofPartialProtocol::<
+                    PallasFr,
+                    ark_vesta::Fr,
+                    ark_pallas::PallasConfig,
+                    ark_vesta::VestaConfig,
+                    L,
+                >::enforce_constraints_and_init_proto::<
+                    rand::rngs::ThreadRng,
+                    PallasParams,
+                    VestaParams,
+                >
+                    .clear_mock();
             }
 
-            let (account_tree_params, account_comm_key, _) =
-                setup_gens_new::<NUM_GENS>(b"mocktopus-mint-testing");
+            #[test]
+            fn mint_with_mocked_nullifier_input_fails_verification() {
+                // Prover mocks the nullifier to use current_rho+1, so the published nullifier no longer
+                // matches the committed account's rho; verification must reject.
+                let mut rng = rand::thread_rng();
 
-            let asset_id = 1;
-            let (sk_aff, pk_aff) = keygen_sig(&mut rng, account_comm_key.sk_gen());
-            let (sk_enc, pk_enc) = keygen_enc(&mut rng, account_comm_key.sk_enc_gen());
-            let id = PallasFr::rand(&mut rng);
-            let (account, _, _, _) = new_account(&mut rng, asset_id, pk_aff, pk_enc, id.clone());
+                const NUM_GENS: usize = 1 << 12;
 
-            let account_tree = get_tree_with_account_comm::<L, _>(
-                &account,
-                account_comm_key.clone(),
-                &account_tree_params,
-                6,
-            )
-            .unwrap();
+                fn mock_nullifier_for_ck<CK: AccountCommitmentKeyTrait<PallasA>>(
+                    _: &CK,
+                    expected_nullifier: PallasA,
+                ) {
+                    AccountState::<PallasA>::nullifier::<CK>
+                        .mock_safe(move |_, _| MockResult::Return(expected_nullifier));
+                }
 
-            let increase_bal_by = 10;
-            let nonce = b"mocked-nullifier-nonce";
-            let updated_account = account.get_state_for_mint(increase_bal_by).unwrap();
-            let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
-            let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
-            let root = account_tree.root_node();
+                let (account_tree_params, account_comm_key, _) =
+                    setup_gens_new::<NUM_GENS>(b"mocktopus-mint-testing");
 
-            let honest_nullifier =
-                (account_comm_key.current_rho_gen() * account.current_rho).into_affine();
-            let mocked_current_rho = account.current_rho + PallasFr::from(1u64);
-            let expected_mocked_nullifier =
-                (account_comm_key.current_rho_gen() * mocked_current_rho).into_affine();
+                let asset_id = 1;
+                let (sk_aff, pk_aff) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+                let (sk_enc, pk_enc) = keygen_enc(&mut rng, account_comm_key.sk_enc_gen());
+                let id = PallasFr::rand(&mut rng);
+                let (account, _, _, _) =
+                    new_account(&mut rng, asset_id, pk_aff, pk_enc, id.clone());
 
-            mock_nullifier_for_ck(&account_comm_key, expected_mocked_nullifier);
-            MintTxnProofPartialProtocol::<
-                PallasFr,
-                ark_vesta::Fr,
-                ark_pallas::PallasConfig,
-                ark_vesta::VestaConfig,
-                L,
-            >::nullifier_proto
-                .mock_safe(move |_, rho_blinding, nullifier_gen| {
-                    MockResult::Return(PokDiscreteLogProtocol::init(
-                        mocked_current_rho,
-                        rho_blinding,
-                        nullifier_gen,
-                    ))
-                });
+                let account_tree = get_tree_with_account_comm::<L, _>(
+                    &account,
+                    account_comm_key.clone(),
+                    &account_tree_params,
+                    6,
+                )
+                .unwrap();
 
-            let (proof, nullifier) = MintTxnProof::new::<_, PallasParams, VestaParams>(
-                &mut rng,
-                sk_aff.0,
-                sk_enc.0,
-                increase_bal_by,
-                &account,
-                &updated_account,
-                updated_account_comm,
-                path,
-                &root,
-                nonce,
-                &account_tree_params,
-                account_comm_key.clone(),
-            )
-            .unwrap();
+                let increase_bal_by = 10;
+                let nonce = b"mocked-nullifier-nonce";
+                let updated_account = account.get_state_for_mint(increase_bal_by).unwrap();
+                let updated_account_comm =
+                    updated_account.commit(account_comm_key.clone()).unwrap();
+                let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+                let root = account_tree.root_node();
 
-            assert_eq!(nullifier, expected_mocked_nullifier);
-            assert_ne!(nullifier, honest_nullifier);
+                let honest_nullifier =
+                    (account_comm_key.current_rho_gen() * account.current_rho).into_affine();
+                let mocked_current_rho = account.current_rho + PallasFr::from(1u64);
+                let expected_mocked_nullifier =
+                    (account_comm_key.current_rho_gen() * mocked_current_rho).into_affine();
 
-            assert!(
-                proof
-                    .verify::<_, PallasParams, VestaParams>(
-                        pk_aff.0,
-                        pk_enc.0,
-                        id,
-                        asset_id,
-                        increase_bal_by,
-                        updated_account_comm,
-                        nullifier,
-                        &root,
-                        nonce,
-                        &account_tree_params,
-                        account_comm_key.clone(),
-                        &mut rng,
-                    )
-                    .is_err()
-            );
-
-            clear_mocks(&account_comm_key);
-        }
-
-        #[test]
-        fn mint_with_mocked_updated_randomness_relation_inputs_fails_verification() {
-            // Prover tampers with the new-account-commitment randomness relation, passing updated rho+1
-            // and updated randomness+1 instead of the real values; verification must reject.
-            let mut rng = rand::thread_rng();
-
-            const NUM_GENS: usize = 1 << 12;
-
-            let (account_tree_params, account_comm_key, _) =
-                setup_gens_new::<NUM_GENS>(b"mocktopus-mint-testing");
-
-            let asset_id = 1;
-            let (sk_aff, pk_aff) = keygen_sig(&mut rng, account_comm_key.sk_gen());
-            let (sk_enc, pk_enc) = keygen_enc(&mut rng, account_comm_key.sk_enc_gen());
-            let id = PallasFr::rand(&mut rng);
-            let (account, _, _, _) = new_account(&mut rng, asset_id, pk_aff, pk_enc, id.clone());
-
-            let account_tree = get_tree_with_account_comm::<L, _>(
-                &account,
-                account_comm_key.clone(),
-                &account_tree_params,
-                6,
-            )
-            .unwrap();
-
-            let increase_bal_by = 10;
-            let nonce = b"mocked-updated-randomness-relations";
-            let updated_account = account.get_state_for_mint(increase_bal_by).unwrap();
-            let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
-            let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
-            let root = account_tree.root_node();
-
-            let mocked_updated_current_rho = updated_account.current_rho + PallasFr::from(1u64);
-            let mocked_updated_current_randomness =
-                updated_account.current_randomness + PallasFr::from(1u64);
-
-            MintTxnProofPartialProtocol::<
-                PallasFr,
-                ark_vesta::Fr,
-                ark_pallas::PallasConfig,
-                ark_vesta::VestaConfig,
-                L,
-            >::enforce_constraints_and_init_proto::<rand::rngs::ThreadRng, PallasParams, VestaParams>
-                .mock_safe(
-                    move |
-                        rng,
-                        rho,
-                        current_rho,
-                        _,
-                        randomness,
-                        current_randomness,
-                        _,
-                        initial_rho_blinding,
-                        old_rho_blinding,
-                        new_rho_blinding,
-                        initial_s_blinding,
-                        old_s_blinding,
-                        new_s_blinding,
-                        even_prover,
-                        account_tree_params,
-                    | {
-                        MockResult::Continue((
-                            rng,
-                            rho,
-                            current_rho,
-                            mocked_updated_current_rho,
-                            randomness,
-                            current_randomness,
-                            mocked_updated_current_randomness,
-                            initial_rho_blinding,
-                            old_rho_blinding,
-                            new_rho_blinding,
-                            initial_s_blinding,
-                            old_s_blinding,
-                            new_s_blinding,
-                            even_prover,
-                            account_tree_params,
+                mock_nullifier_for_ck(&account_comm_key, expected_mocked_nullifier);
+                MintTxnProofPartialProtocol::<
+                    PallasFr,
+                    ark_vesta::Fr,
+                    ark_pallas::PallasConfig,
+                    ark_vesta::VestaConfig,
+                    L,
+                >::nullifier_proto
+                    .mock_safe(move |_, rho_blinding, nullifier_gen| {
+                        MockResult::Return(PokDiscreteLogProtocol::init(
+                            mocked_current_rho,
+                            rho_blinding,
+                            nullifier_gen,
                         ))
-                    },
+                    });
+
+                let (proof, nullifier) = MintTxnProof::new::<_, PallasParams, VestaParams>(
+                    &mut rng,
+                    sk_aff.0,
+                    sk_enc.0,
+                    increase_bal_by,
+                    &account,
+                    &updated_account,
+                    updated_account_comm,
+                    path,
+                    &root,
+                    nonce,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                )
+                .unwrap();
+
+                assert_eq!(nullifier, expected_mocked_nullifier);
+                assert_ne!(nullifier, honest_nullifier);
+
+                assert!(
+                    proof
+                        .verify::<_, PallasParams, VestaParams>(
+                            pk_aff.0,
+                            pk_enc.0,
+                            id,
+                            asset_id,
+                            increase_bal_by,
+                            updated_account_comm,
+                            nullifier,
+                            &root,
+                            nonce,
+                            &account_tree_params,
+                            account_comm_key.clone(),
+                            &mut rng,
+                        )
+                        .is_err()
                 );
 
-            let (proof, nullifier) = MintTxnProof::new::<_, PallasParams, VestaParams>(
-                &mut rng,
-                sk_aff.0,
-                sk_enc.0,
-                increase_bal_by,
-                &account,
-                &updated_account,
-                updated_account_comm,
-                path,
-                &root,
-                nonce,
-                &account_tree_params,
-                account_comm_key.clone(),
-            )
-            .unwrap();
+                clear_mocks(&account_comm_key);
+            }
 
-            assert!(
-                proof
-                    .verify::<_, PallasParams, VestaParams>(
-                        pk_aff.0,
-                        pk_enc.0,
-                        id,
-                        asset_id,
-                        increase_bal_by,
-                        updated_account_comm,
-                        nullifier,
-                        &root,
-                        nonce,
-                        &account_tree_params,
-                        account_comm_key.clone(),
-                        &mut rng,
-                    )
-                    .is_err()
-            );
+            #[test]
+            fn mint_with_mocked_updated_randomness_relation_inputs_fails_verification() {
+                // Prover tampers with the new-account-commitment randomness relation, passing updated rho+1
+                // and updated randomness+1 instead of the real values; verification must reject.
+                let mut rng = rand::thread_rng();
 
-            clear_mocks(&account_comm_key);
+                const NUM_GENS: usize = 1 << 12;
+
+                let (account_tree_params, account_comm_key, _) =
+                    setup_gens_new::<NUM_GENS>(b"mocktopus-mint-testing");
+
+                let asset_id = 1;
+                let (sk_aff, pk_aff) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+                let (sk_enc, pk_enc) = keygen_enc(&mut rng, account_comm_key.sk_enc_gen());
+                let id = PallasFr::rand(&mut rng);
+                let (account, _, _, _) =
+                    new_account(&mut rng, asset_id, pk_aff, pk_enc, id.clone());
+
+                let account_tree = get_tree_with_account_comm::<L, _>(
+                    &account,
+                    account_comm_key.clone(),
+                    &account_tree_params,
+                    6,
+                )
+                .unwrap();
+
+                let increase_bal_by = 10;
+                let nonce = b"mocked-updated-randomness-relations";
+                let updated_account = account.get_state_for_mint(increase_bal_by).unwrap();
+                let updated_account_comm =
+                    updated_account.commit(account_comm_key.clone()).unwrap();
+                let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+                let root = account_tree.root_node();
+
+                let mocked_updated_current_rho = updated_account.current_rho + PallasFr::from(1u64);
+                let mocked_updated_current_randomness =
+                    updated_account.current_randomness + PallasFr::from(1u64);
+
+                MintTxnProofPartialProtocol::<
+                    PallasFr,
+                    ark_vesta::Fr,
+                    ark_pallas::PallasConfig,
+                    ark_vesta::VestaConfig,
+                    L,
+                >::enforce_constraints_and_init_proto::<
+                    rand::rngs::ThreadRng,
+                    PallasParams,
+                    VestaParams,
+                >
+                    .mock_safe(
+                        move |rng,
+                              rho,
+                              current_rho,
+                              _,
+                              randomness,
+                              current_randomness,
+                              _,
+                              initial_rho_blinding,
+                              old_rho_blinding,
+                              new_rho_blinding,
+                              initial_s_blinding,
+                              old_s_blinding,
+                              new_s_blinding,
+                              even_prover,
+                              account_tree_params| {
+                            MockResult::Continue((
+                                rng,
+                                rho,
+                                current_rho,
+                                mocked_updated_current_rho,
+                                randomness,
+                                current_randomness,
+                                mocked_updated_current_randomness,
+                                initial_rho_blinding,
+                                old_rho_blinding,
+                                new_rho_blinding,
+                                initial_s_blinding,
+                                old_s_blinding,
+                                new_s_blinding,
+                                even_prover,
+                                account_tree_params,
+                            ))
+                        },
+                    );
+
+                let (proof, nullifier) = MintTxnProof::new::<_, PallasParams, VestaParams>(
+                    &mut rng,
+                    sk_aff.0,
+                    sk_enc.0,
+                    increase_bal_by,
+                    &account,
+                    &updated_account,
+                    updated_account_comm,
+                    path,
+                    &root,
+                    nonce,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                )
+                .unwrap();
+
+                assert!(
+                    proof
+                        .verify::<_, PallasParams, VestaParams>(
+                            pk_aff.0,
+                            pk_enc.0,
+                            id,
+                            asset_id,
+                            increase_bal_by,
+                            updated_account_comm,
+                            nullifier,
+                            &root,
+                            nonce,
+                            &account_tree_params,
+                            account_comm_key.clone(),
+                            &mut rng,
+                        )
+                        .is_err()
+                );
+
+                clear_mocks(&account_comm_key);
+            }
         }
     }
 }

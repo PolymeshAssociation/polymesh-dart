@@ -1,4 +1,5 @@
 use crate::account::AccountCommitmentKeyTrait;
+use crate::account::common::ensure_non_zero_amount;
 use crate::auth_proofs::fee_account::AuthProofFeePayment;
 use crate::auth_proofs::fee_account::reg_comm_gens;
 pub use crate::auth_proofs::fee_account::{
@@ -765,6 +766,7 @@ impl<
         even_prover: &mut Prover<MerlinTranscript, Affine<G0>>,
         odd_prover: &mut Prover<MerlinTranscript, Affine<G1>>,
     ) -> Result<(Self, Affine<G0>)> {
+        ensure_non_zero_amount(increase_bal_by)?;
         #[cfg(not(feature = "ignore_prover_input_sanitation"))]
         leaf_path.check_height_for_root(root)?;
 
@@ -1169,6 +1171,8 @@ impl<
         Ok((acc_old, acc_new))
     }
 
+    /// `precomputed_acc_old_new` is `(acc_old, acc_new)` from the paired challenge phase; `None`
+    /// recomputes them (same values).
     pub fn verify_with_challenge<
         Parameters0: DiscreteLogParameters,
         Parameters1: DiscreteLogParameters,
@@ -1183,9 +1187,11 @@ impl<
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         challenge: &F0,
         mut rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
-        // `(acc_old, acc_new)` from the paired challenge phase; `None` recomputes them (same values).
         precomputed_acc_old_new: Option<(Affine<G0>, Affine<G0>)>,
     ) -> Result<()> {
+        if increase_bal_by == 0 {
+            return Err(Error::ZeroAmount);
+        }
         if self.account_comm_proof.resp_acc_old.len() != 6 {
             return Err(Error::DifferentNumberOfResponsesForSigmaProtocol(
                 6,
@@ -2343,6 +2349,7 @@ impl<
         even_prover: &mut Prover<MerlinTranscript, Affine<G0>>,
         odd_prover: &mut Prover<MerlinTranscript, Affine<G1>>,
     ) -> Result<(Self, Affine<G0>)> {
+        ensure_non_zero_amount(fee_amount)?;
         ensure_same_accounts_without_sk(&account, &updated_account, true)?;
         #[cfg(not(feature = "ignore_prover_input_sanitation"))]
         leaf_path.check_height_for_root(root)?;
@@ -2559,6 +2566,9 @@ impl<
         even_verifier: &mut Verifier<MerlinTranscript, Affine<G0>>,
         odd_verifier: &mut Verifier<MerlinTranscript, Affine<G1>>,
     ) -> Result<()> {
+        if fee_amount == 0 {
+            return Err(Error::ZeroAmount);
+        }
         if nullifier.is_zero() {
             return Err(Error::PointAtIdentity);
         }
@@ -3115,6 +3125,7 @@ impl<
         Prover<'a, MerlinTranscript, Affine<G1>>,
         Affine<G0>,
     )> {
+        ensure_non_zero_amount(fee_amount)?;
         ensure_same_accounts_without_sk(account, updated_account, true)?;
 
         let even_transcript = MerlinTranscript::new(TXN_EVEN_LABEL);
@@ -5027,6 +5038,103 @@ pub mod tests {
     }
 
     #[test]
+    fn fee_topup_rejects_zero_amount() {
+        let mut rng = rand::thread_rng();
+
+        const NUM_GENS: usize = 1 << 13;
+        const L: usize = 64;
+        let (account_tree_params, account_comm_key, _) = setup_gens_new::<NUM_GENS>(b"testing");
+
+        let asset_id = 1;
+
+        let (sk_i, pk_i) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+
+        let account = new_fee_account::<_, PallasA>(&mut rng, asset_id, pk_i, 1000);
+        let account_comm = account.commit(&account_comm_key).unwrap();
+
+        let set = vec![account_comm.0];
+        let account_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
+            &set,
+            &account_tree_params,
+            Some(6),
+        )
+        .unwrap();
+
+        let nonce = b"test-nonce";
+
+        let updated_account = account.get_state_for_topup(0).unwrap();
+        let updated_account_comm = updated_account.commit(&account_comm_key).unwrap();
+
+        let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+        let root = account_tree.root_node();
+
+        assert_err!(
+            FeeAccountTopupTxnProof::new::<_, PallasParams, VestaParams>(
+                &mut rng,
+                sk_i.0,
+                0,
+                &account,
+                &updated_account,
+                updated_account_comm,
+                path,
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+            ),
+            Error::ZeroAmount
+        );
+    }
+
+    #[test]
+    fn fee_payment_rejects_zero_amount() {
+        let mut rng = rand::thread_rng();
+
+        const NUM_GENS: usize = 1 << 13;
+        const L: usize = 64;
+        let (account_tree_params, account_comm_key, _) = setup_gens_new::<NUM_GENS>(b"testing");
+
+        let asset_id = 1;
+
+        let (sk, pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+        let account = new_fee_account::<_, PallasA>(&mut rng, asset_id, pk, 1000);
+        let account_comm = account.commit(&account_comm_key).unwrap();
+
+        let set = vec![account_comm.0];
+        let account_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
+            &set,
+            &account_tree_params,
+            Some(6),
+        )
+        .unwrap();
+
+        let nonce = b"a_txn_id,a_payee_id";
+
+        let updated_account = account.get_state_for_payment(0).unwrap();
+        let updated_account_comm = updated_account.commit(&account_comm_key).unwrap();
+
+        let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+        let root = account_tree.root_node();
+
+        assert_err!(
+            FeePaymentProof::new::<_, PallasParams, VestaParams>(
+                &mut rng,
+                0,
+                sk.0,
+                &account,
+                &updated_account,
+                updated_account_comm,
+                path,
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+            ),
+            Error::ZeroAmount
+        );
+    }
+
+    #[test]
     fn fee_payment_proof() {
         let mut rng = rand::thread_rng();
 
@@ -5593,6 +5701,50 @@ pub mod tests {
                 None,
             )
             .unwrap();
+    }
+
+    #[test]
+    fn fee_payment_split_rejects_zero_amount() {
+        let mut rng = rand::thread_rng();
+
+        const NUM_GENS: usize = 1 << 13;
+        const L: usize = 64;
+        let (account_tree_params, account_comm_key, _) = setup_gens_new::<NUM_GENS>(b"testing");
+        let asset_id = 1;
+        let (_, pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+        let account = new_fee_account::<_, PallasA>(&mut rng, asset_id, pk, 1000);
+        let account_comm = account.commit(&account_comm_key).unwrap();
+
+        let set = vec![account_comm.0];
+        let account_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
+            &set,
+            &account_tree_params,
+            Some(6),
+        )
+        .unwrap();
+
+        let nonce = b"test-nonce";
+
+        let updated_account = account.get_state_for_payment(0).unwrap();
+        let updated_account_comm = updated_account.commit(&account_comm_key).unwrap();
+        let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+        let root = account_tree.root_node();
+
+        assert_err!(
+            FeePaymentSplitProtocol::new::<_, PallasParams, VestaParams>(
+                &mut rng,
+                0,
+                &account,
+                &updated_account,
+                updated_account_comm,
+                path,
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+            ),
+            Error::ZeroAmount
+        );
     }
 
     /// Builds a split fee payment where the host gives the device `auth_new_randomness + delta`
@@ -6245,6 +6397,135 @@ pub mod tests {
                 None,
             );
             assert!(matches!(res, Err(Error::AmountTooLarge(_))));
+        }
+
+        #[test]
+        fn fee_topup_rejects_zero_amount() {
+            let mut rng = rand::thread_rng();
+
+            const NUM_GENS: usize = 1 << 13;
+            const L: usize = 64;
+            let (account_tree_params, account_comm_key, _) = setup_gens_new::<NUM_GENS>(b"testing");
+
+            let asset_id = 1;
+
+            let (sk_i, pk_i) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+            let account = new_fee_account::<_, PallasA>(&mut rng, asset_id, pk_i, 1000);
+            let account_comm = account.commit(&account_comm_key).unwrap();
+
+            let set = vec![account_comm.0];
+            let account_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
+                &set,
+                &account_tree_params,
+                Some(6),
+            )
+            .unwrap();
+
+            let nonce = b"test-nonce";
+
+            let updated_account = account.get_state_for_topup(0).unwrap();
+            let updated_account_comm = updated_account.commit(&account_comm_key).unwrap();
+
+            let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+            let root = account_tree.root_node();
+
+            // Proof generation succeeds under ignore_prover_input_sanitation
+            let (proof, nullifier) = FeeAccountTopupTxnProof::new::<_, PallasParams, VestaParams>(
+                &mut rng,
+                sk_i.0,
+                0,
+                &account,
+                &updated_account,
+                updated_account_comm,
+                path,
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+            )
+            .unwrap();
+
+            // Verification rejects zero amount
+            assert_err!(
+                proof.verify(
+                    pk_i.0,
+                    asset_id,
+                    0,
+                    updated_account_comm,
+                    nullifier,
+                    &root,
+                    nonce,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    &mut rng,
+                    None,
+                ),
+                Error::ZeroAmount
+            );
+        }
+
+        #[test]
+        fn fee_payment_rejects_zero_amount() {
+            let mut rng = rand::thread_rng();
+
+            const NUM_GENS: usize = 1 << 13;
+            const L: usize = 64;
+            let (account_tree_params, account_comm_key, _) = setup_gens_new::<NUM_GENS>(b"testing");
+
+            let asset_id = 1;
+
+            let (sk, pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+            let account = new_fee_account::<_, PallasA>(&mut rng, asset_id, pk, 1000);
+            let account_comm = account.commit(&account_comm_key).unwrap();
+
+            let set = vec![account_comm.0];
+            let account_tree = CurveTree::<L, 1, PallasParameters, VestaParameters>::from_leaves(
+                &set,
+                &account_tree_params,
+                Some(6),
+            )
+            .unwrap();
+
+            let nonce = b"a_txn_id,a_payee_id";
+
+            let updated_account = account.get_state_for_payment(0).unwrap();
+            let updated_account_comm = updated_account.commit(&account_comm_key).unwrap();
+
+            let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+            let root = account_tree.root_node();
+
+            // Proof generation succeeds under ignore_prover_input_sanitation
+            let (proof, nullifier) = FeePaymentProof::new::<_, PallasParams, VestaParams>(
+                &mut rng,
+                0,
+                sk.0,
+                &account,
+                &updated_account,
+                updated_account_comm,
+                path,
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+            )
+            .unwrap();
+
+            // Verification rejects zero amount
+            assert_err!(
+                proof.verify(
+                    asset_id,
+                    0,
+                    updated_account_comm,
+                    nullifier,
+                    &root,
+                    nonce,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    &mut rng,
+                    None,
+                ),
+                Error::ZeroAmount
+            );
         }
 
         #[test]

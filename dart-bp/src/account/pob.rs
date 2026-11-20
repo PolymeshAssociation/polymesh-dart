@@ -1262,130 +1262,135 @@ mod tests {
 
     #[test]
     fn pob_with_anyone() {
-        // Prove balance to an arbitrary verifier while reconciling 20 pending legs (alternating sender/
-        // receiver), all with the default leg-enc config so every asset id stays hidden.
-        let mut rng = rand::thread_rng();
+        let test_with_amount = |amount: u64| {
+            // Prove balance to an arbitrary verifier while reconciling 20 pending legs (alternating sender/
+            // receiver), all with the default leg-enc config so every asset id stays hidden.
+            let mut rng = rand::thread_rng();
 
-        let account_comm_key = setup_comm_key(b"testing");
+            let account_comm_key = setup_comm_key(b"testing");
 
-        let enc_key_gen = account_comm_key.sk_enc_gen();
-        let enc_gen = PallasA::rand(&mut rng);
+            let enc_key_gen = account_comm_key.sk_enc_gen();
+            let enc_gen = PallasA::rand(&mut rng);
 
-        let (((sk, pk), (sk_e, pk_e)), (_, (_, pk_e_other)), ((_, _), (_, pk_a_e))) =
-            setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
+            let (((sk, pk), (sk_e, pk_e)), (_, (_, pk_e_other)), ((_, _), (_, pk_a_e))) =
+                setup_keys(&mut rng, account_comm_key.sk_gen(), enc_key_gen);
 
-        let asset_id = 1;
-        let num_pending_txns = 20;
+            let asset_id = 1;
+            let num_pending_txns = 20;
 
-        // Account exists with some balance and pending txns
-        let id = PallasFr::rand(&mut rng);
-        let (mut account, _, _, _) = new_account(&mut rng, asset_id, pk, pk_e, id.clone());
-        account.balance = 1000000;
-        account.counter = num_pending_txns;
-        let account_comm = account.commit(account_comm_key.clone()).unwrap();
+            // Account exists with some balance and pending txns
+            let id = PallasFr::rand(&mut rng);
+            let (mut account, _, _, _) = new_account(&mut rng, asset_id, pk, pk_e, id.clone());
+            account.balance = 1000000;
+            account.counter = num_pending_txns;
+            let account_comm = account.commit(account_comm_key.clone()).unwrap();
 
-        // Create some legs as pending transfers
-        let mut legs = vec![];
-        // Set this amount in each leg. Just for testing, in practice it could be different
-        let amount = 10u64;
-        let mut pending_sent_amount = 0u64;
-        let mut pending_recv_amount = 0u64;
-        let mut sender_in_leg_indices = BTreeSet::new();
-        let mut receiver_in_leg_indices = BTreeSet::new();
-        for i in 0..num_pending_txns as usize {
-            // for odd i, account is sender, for even i, its receiver
-            let leg_enc = if i % 2 == 0 {
-                pending_recv_amount += amount;
-                receiver_in_leg_indices.insert(i);
-                let leg = Leg::new(
-                    pk_e_other.0,
-                    pk_e.0,
-                    amount,
-                    asset_id,
-                    vec![pk_a_e.0],
-                    vec![],
-                    vec![],
-                )
-                .unwrap();
-                let (leg_enc, _) = leg
-                    .encrypt(&mut rng, LegEncConfig::default(), enc_key_gen, enc_gen)
+            // Create some legs as pending transfers
+            let mut legs = vec![];
+            // Set this amount in each leg. Just for testing, in practice it could be different
+            let mut pending_sent_amount = 0u64;
+            let mut pending_recv_amount = 0u64;
+            let mut sender_in_leg_indices = BTreeSet::new();
+            let mut receiver_in_leg_indices = BTreeSet::new();
+            for i in 0..num_pending_txns as usize {
+                // for odd i, account is sender, for even i, its receiver
+                let leg_enc = if i % 2 == 0 {
+                    pending_recv_amount += amount;
+                    receiver_in_leg_indices.insert(i);
+                    let leg = Leg::new(
+                        pk_e_other.0,
+                        pk_e.0,
+                        amount,
+                        asset_id,
+                        vec![pk_a_e.0],
+                        vec![],
+                        vec![],
+                    )
                     .unwrap();
-                leg_enc
-            } else {
-                pending_sent_amount += amount;
-                sender_in_leg_indices.insert(i);
-                let leg = Leg::new(
-                    pk_e.0,
-                    pk_e_other.0,
-                    amount,
-                    asset_id,
-                    vec![pk_a_e.0],
-                    vec![],
-                    vec![],
-                )
-                .unwrap();
-                let (leg_enc, _) = leg
-                    .encrypt(&mut rng, LegEncConfig::default(), enc_key_gen, enc_gen)
+                    let (leg_enc, _) = leg
+                        .encrypt(&mut rng, LegEncConfig::default(), enc_key_gen, enc_gen)
+                        .unwrap();
+                    leg_enc
+                } else {
+                    pending_sent_amount += amount;
+                    sender_in_leg_indices.insert(i);
+                    let leg = Leg::new(
+                        pk_e.0,
+                        pk_e_other.0,
+                        amount,
+                        asset_id,
+                        vec![pk_a_e.0],
+                        vec![],
+                        vec![],
+                    )
                     .unwrap();
-                leg_enc
-            };
-            legs.push(leg_enc);
-        }
+                    let (leg_enc, _) = leg
+                        .encrypt(&mut rng, LegEncConfig::default(), enc_key_gen, enc_gen)
+                        .unwrap();
+                    leg_enc
+                };
+                legs.push(leg_enc);
+            }
 
-        let nonce = b"test-nonce";
+            let nonce = b"test-nonce";
 
-        let clock = Instant::now();
+            let clock = Instant::now();
 
-        let proof = PobWithAnyoneProof::new(
-            &mut rng,
-            sk.0,
-            sk_e.0,
-            &account,
-            account_comm.clone(),
-            legs.clone(),
-            sender_in_leg_indices.clone(),
-            receiver_in_leg_indices.clone(),
-            pending_sent_amount,
-            pending_recv_amount,
-            nonce,
-            account_comm_key.clone(),
-            enc_gen,
-        )
-        .unwrap();
-
-        let prover_time = clock.elapsed();
-
-        let clock = Instant::now();
-
-        proof
-            .verify(
-                asset_id,
-                account.balance,
-                account.counter,
-                id,
-                &pk.0,
-                &pk_e.0,
-                account_comm,
-                legs,
+            let proof = PobWithAnyoneProof::new(
+                &mut rng,
+                sk.0,
+                sk_e.0,
+                &account,
+                account_comm.clone(),
+                legs.clone(),
                 sender_in_leg_indices.clone(),
                 receiver_in_leg_indices.clone(),
                 pending_sent_amount,
                 pending_recv_amount,
                 nonce,
-                account_comm_key,
+                account_comm_key.clone(),
                 enc_gen,
             )
             .unwrap();
 
-        let verifier_time = clock.elapsed();
+            let prover_time = clock.elapsed();
 
-        log::info!("For {num_pending_txns} pending txns");
-        log::info!("total proof size = {}", proof.compressed_size());
-        log::info!(
-            "total prover time = {:?}, total verifier time = {:?}",
-            prover_time,
-            verifier_time
-        );
+            let clock = Instant::now();
+
+            proof
+                .verify(
+                    asset_id,
+                    account.balance,
+                    account.counter,
+                    id,
+                    &pk.0,
+                    &pk_e.0,
+                    account_comm,
+                    legs,
+                    sender_in_leg_indices.clone(),
+                    receiver_in_leg_indices.clone(),
+                    pending_sent_amount,
+                    pending_recv_amount,
+                    nonce,
+                    account_comm_key,
+                    enc_gen,
+                )
+                .unwrap();
+
+            let verifier_time = clock.elapsed();
+
+            log::info!("For {num_pending_txns} pending txns");
+            log::info!("total proof size = {}", proof.compressed_size());
+            log::info!(
+                "total prover time = {:?}, total verifier time = {:?}",
+                prover_time,
+                verifier_time
+            );
+        };
+
+        for amount in [10, 0] {
+            test_with_amount(amount);
+        }
     }
 
     #[test]
