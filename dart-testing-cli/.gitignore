@@ -1,0 +1,4 @@
+*.proof
+*.jsonl
+target/
+GAPS.md
