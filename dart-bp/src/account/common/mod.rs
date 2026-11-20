@@ -1685,10 +1685,11 @@ pub fn ensure_non_zero_amount(amount: Balance) -> Result<()> {
     }
 }
 
+// `has_balance_changed` is true if some leg's transaction type changes the balance, even when the
+// balance values are equal.
 pub fn ensure_same_accounts<G: AffineRepr>(
     old_state: &AccountState<G>,
     new_state: &AccountState<G>,
-    // True if some leg's transaction type changes the balance, even when the balance values are equal.
     has_balance_changed: bool,
 ) -> Result<()> {
     #[cfg(feature = "ignore_prover_input_sanitation")]

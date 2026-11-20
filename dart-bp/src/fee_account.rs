@@ -1171,6 +1171,8 @@ impl<
         Ok((acc_old, acc_new))
     }
 
+    /// `precomputed_acc_old_new` is `(acc_old, acc_new)` from the paired challenge phase; `None`
+    /// recomputes them (same values).
     pub fn verify_with_challenge<
         Parameters0: DiscreteLogParameters,
         Parameters1: DiscreteLogParameters,
@@ -1185,7 +1187,6 @@ impl<
         account_comm_key: impl AccountCommitmentKeyTrait<Affine<G0>>,
         challenge: &F0,
         mut rmc: Option<&mut RandomizedMultChecker<Affine<G0>>>,
-        // `(acc_old, acc_new)` from the paired challenge phase; `None` recomputes them (same values).
         precomputed_acc_old_new: Option<(Affine<G0>, Affine<G0>)>,
     ) -> Result<()> {
         if increase_bal_by == 0 {
