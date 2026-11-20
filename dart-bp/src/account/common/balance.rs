@@ -146,6 +146,8 @@ impl<F0: PrimeField, G0: SWCurveConfig<ScalarField = F0> + Clone + Copy>
 /// the balance beyond `MAX_BALANCE` and cause an error in off-chain processors. This is possible
 /// during irreversible legs settlement but still prevented with this.
 /// Note that this only matters for off-chain services relying on (Substrate) events
+/// The limit applies even when the net change is 0, so `old_balance + \sum amount_{increases}` must not
+/// exceed `MAX_BALANCE` for a multi-leg affirmation whose amounts sum to 0.
 pub fn ensure_peak_within_limit(
     old_balance: Balance,
     configs: &[BalanceChangeConfig],

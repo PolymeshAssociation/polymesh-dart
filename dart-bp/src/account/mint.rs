@@ -1312,6 +1312,57 @@ mod tests {
     }
 
     #[test]
+    fn mint_prover_rejects_zero_amount() {
+        let mut rng = rand::thread_rng();
+
+        const NUM_GENS: usize = 1 << 12;
+        const L: usize = 64;
+        let (account_tree_params, account_comm_key, _) = setup_gens_new::<NUM_GENS>(b"testing");
+
+        let asset_id = 1;
+
+        let (sk_aff, pk_aff) = keygen_sig(&mut rng, account_comm_key.sk_gen());
+        let (sk_enc, pk_enc) = keygen_enc(&mut rng, account_comm_key.sk_enc_gen());
+
+        let id = PallasFr::rand(&mut rng);
+        let (account, _, _, _) = new_account(&mut rng, asset_id, pk_aff, pk_enc, id);
+
+        let account_tree = get_tree_with_account_comm::<L, _>(
+            &account,
+            account_comm_key.clone(),
+            &account_tree_params,
+            6,
+        )
+        .unwrap();
+
+        let nonce = b"test-nonce";
+
+        let updated_account = account.get_state_for_mint(0).unwrap();
+        let updated_account_comm = updated_account.commit(account_comm_key.clone()).unwrap();
+
+        let path = account_tree.get_path_to_leaf_for_proof(0, 0).unwrap();
+        let root = account_tree.root_node();
+
+        assert_err!(
+            MintTxnProof::new::<_, PallasParams, VestaParams>(
+                &mut rng,
+                sk_aff.0,
+                sk_enc.0,
+                0,
+                &account,
+                &updated_account,
+                updated_account_comm,
+                path,
+                &root,
+                nonce,
+                &account_tree_params,
+                account_comm_key.clone(),
+            ),
+            Error::ZeroAmount
+        );
+    }
+
+    #[test]
     fn increase_supply_txn() {
         let mut rng = rand::thread_rng();
 
@@ -1887,23 +1938,22 @@ mod tests {
             )
             .unwrap();
 
-            assert!(
-                proof
-                    .verify::<_, PallasParams, VestaParams>(
-                        pk_aff.0,
-                        pk_enc.0,
-                        id,
-                        asset_id,
-                        0,
-                        updated_account_comm,
-                        nullifier,
-                        &root,
-                        nonce,
-                        &account_tree_params,
-                        account_comm_key.clone(),
-                        &mut rng,
-                    )
-                    .is_err()
+            assert_err!(
+                proof.verify::<_, PallasParams, VestaParams>(
+                    pk_aff.0,
+                    pk_enc.0,
+                    id,
+                    asset_id,
+                    0,
+                    updated_account_comm,
+                    nullifier,
+                    &root,
+                    nonce,
+                    &account_tree_params,
+                    account_comm_key.clone(),
+                    &mut rng,
+                ),
+                Error::ZeroAmount
             );
         }
 
