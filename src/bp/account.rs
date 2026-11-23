@@ -29,7 +29,7 @@ use polymesh_dart_common::NullifierSkGenCounter;
 
 use super::*;
 use crate::account_reg_split::AccountRegHostProtocol;
-use crate::auth_proofs::create_registration_auth_proof;
+use crate::auth_proofs::create_registration_auth_proof_given_randomness;
 use crate::device::DeviceGenerators;
 use crate::encode::BoundedCanonical;
 use crate::*;
@@ -672,9 +672,12 @@ impl<T: DartLimits> AccountAssetRegistrationProof<T> {
             pk_t,
         )?;
 
-        let device_response = create_registration_auth_proof(
+        let (bp_account, _) = account_state.bp_current_state()?;
+        let device_response = create_registration_auth_proof_given_randomness(
             rng,
             &keys.into(),
+            bp_account.randomness(),
+            rho_randomness,
             &device_request,
             &DeviceGenerators::from_host_given_pc_gens(tree_params.even_parameters.pc_gens()),
         )?;

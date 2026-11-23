@@ -18,8 +18,12 @@
 //! Asset-reg and mint build the host request around the device's pubkeys, so first query the real
 //! `(pk_aff, pk_enc)` via `GetPubkey` (INS 5) and pass `LEDGER_PUBKEYS_HEX`. Key registration is
 //! self-contained (it verifies against the pubkeys in its own response) and needs neither.
+//! Asset-reg also opens the account with the device's account randomness: send
+//! `ACCOUNT_RANDOMNESS_APDU_FULL` and pass `LEDGER_ACCOUNT_RANDOMNESS_RESPONSE_HEX`.
 
-use super::{DeviceGenerators, account_state_from_pubkeys};
+use super::{
+    DeviceGenerators, account_state_from_pubkeys, account_state_from_pubkeys_given_randomness,
+};
 use crate::AssetPkTLookup;
 use crate::account_reg_split::AccountRegHostProtocol;
 use crate::affirmation_proofs::{
@@ -28,12 +32,13 @@ use crate::affirmation_proofs::{
 };
 use crate::auth_proofs::{
     AuthSigningKeys, create_affirmation_auth_proof, create_key_registration_auth_proof,
-    create_mint_auth_proof, create_registration_auth_proof,
+    create_mint_auth_proof, create_registration_auth_proof, derive_account_randomness,
 };
 use crate::curve_tree::{AccountTreeConfig, CurveTreeConfig, CurveTreeLookup, ProverCurveTree};
 use crate::key_reg_split::{KeyRegistrationDeviceRequest, KeyRegistrationDeviceResponse};
 use crate::mint_split::MintHostProtocol;
 use crate::split_types::{
+    AccountRandomnessDeviceRequest, AccountRandomnessDeviceResponse,
     AccountRegistrationDeviceResponse, AffirmationDeviceRequest, AffirmationDeviceResponse,
     AssetMintingDeviceResponse,
 };
@@ -62,11 +67,15 @@ pub(super) fn path_bytes() -> Vec<u8> {
     ACCOUNT_PATH.to_vec()
 }
 
+/// Stand-in device master seed for the in-process fallback, derived at path `b""` and counter 0.
+fn device_seed() -> BPMasterSeed {
+    BPMasterSeed::new(b"ledger-test-seed".repeat(2))
+}
+
 /// Stand-in device keypair for the in-process fallback. See the module doc: this does NOT match
 /// what a real Ledger derives for `ACCOUNT_PATH`.
 fn device_keys() -> AuthSigningKeys {
-    AuthSigningKeys::from_master_seed(&BPMasterSeed::new(b"ledger-test-seed".repeat(2)), b"", 0)
-        .unwrap()
+    AuthSigningKeys::from_master_seed(&device_seed(), b"", 0).unwrap()
 }
 
 fn account_pubkeys(keys: &AuthSigningKeys) -> (PallasA, PallasA) {
@@ -247,9 +256,41 @@ fn ledger_account_asset_registration_roundtrip() {
     let keys = device_keys();
     let (pk_aff, pk_enc) = device_pubkeys(&keys);
 
+    // Account randomness from the device: captured fixture if provided, else in-process.
+    let randomness_request = AccountRandomnessDeviceRequest {
+        asset_id: ASSET_ID,
+        counter: COUNTER,
+    };
+    println!(
+        "ACCOUNT_RANDOMNESS_APDU_FULL = {}",
+        full_apdu_with_p1(
+            INS_ACCOUNT_RANDOMNESS,
+            0,
+            &apdu_data(&randomness_request.encode())
+        )
+    );
+    if apdu_capture_mode("LEDGER_ACCOUNT_RANDOMNESS_RESPONSE_HEX") {
+        println!(
+            "APDU-capture mode: send ACCOUNT_RANDOMNESS_APDU_FULL, then re-run with LEDGER_ACCOUNT_RANDOMNESS_RESPONSE_HEX"
+        );
+        return;
+    }
+    let randomness = match std::env::var("LEDGER_ACCOUNT_RANDOMNESS_RESPONSE_HEX") {
+        Ok(h) => AccountRandomnessDeviceResponse::decode(&mut &device_response_bytes(&h)[..])
+            .expect("decodes as AccountRandomnessDeviceResponse"),
+        Err(_) => derive_account_randomness(&device_seed(), b"", 0, &randomness_request).unwrap(),
+    };
+
     // Host builds the request.
-    let (account_state, rho) =
-        account_state_from_pubkeys(&mut rng, pk_aff, pk_enc, ASSET_ID, COUNTER, IDENTITY).unwrap();
+    let (account_state, rho) = account_state_from_pubkeys_given_randomness(
+        pk_aff,
+        pk_enc,
+        ASSET_ID,
+        COUNTER,
+        IDENTITY,
+        &randomness,
+    )
+    .unwrap();
     let (protocol, request) =
         AccountRegHostProtocol::init(&mut rng, &account_state, rho, COUNTER, IDENTITY, None)
             .unwrap();
@@ -274,6 +315,9 @@ fn ledger_account_asset_registration_roundtrip() {
             create_registration_auth_proof(
                 &mut dev_rng,
                 &keys,
+                &device_seed(),
+                b"",
+                0,
                 &request,
                 &DeviceGenerators::new().unwrap(),
             )

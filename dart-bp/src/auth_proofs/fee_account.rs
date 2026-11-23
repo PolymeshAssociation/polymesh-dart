@@ -6,19 +6,21 @@ use crate::{
     add_to_transcript, dst, error::Result,
 };
 use ark_ec::AffineRepr;
-use ark_ec::CurveGroup;
+use ark_ec::{CurveGroup, VariableBaseMSM};
+use ark_ff::Field;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::UniformRand;
 use ark_std::string::ToString;
 use ark_std::vec::Vec;
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
-use polymesh_dart_common::{AssetId, Balance};
+use polymesh_dart_common::{AssetId, Balance, MAX_FEE_BALANCE};
 use rand_core::CryptoRngCore;
 use schnorr_pok::discrete_log::{
     PokDiscreteLogProtocol, PokPedersenCommitment, PokPedersenCommitmentProtocol,
 };
 use schnorr_pok::partial::{Partial2PokPedersenCommitment, PartialPokDiscreteLog};
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 // For new fee account commitment, auth proof will prove
 // comm_new_1 = G_{Aff} * sk + B * r'
@@ -268,10 +270,153 @@ impl<G: AffineRepr> AuthProofFeePayment<G> {
     }
 }
 
+#[derive(
+    Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize, Zeroize, ZeroizeOnDrop,
+)]
+pub struct FeeAccountState<G: AffineRepr> {
+    pub pk: G,
+    pub balance: Balance,
+    /// This is 0 for PolyX is always revealed when paying fee
+    /// Including the asset-id as we might need to support multiple fee currencies in future.
+    pub asset_id: AssetId,
+    pub initial_rho: G::ScalarField,
+    pub initial_randomness: G::ScalarField,
+    pub rho: G::ScalarField,
+    pub randomness: G::ScalarField,
+}
+
+#[cfg_attr(
+    all(test, feature = "nightly_mocking_tests"),
+    mocktopus::macros::mockable
+)]
+impl<G: AffineRepr> FeeAccountState<G> {
+    pub fn new<R: CryptoRngCore>(
+        rng: &mut R,
+        pk: G,
+        balance: Balance,
+        asset_id: AssetId,
+    ) -> Result<Self> {
+        let rho = G::ScalarField::rand(rng);
+        let randomness = G::ScalarField::rand(rng);
+        Self::new_given_randomness(pk, balance, asset_id, rho, randomness)
+    }
+
+    /// Registered state with `rho = initial_rho` and `randomness = initial_randomness`.
+    pub fn new_given_randomness(
+        pk: G,
+        balance: Balance,
+        asset_id: AssetId,
+        initial_rho: G::ScalarField,
+        initial_randomness: G::ScalarField,
+    ) -> Result<Self> {
+        #[cfg(not(feature = "ignore_prover_input_sanitation"))]
+        if balance > MAX_FEE_BALANCE {
+            return Err(Error::AmountTooLarge(balance));
+        }
+
+        Ok(Self {
+            pk,
+            balance,
+            asset_id,
+            initial_rho,
+            initial_randomness,
+            rho: initial_rho,
+            randomness: initial_randomness,
+        })
+    }
+
+    pub fn commit<CK: AccountCommitmentKeyTrait<G>>(
+        &self,
+        account_comm_key: &CK,
+    ) -> Result<FeeAccountStateCommitment<G>> {
+        let comm = self.comm_without_sk(account_comm_key)?;
+        Ok(FeeAccountStateCommitment((comm + self.pk).into_affine()))
+    }
+
+    fn comm_without_sk<CK: AccountCommitmentKeyTrait<G>>(
+        &self,
+        account_comm_key: &CK,
+    ) -> Result<G::Group> {
+        let comm = G::Group::msm(
+            &[
+                account_comm_key.balance_gen(),
+                account_comm_key.asset_id_gen(),
+                account_comm_key.rho_gen(),
+                account_comm_key.current_rho_gen(),
+                account_comm_key.randomness_gen(),
+                account_comm_key.current_randomness_gen(),
+            ],
+            &[
+                G::ScalarField::from(self.balance),
+                G::ScalarField::from(self.asset_id),
+                self.initial_rho,
+                self.rho,
+                self.initial_randomness,
+                self.randomness,
+            ],
+        )
+        .map_err(Error::size_mismatch)?;
+        Ok(comm)
+    }
+
+    pub fn get_state_for_topup(&self, amount: u64) -> Result<Self> {
+        let new_balance = amount
+            .checked_add(self.balance)
+            .ok_or_else(|| Error::AmountTooLarge(u64::MAX))?;
+        if new_balance > MAX_FEE_BALANCE {
+            return Err(Error::AmountTooLarge(new_balance));
+        }
+        let mut new_state = self.clone();
+        new_state.balance += amount;
+        new_state.refresh_randomness_for_state_change();
+        Ok(new_state)
+    }
+
+    pub fn get_state_for_payment(&self, fee_amount: u64) -> Result<Self> {
+        if fee_amount > self.balance {
+            return Err(Error::AmountTooLarge(fee_amount));
+        }
+        let mut new_state = self.clone();
+        new_state.balance -= fee_amount;
+        new_state.refresh_randomness_for_state_change();
+        Ok(new_state)
+    }
+
+    pub fn refresh_randomness_for_state_change(&mut self) {
+        self.rho *= self.initial_rho;
+        self.randomness *= self.initial_randomness;
+    }
+
+    pub fn nullifier<CK: AccountCommitmentKeyTrait<G>>(&self, comm_key: &CK) -> G {
+        (comm_key.current_rho_gen() * self.rho()).into()
+    }
+
+    #[inline]
+    pub fn asset_id(&self) -> AssetId {
+        self.asset_id
+    }
+
+    #[inline]
+    pub fn balance(&self) -> Balance {
+        self.balance
+    }
+
+    #[inline]
+    pub fn rho(&self) -> G::ScalarField {
+        self.rho
+    }
+
+    #[inline]
+    pub fn randomness(&self) -> G::ScalarField {
+        self.randomness
+    }
+}
+
 #[derive(Copy, Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct FeeAccountStateCommitment<G: AffineRepr>(pub G);
 
 /// Generators `(g_rho + g_current_rho, g_randomness + g_current_randomness)` of the registration proof.
+#[cfg(feature = "host_proofs")]
 pub(crate) fn reg_comm_gens<G: AffineRepr>(
     account_comm_key: &impl AccountCommitmentKeyTrait<G>,
 ) -> (G, G) {
@@ -288,13 +433,19 @@ pub(crate) fn reg_comm_gens<G: AffineRepr>(
 /// `p - 1 = 2^32 * 3^2 * 1709 * 24859 * T` where `T` has no prime factor below `10^7`.
 pub const PALLAS_FR_SMOOTH_ORDER: [u64; 1] = [0x16ca4b3700000000];
 
-/// Device check for a split fee account registration. Rejects unless
-/// `account_commitment = pk + g_balance * balance + g_asset_id * asset_id + (g_rho + g_current_rho) * initial_rho + (g_randomness + g_current_randomness) * initial_randomness`,
-/// `initial_rho^smooth_order != 1` and `initial_randomness != 0`. With `smooth_order` the smooth
-/// part of `p - 1`, the order of `initial_rho` has a prime factor outside it, so the nullifiers
-/// `g_current_rho * initial_rho^k` don't repeat within that many state changes.
-pub fn ensure_valid_fee_registration_opening<G: AffineRepr>(
-    account_commitment: &FeeAccountStateCommitment<G>,
+/// Whether `x != 0` and `x^smooth_order != 1`. With `smooth_order` the smooth part of `p - 1`, the
+/// order of such `x` has a prime factor outside it.
+pub fn has_large_multiplicative_order<F: Field>(x: F, smooth_order: &[u64]) -> bool {
+    !x.is_zero() && !x.pow(smooth_order).is_one()
+}
+
+/// Commitment to the new fee account `FeeAccountState::new_given_randomness` builds. Rejects unless
+/// both `initial_rho` and `initial_randomness` have `has_large_multiplicative_order`. For
+/// `PALLAS_FR_SMOOTH_ORDER` their orders are then at least `10^7`, so the nullifiers
+/// `g_current_rho * initial_rho^k` and blindings `initial_randomness^k` don't repeat within `10^7`
+/// state changes. The device computes it from the `initial_rho` and `initial_randomness` it derives
+/// and binds it to its auth proof.
+pub fn fee_registration_account_commitment<G: AffineRepr>(
     pk: &G,
     asset_id: AssetId,
     balance: Balance,
@@ -302,37 +453,23 @@ pub fn ensure_valid_fee_registration_opening<G: AffineRepr>(
     initial_randomness: G::ScalarField,
     smooth_order: &[u64],
     account_comm_key: &impl AccountCommitmentKeyTrait<G>,
-) -> Result<()> {
-    #[cfg(feature = "ignore_prover_input_sanitation")]
-    {
-        return Ok(());
-    }
-
+) -> Result<FeeAccountStateCommitment<G>> {
     #[cfg(not(feature = "ignore_prover_input_sanitation"))]
     {
-        use ark_ff::Field;
-        use ark_std::{One, Zero};
-        if initial_rho.is_zero() || initial_rho.pow(smooth_order).is_one() {
+        if !has_large_multiplicative_order(initial_rho, smooth_order) {
             return Err(Error::ProofGenerationError(
                 "initial_rho has small multiplicative order".to_string(),
             ));
         }
-        if initial_randomness.is_zero() {
+        if !has_large_multiplicative_order(initial_randomness, smooth_order) {
             return Err(Error::ProofGenerationError(
-                "initial_randomness is zero".to_string(),
+                "initial_randomness has small multiplicative order".to_string(),
             ));
         }
-        let (rho_gen, randomness_gen) = reg_comm_gens(account_comm_key);
-        let expected = pk.into_group()
-            + account_comm_key.balance_gen() * G::ScalarField::from(balance)
-            + account_comm_key.asset_id_gen() * G::ScalarField::from(asset_id)
-            + rho_gen * initial_rho
-            + randomness_gen * initial_randomness;
-        if expected.into_affine() != account_commitment.0 {
-            return Err(Error::ProofGenerationError(
-                "Fee account commitment does not match the registration opening".to_string(),
-            ));
-        }
-        Ok(())
     }
+    #[cfg(feature = "ignore_prover_input_sanitation")]
+    let _ = smooth_order;
+
+    FeeAccountState::new_given_randomness(*pk, balance, asset_id, initial_rho, initial_randomness)?
+        .commit(account_comm_key)
 }

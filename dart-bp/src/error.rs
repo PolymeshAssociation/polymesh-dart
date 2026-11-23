@@ -151,6 +151,10 @@ pub enum Error {
     #[error("Full rounds must be a multiple of 2 for Poseidon2 but given as {0}")]
     IncorrectNumberOfFullRoundsForPoseidon2(usize),
 
+    /// Round constants don't match the rounds and state size
+    #[error("Round constants of round {0} don't match the rounds and state size for Poseidon2")]
+    IncorrectRoundConstantsForPoseidon2(usize),
+
     /// Input size not equal to state size
     #[error("Input size {0} not equal to state size {1}")]
     UnequalInputSizeAndStateSize(usize, usize),

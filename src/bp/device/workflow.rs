@@ -224,7 +224,7 @@ pub fn run_fee_register_topup_pay<D: AuthDevice>(device: &mut D) {
         fee_account_state_from_pubkey_given_randomness(&pk, FEE_ASSET_ID, 1000, &randomness)
             .unwrap();
     let (protocol, request) =
-        FeeRegHostProtocol::init(&mut rng, &pk, &fee_state, identity).unwrap();
+        FeeRegHostProtocol::init(&mut rng, &pk, &fee_state, 0, identity).unwrap();
     let response = device.fee_registration_proof(request).unwrap();
     let reg_proof = protocol.finish::<()>(&response).unwrap();
     reg_proof.verify(identity).unwrap();

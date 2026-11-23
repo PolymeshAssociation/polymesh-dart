@@ -93,7 +93,6 @@ pub mod account_registration;
 #[cfg(all(feature = "std", feature = "host_proofs"))]
 pub mod account_registration_chunked;
 mod error;
-#[cfg(feature = "host_proofs")]
 pub mod poseidon_impls;
 
 pub mod auth_proofs;

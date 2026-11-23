@@ -7,8 +7,8 @@ use polymesh_dart::affirmation_proofs::{
 };
 use polymesh_dart::auth_proofs::{
     create_affirmation_auth_proof, create_fee_account_auth_proof,
-    create_fee_account_registration_auth_proof, create_fee_payment_auth_proof,
-    create_mint_auth_proof, create_registration_auth_proof,
+    create_fee_account_registration_auth_proof_given_randomness, create_fee_payment_auth_proof,
+    create_mint_auth_proof, create_registration_auth_proof_given_randomness,
 };
 use polymesh_dart::curve_tree::{
     AccountTreeConfig, CurveTreeConfig, CurveTreeLookup, FeeAccountTreeConfig, ProverCurveTree,
@@ -151,14 +151,16 @@ pub fn gen_fee_reg_split() {
 
     // Host: initialise protocol, send request to device.
     let (protocol, device_request) =
-        FeeRegHostProtocol::init(&mut rng, &keys.acct.public, &fee_state, IDENTITY).unwrap();
+        FeeRegHostProtocol::init(&mut rng, &keys.acct.public, &fee_state, 0, IDENTITY).unwrap();
     save_scale_v1(FEE_REG_SPLIT_REQUEST, &device_request);
 
     // Device: receive request, create response, send back to host.
     let req: FeeAccountRegistrationDeviceRequest = load_scale_v1(FEE_REG_SPLIT_REQUEST);
-    let device_response = create_fee_account_registration_auth_proof(
+    let device_response = create_fee_account_registration_auth_proof_given_randomness(
         &mut rng,
         &(&keys.acct).into(),
+        fee_state.current_state.initial_rho.decode().unwrap(),
+        fee_state.current_state.initial_randomness.decode().unwrap(),
         &req,
         &DeviceGenerators::from_host(),
     )
@@ -289,8 +291,15 @@ pub fn gen_account_reg_split() {
     save_scale_v1(ACCOUNT_REG_SPLIT_REQUEST, &device_request);
 
     let req: RegistrationDeviceRequest = load_scale_v1(ACCOUNT_REG_SPLIT_REQUEST);
-    let device_response =
-        create_registration_auth_proof(&mut rng, &(&keys).into(), &req, &gens).unwrap();
+    let device_response = create_registration_auth_proof_given_randomness(
+        &mut rng,
+        &(&keys).into(),
+        account_state.bp_current_state().unwrap().0.randomness(),
+        rho_randomness,
+        &req,
+        &gens,
+    )
+    .unwrap();
     save_scale_v1(ACCOUNT_REG_SPLIT_RESPONSE, &device_response);
 
     let res: AccountRegistrationDeviceResponse = load_scale_v1(ACCOUNT_REG_SPLIT_RESPONSE);

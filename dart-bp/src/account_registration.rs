@@ -5,7 +5,7 @@ use crate::auth_proofs::{AuthProofOnlySks, AuthProofOnlySksProtocol, DeviceTxnTy
 use crate::discrete_log::solve_discrete_log_precomputed;
 use crate::dst;
 use crate::error::*;
-use crate::poseidon_impls::poseidon_2::Poseidon_hash_2_constraints_simple;
+use crate::poseidon_impls::poseidon_2::constraints::Poseidon_hash_2_constraints_simple;
 use crate::poseidon_impls::poseidon_2::params::Poseidon2Params;
 use crate::util::{bp_gens_for_vec_commitment, handle_verification_tuple};
 use crate::{
@@ -1420,9 +1420,10 @@ impl<G: AffineRepr, const CHUNK_BITS: usize, const NUM_CHUNKS: usize>
 
         let sk_gen = account_comm_key.sk_gen();
         let sk_enc_gen = account_comm_key.sk_enc_gen();
-        self.auth_proof.verify(
+        self.auth_proof.verify_with_account_commitment(
             pk_aff,
             pk_enc,
+            &account_commitment.0,
             &ledger_nonce_v,
             &DeviceTxnType::AccountRegistration { asset_id },
             &sk_gen,
@@ -2102,6 +2103,11 @@ fn ensure_correct_registration_state<G: AffineRepr>(account: &AccountState<G>) -
 
     #[cfg(not(feature = "ignore_prover_input_sanitation"))]
     {
+        if account.rho().is_zero() || account.randomness().is_zero() {
+            return Err(Error::RegistrationError(
+                "Rho and randomness must be non-zero".to_string(),
+            ));
+        }
         if account.rho().square() != account.current_rho() {
             return Err(Error::RegistrationError(
                 "Rho relation not satisfied".to_string(),
@@ -2219,7 +2225,7 @@ pub mod tests {
         PoseidonConfig::<F>::new(FULL_ROUNDS, PARTIAL_ROUNDS, ALPHA, mds, ark, RATE, CAPACITY)
     }*/
 
-    pub fn test_params_for_poseidon2() -> Poseidon2Params<Fr> {
+    pub fn test_params_for_poseidon2() -> &'static Poseidon2Params<Fr> {
         get_poseidon2_params_for_2_1_hashing().unwrap()
     }
 
@@ -2281,20 +2287,12 @@ pub mod tests {
         AccountState<PallasA>,
         Fr,
         NullifierSkGenCounter,
-        Poseidon2Params<Fr>,
+        &'static Poseidon2Params<Fr>,
     ) {
         let params = test_params_for_poseidon2();
         let counter = 1;
-        let (account, rho_randomness) = AccountState::new(
-            rng,
-            id,
-            pk_aff.0,
-            pk_enc.0,
-            asset_id,
-            counter,
-            params.clone(),
-        )
-        .unwrap();
+        let (account, rho_randomness) =
+            AccountState::new(rng, id, pk_aff.0, pk_enc.0, asset_id, counter, params).unwrap();
         (account, rho_randomness, counter, params)
     }
 
@@ -2394,53 +2392,25 @@ pub mod tests {
         let pk2_enc = result3.1.1.0;
 
         let account1 = AccountState::<PallasA>::new_given_randomness(
-            id,
-            pk1,
-            pk1_enc,
-            asset_id,
-            counter_n,
-            rand1.0,
-            rand1.1,
-            params.clone(),
+            id, pk1, pk1_enc, asset_id, counter_n, rand1.0, rand1.1, params,
         )
         .unwrap();
         let account2 = AccountState::<PallasA>::new_given_randomness(
-            id,
-            pk1,
-            pk1_enc,
-            asset_id,
-            counter_n,
-            rand2.0,
-            rand2.1,
-            params.clone(),
+            id, pk1, pk1_enc, asset_id, counter_n, rand2.0, rand2.1, params,
         )
         .unwrap();
         assert_eq!(account1, account2);
 
         // Different randomness
         let account3 = AccountState::<PallasA>::new_given_randomness(
-            id,
-            pk1,
-            pk1_enc,
-            asset_id,
-            counter_n,
-            rand3.0,
-            rand3.1,
-            params.clone(),
+            id, pk1, pk1_enc, asset_id, counter_n, rand3.0, rand3.1, params,
         )
         .unwrap();
         assert_ne!(account1, account3);
 
         // Same randomness, different sk
         let account4 = AccountState::<PallasA>::new_given_randomness(
-            id,
-            pk2,
-            pk2_enc,
-            asset_id,
-            counter_n,
-            rand1.0,
-            rand1.1,
-            params.clone(),
+            id, pk2, pk2_enc, asset_id, counter_n, rand1.0, rand1.1, params,
         )
         .unwrap();
         assert_ne!(account1, account4);
@@ -2867,12 +2837,13 @@ pub mod tests {
                     .copied()
                     .collect();
 
-                let auth_proof = AuthProofOnlySks::new(
+                let auth_proof = AuthProofOnlySks::new_with_account_commitment(
                     rng,
                     sk_aff.0,
                     sk_enc.0,
                     pk_aff.0,
                     pk_enc.0,
+                    &account_comm.0,
                     &ledger_nonce,
                     &DeviceTxnType::AccountRegistration { asset_id },
                     &aff_key_gen,
@@ -3036,12 +3007,13 @@ pub mod tests {
             )
             .unwrap();
 
-            let auth_proof = AuthProofOnlySks::new(
+            let auth_proof = AuthProofOnlySks::new_with_account_commitment(
                 &mut rng,
                 sk_aff.0,
                 sk_enc.0,
                 pk_aff.0,
                 pk_enc.0,
+                &account_comm.0,
                 nonce,
                 &DeviceTxnType::AccountRegistration { asset_id },
                 &aff_key_gen,
@@ -3095,9 +3067,10 @@ pub mod tests {
 
             reg_proof
                 .auth_proof
-                .verify(
+                .verify_with_account_commitment(
                     pk_aff.0,
                     pk_enc.0,
+                    &account_comm.0,
                     nonce,
                     &DeviceTxnType::AccountRegistration { asset_id },
                     &aff_key_gen,
@@ -3178,12 +3151,13 @@ pub mod tests {
                 .chain(nonce.iter())
                 .copied()
                 .collect();
-            let auth_proof = AuthProofOnlySks::new(
+            let auth_proof = AuthProofOnlySks::new_with_account_commitment(
                 &mut rng,
                 sk_aff.0,
                 sk_enc.0,
                 pk_aff.0,
                 pk_enc.0,
+                &account_comm.0,
                 &ledger_nonce,
                 &DeviceTxnType::AccountRegistration { asset_id },
                 &aff_key_gen,
@@ -3244,9 +3218,10 @@ pub mod tests {
                 .collect();
             reg_proof
                 .auth_proof
-                .verify(
+                .verify_with_account_commitment(
                     pk_aff.0,
                     pk_enc.0,
+                    &account_comm.0,
                     &ledger_nonce_v,
                     &DeviceTxnType::AccountRegistration { asset_id },
                     &aff_key_gen,
@@ -3537,8 +3512,7 @@ pub mod tests {
 
         let poseidon_params = test_params_for_poseidon2();
         let combined = AccountState::<PallasA>::concat_asset_id_counter(asset_id, counter);
-        let rho = Poseidon_hash_2_simple::<Fr>(rho_randomness, combined, poseidon_params.clone())
-            .unwrap();
+        let rho = Poseidon_hash_2_simple::<Fr>(rho_randomness, combined, poseidon_params).unwrap();
 
         let randomness = Fr::rand(&mut rng);
         let current_randomness = randomness.square();
@@ -3643,7 +3617,7 @@ pub mod tests {
                 pk_enc.0,
                 asset_ids[i],
                 nullifier_gen_counter,
-                poseidon_params.clone(),
+                poseidon_params,
             )
             .unwrap();
             let account_comm = account.commit(account_comm_key.clone()).unwrap();
@@ -3988,7 +3962,7 @@ pub mod tests {
                 pk_enc.0,
                 asset_ids[i],
                 nullifier_gen_counter,
-                poseidon_params.clone(),
+                poseidon_params,
             )
             .unwrap();
             accounts.push(account);
@@ -4408,7 +4382,7 @@ pub mod tests {
                     pk_enc.0,
                     asset_id,
                     nullifier_gen_counter,
-                    poseidon_params.clone(),
+                    poseidon_params,
                 )
                 .unwrap();
 
@@ -4490,7 +4464,7 @@ pub mod tests {
                     pk_enc_wrong.0,
                     asset_id,
                     nullifier_gen_counter,
-                    poseidon_params.clone(),
+                    poseidon_params,
                 )
                 .unwrap();
 
@@ -4572,7 +4546,7 @@ pub mod tests {
                     pk_enc.0,
                     asset_id,
                     nullifier_gen_counter,
-                    poseidon_params.clone(),
+                    poseidon_params,
                 )
                 .unwrap();
 

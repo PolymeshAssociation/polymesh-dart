@@ -3,7 +3,8 @@ use crate::account::common::ensure_non_zero_amount;
 use crate::auth_proofs::fee_account::AuthProofFeePayment;
 use crate::auth_proofs::fee_account::reg_comm_gens;
 pub use crate::auth_proofs::fee_account::{
-    FeeAccountStateCommitment, PALLAS_FR_SMOOTH_ORDER, ensure_valid_fee_registration_opening,
+    FeeAccountState, FeeAccountStateCommitment, PALLAS_FR_SMOOTH_ORDER,
+    fee_registration_account_commitment,
 };
 use crate::auth_proofs::{AuthProofOnlySk, AuthProofOnlySkProtocol, DeviceTxnType};
 use crate::dst;
@@ -65,148 +66,6 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 
 pub const FEE_AMOUNT_LABEL: &'static [u8; 10] = b"fee_amount";
 pub const FEE_REG_TXN_LABEL: &'static [u8; 24] = b"fee_account_registration";
-
-#[derive(
-    Clone, PartialEq, Eq, Debug, CanonicalSerialize, CanonicalDeserialize, Zeroize, ZeroizeOnDrop,
-)]
-pub struct FeeAccountState<G: AffineRepr> {
-    pub pk: G,
-    pub balance: Balance,
-    /// This is 0 for PolyX is always revealed when paying fee
-    /// Including the asset-id as we might need to support multiple fee currencies in future.
-    pub asset_id: AssetId,
-    pub initial_rho: G::ScalarField,
-    pub initial_randomness: G::ScalarField,
-    pub rho: G::ScalarField,
-    pub randomness: G::ScalarField,
-}
-
-#[cfg_attr(
-    all(test, feature = "nightly_mocking_tests"),
-    mocktopus::macros::mockable
-)]
-impl<G: AffineRepr> FeeAccountState<G> {
-    pub fn new<R: CryptoRngCore>(
-        rng: &mut R,
-        pk: G,
-        balance: Balance,
-        asset_id: AssetId,
-    ) -> Result<Self> {
-        let rho = G::ScalarField::rand(rng);
-        let randomness = G::ScalarField::rand(rng);
-        Self::new_given_randomness(pk, balance, asset_id, rho, randomness)
-    }
-
-    /// Registered state with `rho = initial_rho` and `randomness = initial_randomness`.
-    pub fn new_given_randomness(
-        pk: G,
-        balance: Balance,
-        asset_id: AssetId,
-        initial_rho: G::ScalarField,
-        initial_randomness: G::ScalarField,
-    ) -> Result<Self> {
-        #[cfg(not(feature = "ignore_prover_input_sanitation"))]
-        if balance > MAX_FEE_BALANCE {
-            return Err(Error::AmountTooLarge(balance));
-        }
-
-        Ok(Self {
-            pk,
-            balance,
-            asset_id,
-            initial_rho,
-            initial_randomness,
-            rho: initial_rho,
-            randomness: initial_randomness,
-        })
-    }
-
-    pub fn commit<CK: AccountCommitmentKeyTrait<G>>(
-        &self,
-        account_comm_key: &CK,
-    ) -> Result<FeeAccountStateCommitment<G>> {
-        let comm = self.comm_without_sk(account_comm_key)?;
-        Ok(FeeAccountStateCommitment((comm + self.pk).into_affine()))
-    }
-
-    fn comm_without_sk<CK: AccountCommitmentKeyTrait<G>>(
-        &self,
-        account_comm_key: &CK,
-    ) -> Result<G::Group> {
-        let comm = G::Group::msm(
-            &[
-                account_comm_key.balance_gen(),
-                account_comm_key.asset_id_gen(),
-                account_comm_key.rho_gen(),
-                account_comm_key.current_rho_gen(),
-                account_comm_key.randomness_gen(),
-                account_comm_key.current_randomness_gen(),
-            ],
-            &[
-                G::ScalarField::from(self.balance),
-                G::ScalarField::from(self.asset_id),
-                self.initial_rho,
-                self.rho,
-                self.initial_randomness,
-                self.randomness,
-            ],
-        )
-        .map_err(Error::size_mismatch)?;
-        Ok(comm)
-    }
-
-    pub fn get_state_for_topup(&self, amount: u64) -> Result<Self> {
-        let new_balance = amount
-            .checked_add(self.balance)
-            .ok_or_else(|| Error::AmountTooLarge(u64::MAX))?;
-        if new_balance > MAX_FEE_BALANCE {
-            return Err(Error::AmountTooLarge(new_balance));
-        }
-        let mut new_state = self.clone();
-        new_state.balance += amount;
-        new_state.refresh_randomness_for_state_change();
-        Ok(new_state)
-    }
-
-    pub fn get_state_for_payment(&self, fee_amount: u64) -> Result<Self> {
-        if fee_amount > self.balance {
-            return Err(Error::AmountTooLarge(fee_amount));
-        }
-        let mut new_state = self.clone();
-        new_state.balance -= fee_amount;
-        new_state.refresh_randomness_for_state_change();
-        Ok(new_state)
-    }
-
-    pub fn refresh_randomness_for_state_change(&mut self) {
-        self.rho *= self.initial_rho;
-        self.randomness *= self.initial_randomness;
-    }
-
-    pub fn nullifier<CK: AccountCommitmentKeyTrait<G>>(&self, comm_key: &CK) -> G {
-        (comm_key.current_rho_gen() * self.rho()).into()
-    }
-
-    #[inline]
-    pub fn asset_id(&self) -> AssetId {
-        self.asset_id
-    }
-
-    #[inline]
-    pub fn balance(&self) -> Balance {
-        self.balance
-    }
-
-    #[inline]
-    pub fn rho(&self) -> G::ScalarField {
-        self.rho
-    }
-
-    #[inline]
-    pub fn randomness(&self) -> G::ScalarField {
-        self.randomness
-    }
-}
 
 // A non-split (single prover) proof proves that the account commitment is correctly formed and that prover knows the
 // secret key, nullifier secret key, rho, commitment randomness, i.e. knowledge of opening
@@ -289,6 +148,16 @@ impl<G: AffineRepr> RegTxnProofWithoutSkProtocol<G> {
                 "Registered fee account state must have rho = initial_rho and randomness = initial_randomness"
                     .to_string(),
             ));
+        }
+        #[cfg(not(feature = "ignore_prover_input_sanitation"))]
+        {
+            use ark_ff::Zero;
+            if account.initial_rho.is_zero() || account.initial_randomness.is_zero() {
+                return Err(Error::ProofGenerationError(
+                    "Registered fee account state must have non-zero initial_rho and initial_randomness"
+                        .to_string(),
+                ));
+            }
         }
 
         let mut rho_blinding = G::ScalarField::rand(rng);
@@ -4372,10 +4241,11 @@ pub mod tests {
         //  Ledger side: own transcript, auth T-values only
         // Uses AuthProofOnlySk::new which internally builds an AUTH_TXN_LABEL transcript
         let sk_gen = account_comm_key.sk_gen();
-        let auth_proof = AuthProofOnlySk::new(
+        let auth_proof = AuthProofOnlySk::new_with_account_commitment(
             &mut rng,
             sk.0,
             pk.0,
+            &fee_account_comm.0,
             nonce,
             &DeviceTxnType::FeeAccountRegistration { asset_id, balance },
             &sk_gen,
@@ -4414,59 +4284,66 @@ pub mod tests {
             .unwrap();
 
         // Verify auth: uses its own AUTH_TXN_LABEL transcript
-        reg_proof
-            .auth_proof
-            .verify(
-                pk.0,
-                nonce,
-                &DeviceTxnType::FeeAccountRegistration { asset_id, balance },
-                &sk_gen,
-                None,
+        let verify_auth = |commitment: &PallasA, txn_type: &DeviceTxnType| {
+            reg_proof
+                .auth_proof
+                .verify_with_account_commitment(pk.0, commitment, nonce, txn_type, &sk_gen, None)
+        };
+        verify_auth(
+            &fee_account_comm.0,
+            &DeviceTxnType::FeeAccountRegistration { asset_id, balance },
+        )
+        .unwrap();
+
+        assert!(
+            verify_auth(
+                &fee_account_comm.0,
+                &DeviceTxnType::FeeAccountTopup {
+                    asset_id,
+                    amount: 10,
+                }
             )
-            .unwrap();
-
-        assert!(
-            reg_proof
-                .auth_proof
-                .verify(
-                    pk.0,
-                    nonce,
-                    &DeviceTxnType::FeeAccountTopup {
-                        asset_id,
-                        amount: 10,
-                    },
-                    &sk_gen,
-                    None,
-                )
-                .is_err()
+            .is_err()
         );
 
         assert!(
-            reg_proof
-                .auth_proof
-                .verify(
-                    pk.0,
-                    nonce,
-                    &DeviceTxnType::FeeAccountRegistration {
-                        asset_id: 2,
-                        balance
-                    },
-                    &sk_gen,
-                    None,
-                )
-                .is_err()
+            verify_auth(
+                &fee_account_comm.0,
+                &DeviceTxnType::FeeAccountRegistration {
+                    asset_id: 2,
+                    balance
+                }
+            )
+            .is_err()
         );
 
+        assert!(
+            verify_auth(
+                &fee_account_comm.0,
+                &DeviceTxnType::FeeAccountRegistration {
+                    asset_id,
+                    balance: balance + 1,
+                }
+            )
+            .is_err()
+        );
+
+        assert!(
+            verify_auth(
+                &pk.0,
+                &DeviceTxnType::FeeAccountRegistration { asset_id, balance }
+            )
+            .is_err()
+        );
+
+        // Without the account commitment, fee registration is rejected
         assert!(
             reg_proof
                 .auth_proof
                 .verify(
                     pk.0,
                     nonce,
-                    &DeviceTxnType::FeeAccountRegistration {
-                        asset_id,
-                        balance: balance + 1,
-                    },
+                    &DeviceTxnType::FeeAccountRegistration { asset_id, balance },
                     &sk_gen,
                     None,
                 )
@@ -4515,10 +4392,11 @@ pub mod tests {
             .copied()
             .collect();
         let sk_gen = account_comm_key.sk_gen();
-        let auth_proof = AuthProofOnlySk::new(
+        let auth_proof = AuthProofOnlySk::new_with_account_commitment(
             &mut rng,
             sk.0,
             pk.0,
+            &fee_account_comm.0,
             &ledger_nonce,
             &DeviceTxnType::FeeAccountRegistration { asset_id, balance },
             &sk_gen,
@@ -4568,8 +4446,9 @@ pub mod tests {
             .collect();
         reg_proof
             .auth_proof
-            .verify(
+            .verify_with_account_commitment(
                 pk.0,
+                &fee_account_comm.0,
                 &ledger_nonce_v,
                 &DeviceTxnType::FeeAccountRegistration { asset_id, balance },
                 &sk_gen,
@@ -4799,7 +4678,10 @@ pub mod tests {
             sk_i.0,
             pk_i.0,
             nonce,
-            &DeviceTxnType::FeeAccountRegistration { asset_id, balance },
+            &DeviceTxnType::FeeAccountTopup {
+                asset_id,
+                amount: increase_bal_by,
+            },
             &pk_gen,
         )
         .unwrap();
@@ -4842,7 +4724,10 @@ pub mod tests {
             .verify(
                 pk_i.0,
                 nonce,
-                &DeviceTxnType::FeeAccountRegistration { asset_id, balance },
+                &DeviceTxnType::FeeAccountTopup {
+                    asset_id,
+                    amount: increase_bal_by,
+                },
                 &pk_gen,
                 None,
             )
@@ -4918,7 +4803,10 @@ pub mod tests {
             sk_i.0,
             pk_i.0,
             &ledger_nonce,
-            &DeviceTxnType::FeeAccountRegistration { asset_id, balance },
+            &DeviceTxnType::FeeAccountTopup {
+                asset_id,
+                amount: increase_bal_by,
+            },
             &pk_gen,
         )
         .unwrap();
@@ -4990,7 +4878,10 @@ pub mod tests {
             .verify(
                 pk_i.0,
                 &ledger_nonce_v,
-                &DeviceTxnType::FeeAccountRegistration { asset_id, balance },
+                &DeviceTxnType::FeeAccountTopup {
+                    asset_id,
+                    amount: increase_bal_by,
+                },
                 &pk_gen,
                 None,
             )
@@ -6037,10 +5928,8 @@ pub mod tests {
         let balance = 1000;
         let (_, pk) = keygen_sig(&mut rng, account_comm_key.sk_gen());
 
-        let check = |account: &FeeAccountState<PallasA>| {
-            let comm = account.commit(&account_comm_key).unwrap();
-            ensure_valid_fee_registration_opening(
-                &comm,
+        let compute = |account: &FeeAccountState<PallasA>, balance: Balance| {
+            fee_registration_account_commitment(
                 &pk.0,
                 asset_id,
                 balance,
@@ -6064,8 +5953,10 @@ pub mod tests {
             account
         };
 
+        // Equals the commitment of a new fee account.
         let account = new_fee_account::<_, PallasA>(&mut rng, asset_id, pk.clone(), balance);
-        check(&account).unwrap();
+        let comm = account.commit(&account_comm_key).unwrap();
+        assert_eq!(compute(&account, balance).unwrap(), comm);
 
         // `initial_rho` of small order repeats the nullifier sequence.
         let s = F0::rand(&mut rng);
@@ -6075,40 +5966,26 @@ pub mod tests {
             -F0::from(1u8),
             F0::TWO_ADIC_ROOT_OF_UNITY,
         ] {
-            assert!(check(&with_initial(rho, s)).is_err());
+            assert!(compute(&with_initial(rho, s), balance).is_err());
         }
-        assert!(check(&with_initial(F0::rand(&mut rng), F0::from(0u8))).is_err());
+        // `initial_randomness` of small order repeats the blinding sequence.
+        let rho = F0::rand(&mut rng);
+        for s in [
+            F0::from(0u8),
+            F0::from(1u8),
+            -F0::from(1u8),
+            F0::TWO_ADIC_ROOT_OF_UNITY,
+        ] {
+            assert!(compute(&with_initial(rho, s), balance).is_err());
+        }
 
-        // The commitment must open to the given opening and balance.
-        let comm = account.commit(&account_comm_key).unwrap();
-        assert!(
-            ensure_valid_fee_registration_opening(
-                &comm,
-                &pk.0,
-                asset_id,
-                balance + 1,
-                account.initial_rho,
-                account.initial_randomness,
-                &PALLAS_FR_SMOOTH_ORDER,
-                &account_comm_key,
-            )
-            .is_err()
-        );
+        // Differs from the commitment of a state with another balance or a `rho` that isn't `initial_rho`.
+        assert_ne!(compute(&account, balance + 1).unwrap(), comm);
         let mut rho_not_initial = account.clone();
         rho_not_initial.rho += F0::from(1u8);
-        let comm = rho_not_initial.commit(&account_comm_key).unwrap();
-        assert!(
-            ensure_valid_fee_registration_opening(
-                &comm,
-                &pk.0,
-                asset_id,
-                balance,
-                account.initial_rho,
-                account.initial_randomness,
-                &PALLAS_FR_SMOOTH_ORDER,
-                &account_comm_key,
-            )
-            .is_err()
+        assert_ne!(
+            compute(&account, balance).unwrap(),
+            rho_not_initial.commit(&account_comm_key).unwrap()
         );
     }
 

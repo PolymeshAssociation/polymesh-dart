@@ -1,3 +1,9 @@
+//! Requests the host sends to the device and the device's responses in W2/W3 split proving. The
+//! host knows every opening of the account state except `sk_aff` and `sk_enc`, so privacy against
+//! the host is not a goal. The device checks each request against the operation in `txn_type`, the
+//! randomness it derives from its master seed and its own generators before proving, see
+//! `polymesh_dart_bp::auth_proofs`.
+
 use ark_std::vec::Vec;
 use codec::{Decode, Encode};
 
@@ -158,12 +164,16 @@ pub struct FeePaymentDeviceRequest {
     pub txn_type: DeviceTxnType,
 }
 
+/// Account registration request. The device computes the commitment to a new account of `pk_aff`,
+/// `pk_enc`, identity `nonce` and the asset id in `txn_type`, with the `randomness` and `rho` it
+/// derives from its master seed for that asset id and `counter`, and binds it to its proof.
 #[derive(Clone, Encode, Decode)]
 pub struct RegistrationDeviceRequest {
     pub challenge_h_bytes: Vec<u8>,
     pub nonce: Vec<u8>,
     pub pk_aff: CompressedAffine,
     pub pk_enc: CompressedAffine,
+    pub counter: NullifierSkGenCounter,
     pub txn_type: DeviceTxnType,
 }
 
@@ -206,16 +216,15 @@ pub struct FeeAccountRandomnessDeviceResponse {
     pub initial_randomness: WrappedCanonical<PallasScalar>,
 }
 
-/// Fee account registration request. The device checks `account_commitment` against the opening
-/// `(initial_rho, initial_randomness)` and the balance and asset id in `txn_type`.
+/// Fee account registration request. The device computes the commitment to a new fee account of
+/// `pk` and the balance and asset id in `txn_type`, with the `(initial_rho, initial_randomness)` it
+/// derives from its master seed for that asset id and `counter`, and binds it to its proof.
 #[derive(Clone, Encode, Decode)]
 pub struct FeeAccountRegistrationDeviceRequest {
     pub challenge_h_bytes: Vec<u8>,
     pub nonce: Vec<u8>,
     pub pk: CompressedAffine,
-    pub account_commitment: CompressedAffine,
-    pub initial_rho: WrappedCanonical<PallasScalar>,
-    pub initial_randomness: WrappedCanonical<PallasScalar>,
+    pub counter: NullifierSkGenCounter,
     pub txn_type: DeviceTxnType,
 }
 

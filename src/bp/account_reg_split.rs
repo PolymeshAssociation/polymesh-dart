@@ -4,6 +4,8 @@ use rand_core::{CryptoRng, RngCore};
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use polymesh_dart_bp::TXN_CHALLENGE_LABEL;
 use polymesh_dart_bp::account_registration;
+use polymesh_dart_bp::auth_proofs::account::registration_account_commitment;
+use polymesh_dart_bp::auth_proofs::fee_account::PALLAS_FR_SMOOTH_ORDER;
 use polymesh_dart_bp::util::{append_auth_proof_and_get_challenge, serialize_challenge};
 use polymesh_dart_common::NullifierSkGenCounter;
 
@@ -39,6 +41,23 @@ impl AccountRegHostProtocol {
         let params = poseidon_params();
         let tree_params = AccountTreeConfig::parameters();
         let t = force_transfer_encryption_params(pk_t)?;
+        let device_commitment = registration_account_commitment(
+            account.id,
+            account.pk_aff,
+            account.pk_enc,
+            account.asset_id,
+            counter,
+            account.randomness,
+            rho_randomness,
+            &params.params,
+            &PALLAS_FR_SMOOTH_ORDER,
+            dart_gens().account_comm_key(),
+        )?;
+        if device_commitment != commitment {
+            return Err(Error::ProofGenerationError(
+                "Account state is not a new account".to_string(),
+            ));
+        }
 
         let (protocol, mut prover) = BPRegTxnWithoutSkProtocol::init(
             rng,
@@ -64,6 +83,7 @@ impl AccountRegHostProtocol {
             nonce: nonce.to_vec(),
             pk_aff: CompressedAffine::try_from(pk_aff)?,
             pk_enc: CompressedAffine::try_from(pk_enc)?,
+            counter,
             txn_type: DeviceTxnType::AccountRegistration {
                 asset_id: account_state.asset_id(),
             },

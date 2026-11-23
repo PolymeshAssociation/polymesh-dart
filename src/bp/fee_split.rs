@@ -3,10 +3,14 @@ use rand_core::{CryptoRng, RngCore};
 
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use polymesh_dart_bp::TXN_CHALLENGE_LABEL;
+use polymesh_dart_bp::auth_proofs::fee_account::{
+    PALLAS_FR_SMOOTH_ORDER, fee_registration_account_commitment,
+};
 use polymesh_dart_bp::fee_account as bp_fee_account;
 use polymesh_dart_bp::util::{
     BPProof, append_auth_proof_and_get_challenge, prove_with_rng, serialize_challenge,
 };
+use polymesh_dart_common::NullifierSkGenCounter;
 
 use super::encode::*;
 use super::split_types::*;
@@ -68,12 +72,27 @@ impl FeeRegHostProtocol {
         rng: &mut R,
         pk: &AccountPublicKey,
         account_state: &FeeAccountAssetState,
+        counter: NullifierSkGenCounter,
         nonce: &[u8],
     ) -> Result<(Self, FeeAccountRegistrationDeviceRequest), Error> {
         let pk_affine = pk.get_affine()?;
         let account_state = account_state.current_state.clone();
         let (account, commitment) = account_state.bp_state()?;
         let gens = dart_gens();
+        let device_commitment = fee_registration_account_commitment(
+            &pk_affine,
+            account.asset_id(),
+            account.balance(),
+            account.initial_rho,
+            account.initial_randomness,
+            &PALLAS_FR_SMOOTH_ORDER,
+            &gens.account_comm_key(),
+        )?;
+        if device_commitment != commitment {
+            return Err(Error::ProofGenerationError(
+                "Fee account state is not a new fee account".to_string(),
+            ));
+        }
 
         let mut transcript = MerlinTranscript::new(bp_fee_account::FEE_REG_TXN_LABEL);
         let protocol = BPRegTxnProofWithoutSkProtocol::init_with_given_transcript(
@@ -92,9 +111,7 @@ impl FeeRegHostProtocol {
             challenge_h_bytes,
             nonce: nonce.to_vec(),
             pk: CompressedAffine::try_from(pk_affine)?,
-            account_commitment: CompressedAffine::try_from(commitment.0)?,
-            initial_rho: WrappedCanonical::wrap(&account.initial_rho)?,
-            initial_randomness: WrappedCanonical::wrap(&account.initial_randomness)?,
+            counter,
             txn_type: DeviceTxnType::FeeAccountRegistration {
                 asset_id: account_state.asset_id,
                 balance: account_state.balance,

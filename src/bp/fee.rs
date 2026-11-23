@@ -19,7 +19,7 @@ use rand_core::{CryptoRng, RngCore};
 use super::encode::*;
 use super::*;
 use crate::auth_proofs::{
-    create_fee_account_auth_proof, create_fee_account_registration_auth_proof,
+    create_fee_account_auth_proof, create_fee_account_registration_auth_proof_given_randomness,
     create_fee_payment_auth_proof,
 };
 use crate::device::DeviceGenerators;
@@ -407,11 +407,13 @@ impl<T: DartLimits> FeeAccountRegistrationProof<T> {
         identity: &[u8],
     ) -> Result<Self, Error> {
         let (protocol, device_request) =
-            FeeRegHostProtocol::init(rng, &key.public, account_state, identity)?;
+            FeeRegHostProtocol::init(rng, &key.public, account_state, 0, identity)?;
 
-        let device_response = create_fee_account_registration_auth_proof(
+        let device_response = create_fee_account_registration_auth_proof_given_randomness(
             rng,
             &key.into(),
+            account_state.current_state.initial_rho.decode()?,
+            account_state.current_state.initial_randomness.decode()?,
             &device_request,
             &DeviceGenerators::from_dart_gens()?,
         )?;

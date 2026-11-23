@@ -1,13 +1,18 @@
 use super::{
     AuthDevice, Device, DeviceRequest, DeviceResponse, StreamDevice, account_state_from_pubkeys,
-    run_fee_register_topup_pay, run_register_mint_affirm, serve,
+    account_state_from_pubkeys_given_randomness, run_fee_register_topup_pay,
+    run_register_mint_affirm, serve,
 };
 use crate::AssetPkTLookup;
 use crate::Error;
 use crate::account_reg_split::AccountRegHostProtocol;
 use crate::curve_tree::{AccountTreeConfig, CurveTreeConfig};
+use crate::fee_split::FeeRegHostProtocol;
 use crate::split_types::AccountRandomnessDeviceRequest;
-use crate::{AssetId, PallasA, PallasScalar, WrappedCanonical};
+use crate::{
+    AccountPublicKey, AssetId, FEE_ASSET_ID, FeeAccountAssetState, PallasA, PallasScalar,
+    WrappedCanonical,
+};
 use codec::{Decode, Encode};
 use polymesh_dart_common::NullifierSkGenCounter;
 use rand::rngs::StdRng;
@@ -150,8 +155,18 @@ fn key_persists_across_restart() {
     // A proof from the reloaded device is valid for the same account.
     let pk_aff = PallasA::try_from(&pubkeys.pk_aff).unwrap();
     let pk_enc = PallasA::try_from(&pubkeys.pk_enc).unwrap();
-    let (account_state, rho_randomness) =
-        account_state_from_pubkeys(&mut rng, pk_aff, pk_enc, asset_id, counter, identity).unwrap();
+    let randomness = device
+        .account_randomness(AccountRandomnessDeviceRequest { asset_id, counter })
+        .unwrap();
+    let (account_state, rho_randomness) = account_state_from_pubkeys_given_randomness(
+        pk_aff,
+        pk_enc,
+        asset_id,
+        counter,
+        identity,
+        &randomness,
+    )
+    .unwrap();
     let (protocol, request) = AccountRegHostProtocol::init(
         &mut rng,
         &account_state,
@@ -178,4 +193,56 @@ fn key_persists_across_restart() {
             &AssetPkTLookup::default(),
         )
         .unwrap();
+}
+
+#[test]
+fn registration_rejects_host_chosen_randomness() {
+    let mut rng = StdRng::seed_from_u64(0);
+    let identity: &[u8] = b"test";
+    let asset_id: AssetId = 1;
+    let counter: NullifierSkGenCounter = 0;
+
+    let mut device = InMemoryDevice::new(StdRng::seed_from_u64(1));
+    let (pubkeys, _) = device.generate_keys().unwrap();
+    let pk_aff = PallasA::try_from(&pubkeys.pk_aff).unwrap();
+    let pk_enc = PallasA::try_from(&pubkeys.pk_enc).unwrap();
+
+    let (account_state, rho_randomness) =
+        account_state_from_pubkeys(&mut rng, pk_aff, pk_enc, asset_id, counter, identity).unwrap();
+    let (protocol, request) = AccountRegHostProtocol::init(
+        &mut rng,
+        &account_state,
+        rho_randomness,
+        counter,
+        identity,
+        None,
+    )
+    .unwrap();
+    let response = device.registration_proof(request).unwrap();
+    let verified = protocol
+        .finish::<_, ()>(
+            &mut rng,
+            &response,
+            counter,
+            AccountTreeConfig::parameters(),
+        )
+        .and_then(|proof| {
+            proof.verify(
+                identity,
+                AccountTreeConfig::parameters(),
+                &mut rng,
+                &AssetPkTLookup::default(),
+            )
+        });
+    assert!(verified.is_err());
+
+    let pk = AccountPublicKey::from_affine(pk_aff).unwrap();
+    let fee_state = FeeAccountAssetState::new(&mut rng, &pk, FEE_ASSET_ID, 1000).unwrap();
+    let (protocol, request) =
+        FeeRegHostProtocol::init(&mut rng, &pk, &fee_state, 0, identity).unwrap();
+    let response = device.fee_registration_proof(request).unwrap();
+    let verified = protocol
+        .finish::<()>(&response)
+        .and_then(|proof| proof.verify(identity));
+    assert!(verified.is_err());
 }

@@ -1,4 +1,6 @@
 use crate::auth_proofs::account_comm_key::{AccountCommitmentKeyTrait, NUM_GENERATORS};
+use crate::auth_proofs::account_state::{AccountState, AccountStateCommitment};
+use crate::auth_proofs::fee_account::has_large_multiplicative_order;
 use crate::auth_proofs::helpers::{
     ensure_correct_updated_account_commitment, init_acc_comm_protocol,
     init_rand_new_comm_anchor_protocol, resp_acc_comm, verify_acc_comm,
@@ -8,6 +10,7 @@ use crate::auth_proofs::leg::{
     LegProverConfig, LegVerifierConfig, ensure_expected_leg_link_responses,
 };
 use crate::auth_proofs::{AUTH_TXN_LABEL, DeviceTxnType, NULLIFIER_LABEL};
+use crate::poseidon_impls::poseidon_2::Poseidon2Params;
 use crate::{
     ACCOUNT_COMMITMENT_LABEL, Error, LEG_ACTION_LABEL, LEG_ENC_LABEL, NONCE_LABEL,
     PARTY_EPH_PK_LABEL, RE_RANDOMIZED_PATH_LABEL, TXN_CHALLENGE_LABEL, add_to_transcript, dst,
@@ -21,6 +24,7 @@ use ark_std::string::ToString;
 use ark_std::{UniformRand, format, vec, vec::Vec};
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
+use polymesh_dart_common::AssetId;
 use rand_core::CryptoRngCore;
 use schnorr_pok::SchnorrResponse;
 use schnorr_pok::discrete_log::{
@@ -30,7 +34,6 @@ use schnorr_pok::partial::{
     Partial2PokPedersenCommitment, PartialPokDiscreteLog, PartialPokPedersenCommitment,
     PartialSchnorrResponse,
 };
-
 // Auth proof will prove a different relation for ct_amount and ct_asset_id.
 // ct_amount_1 = S[2] * sk_enc^{-1} + B * k_1
 // ct_asset_id_1 = S[3] * sk_enc^{-1} + B * k_2
@@ -1067,6 +1070,44 @@ mod serialization {
             }
         }
     }
+}
+
+/// Commitment to the new account `AccountState::new_given_randomness` builds. Rejects a `randomness`
+/// without `has_large_multiplicative_order`. The device computes it from the `randomness` and
+/// `rho_randomness` it derives and binds it to its auth proof.
+#[allow(clippy::too_many_arguments)]
+pub fn registration_account_commitment<G: AffineRepr>(
+    id: G::ScalarField,
+    pk_aff: G,
+    pk_enc: G,
+    asset_id: AssetId,
+    counter: polymesh_dart_common::NullifierSkGenCounter,
+    randomness: G::ScalarField,
+    rho_randomness: G::ScalarField,
+    poseidon_params: &Poseidon2Params<G::ScalarField>,
+    smooth_order: &[u64],
+    account_comm_key: impl AccountCommitmentKeyTrait<G>,
+) -> error::Result<AccountStateCommitment<G>> {
+    #[cfg(not(feature = "ignore_prover_input_sanitation"))]
+    if !has_large_multiplicative_order(randomness, smooth_order) {
+        return Err(Error::ProofGenerationError(
+            "randomness has small multiplicative order".to_string(),
+        ));
+    }
+    #[cfg(feature = "ignore_prover_input_sanitation")]
+    let _ = smooth_order;
+
+    AccountState::new_given_randomness(
+        id,
+        pk_aff,
+        pk_enc,
+        asset_id,
+        counter,
+        randomness,
+        rho_randomness,
+        poseidon_params,
+    )?
+    .commit(account_comm_key)
 }
 
 #[cfg(all(test, feature = "host_proofs"))]

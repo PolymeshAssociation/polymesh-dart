@@ -189,7 +189,7 @@ fn speculos_fee_register_topup_pay() {
         fee_account_state_from_pubkey_given_randomness(&pk, FEE_ASSET_ID, 1000, &randomness)
             .unwrap();
     let (protocol, request) =
-        FeeRegHostProtocol::init(&mut rng, &pk, &fee_state, IDENTITY).unwrap();
+        FeeRegHostProtocol::init(&mut rng, &pk, &fee_state, COUNTER, IDENTITY).unwrap();
     let data = dev.send(&full_apdu(INS_FEE_REG, &apdu_data(&request.encode())));
     let response = FeeAccountRegistrationDeviceResponse::decode(&mut &payload(&data)[..]).unwrap();
     let reg_proof = protocol.finish::<()>(&response).unwrap();

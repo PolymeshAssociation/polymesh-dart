@@ -307,7 +307,7 @@ impl AccountKeyPair {
             counter,
             randomness,
             rho_randomness,
-            params.params.clone(),
+            &params.params,
         )?;
         Ok((state.try_into()?, rho_randomness))
     }
