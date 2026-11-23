@@ -40,7 +40,7 @@ pub(crate) type BPAccountStateCommitment = bp_account::AccountStateCommitment<Pa
 pub type AssetCommitmentData =
     bp_leg::AssetData<PallasScalar, VestaScalar, PallasParameters, VestaParameters>;
 
-#[derive(Clone, Debug, Encode, Decode, DecodeWithMemTracking, PartialEq, Eq)]
+#[derive(Clone, Debug, Encode, Decode, DecodeWithMemTracking, TypeInfo, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum AccountStateUpdateAction {
     AccountAssetRegistration {
