@@ -40,10 +40,82 @@ pub(crate) type BPAccountStateCommitment = bp_account::AccountStateCommitment<Pa
 pub type AssetCommitmentData =
     bp_leg::AssetData<PallasScalar, VestaScalar, PallasParameters, VestaParameters>;
 
+#[derive(Clone, Debug, Encode, Decode, DecodeWithMemTracking, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub enum AccountStateUpdateAction {
+    AccountAssetRegistration {
+        account: AccountPublicKey,
+        asset_id: AssetId,
+        counter: NullifierSkGenCounter,
+    },
+    AssetMinting {
+        account: AccountPublicKey,
+        asset_id: AssetId,
+        nullifier: AccountStateNullifier,
+    },
+    SenderAffirmation {
+        nullifier: AccountStateNullifier,
+        leg_ref: LegRef,
+    },
+    ReceiverAffirmation {
+        nullifier: AccountStateNullifier,
+        leg_ref: LegRef,
+    },
+    SenderUpdateCounter {
+        nullifier: AccountStateNullifier,
+        leg_ref: LegRef,
+    },
+    ReceiverClaim {
+        nullifier: AccountStateNullifier,
+        leg_ref: LegRef,
+    },
+    SenderRevertAffirmation {
+        nullifier: AccountStateNullifier,
+        leg_ref: LegRef,
+    },
+    ReceiverRevertAffirmation {
+        nullifier: AccountStateNullifier,
+        leg_ref: LegRef,
+    },
+    InstantSenderAffirmation {
+        nullifier: AccountStateNullifier,
+        leg_ref: LegRef,
+    },
+    InstantReceiverAffirmation {
+        nullifier: AccountStateNullifier,
+        leg_ref: LegRef,
+    },
+}
+
+impl AccountStateUpdateAction {
+    /// Returns the nullifier if the update action contains one.
+    pub fn nullifier(&self) -> Option<AccountStateNullifier> {
+        match self {
+            AccountStateUpdateAction::AssetMinting { nullifier, .. } => Some(*nullifier),
+            AccountStateUpdateAction::SenderAffirmation { nullifier, .. } => Some(*nullifier),
+            AccountStateUpdateAction::ReceiverAffirmation { nullifier, .. } => Some(*nullifier),
+            AccountStateUpdateAction::SenderUpdateCounter { nullifier, .. } => Some(*nullifier),
+            AccountStateUpdateAction::ReceiverClaim { nullifier, .. } => Some(*nullifier),
+            AccountStateUpdateAction::SenderRevertAffirmation { nullifier, .. } => Some(*nullifier),
+            AccountStateUpdateAction::ReceiverRevertAffirmation { nullifier, .. } => {
+                Some(*nullifier)
+            }
+            AccountStateUpdateAction::InstantSenderAffirmation { nullifier, .. } => {
+                Some(*nullifier)
+            }
+            AccountStateUpdateAction::InstantReceiverAffirmation { nullifier, .. } => {
+                Some(*nullifier)
+            }
+            _ => None,
+        }
+    }
+}
+
 pub trait AccountStateUpdate {
     fn account_state_commitment(&self) -> AccountStateCommitment;
     fn nullifier(&self) -> AccountStateNullifier;
     fn root_block(&self) -> BlockNumber;
+    fn update_action(&self) -> AccountStateUpdateAction;
 }
 
 #[derive(Clone, Debug, Encode, Decode, DecodeWithMemTracking, PartialEq, Eq)]

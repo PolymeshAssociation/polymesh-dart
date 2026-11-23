@@ -78,6 +78,7 @@ macro_rules! with_balance {
         verifier_has_counter_decreased: $hcd:expr,
         state_method: $state_method:ident,
         device_affirmation_type: $DevAffType:expr,
+        update_action: $UpdateAction:ident,
     ) => {
         pub struct $HostProto<C: CurveTreeConfig = AccountTreeConfig> {
             protocol: $BPProto,
@@ -503,6 +504,12 @@ macro_rules! with_balance {
             fn root_block(&self) -> BlockNumber {
                 self.root_block
             }
+            fn update_action(&self) -> AccountStateUpdateAction {
+                AccountStateUpdateAction::$UpdateAction {
+                    nullifier: self.nullifier,
+                    leg_ref: self.leg_ref,
+                }
+            }
         }
     };
 }
@@ -521,6 +528,7 @@ macro_rules! no_balance {
         verifier_has_counter_decreased: $hcd:expr,
         state_method: $state_method:ident,
         device_affirmation_type: $DevAffType:expr,
+        update_action: $UpdateAction:ident,
     ) => {
         pub struct $HostProto<C: CurveTreeConfig = AccountTreeConfig> {
             protocol: $BPProto,
@@ -946,6 +954,12 @@ macro_rules! no_balance {
             fn root_block(&self) -> BlockNumber {
                 self.root_block
             }
+            fn update_action(&self) -> AccountStateUpdateAction {
+                AccountStateUpdateAction::$UpdateAction {
+                    nullifier: self.nullifier,
+                    leg_ref: self.leg_ref,
+                }
+            }
         }
     };
 }
@@ -961,6 +975,7 @@ with_balance! {
     verifier_has_counter_decreased: Some(false),
     state_method: get_sender_affirm_state,
     device_affirmation_type: DeviceAffirmationType::SenderAffirmation,
+    update_action: SenderAffirmation,
 }
 
 no_balance! {
@@ -973,6 +988,7 @@ no_balance! {
     verifier_has_counter_decreased: Some(false),
     state_method: get_receiver_affirm_state,
     device_affirmation_type: DeviceAffirmationType::ReceiverAffirmation,
+    update_action: ReceiverAffirmation,
 }
 
 with_balance! {
@@ -986,6 +1002,7 @@ with_balance! {
     verifier_has_counter_decreased: Some(true),
     state_method: get_state_for_claiming_received,
     device_affirmation_type: DeviceAffirmationType::ReceiverClaim,
+    update_action: ReceiverClaim,
 }
 
 with_balance! {
@@ -999,6 +1016,7 @@ with_balance! {
     verifier_has_counter_decreased: Some(true),
     state_method: get_state_for_reversing_send,
     device_affirmation_type: DeviceAffirmationType::SenderReversal,
+    update_action: SenderRevertAffirmation,
 }
 
 no_balance! {
@@ -1011,6 +1029,7 @@ no_balance! {
     verifier_has_counter_decreased: Some(true),
     state_method: get_state_for_decreasing_counter,
     device_affirmation_type: DeviceAffirmationType::SenderCounterUpdate,
+    update_action: SenderUpdateCounter,
 }
 
 no_balance! {
@@ -1023,6 +1042,7 @@ no_balance! {
     verifier_has_counter_decreased: Some(true),
     state_method: get_state_for_decreasing_counter,
     device_affirmation_type: DeviceAffirmationType::ReceiverReversal,
+    update_action: ReceiverRevertAffirmation,
 }
 
 with_balance! {
@@ -1036,6 +1056,7 @@ with_balance! {
     verifier_has_counter_decreased: None,
     state_method: get_instant_sender_affirm_state,
     device_affirmation_type: DeviceAffirmationType::InstantSenderAffirmation,
+    update_action: InstantSenderAffirmation,
 }
 
 with_balance! {
@@ -1049,4 +1070,5 @@ with_balance! {
     verifier_has_counter_decreased: None,
     state_method: get_instant_receiver_affirm_state,
     device_affirmation_type: DeviceAffirmationType::InstantReceiverAffirmation,
+    update_action: InstantReceiverAffirmation,
 }
