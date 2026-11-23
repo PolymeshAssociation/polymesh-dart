@@ -84,6 +84,9 @@ pub mod key_reg_split;
 pub mod mint_split;
 pub mod split_types;
 
+pub const BATCHED_PROOFS_CTX: &[u8] = b"polymesh-dart-batched";
+pub const INSTANT_SETTLEMENT_CTX: &[u8] = b"polymesh-dart-instant-settlement";
+
 pub const CONTEXT_SEPARATOR_LABEL: &[u8; 17] = b"context-separator";
 
 #[cfg(feature = "host_proofs")]
