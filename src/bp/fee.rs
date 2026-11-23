@@ -40,10 +40,41 @@ pub fn relayer_batch_proof_context(nullifier: &FeeAccountStateNullifier) -> Vec<
     (b"polymesh/dart/submission/v1".as_slice(), 1u8, nullifier).encode()
 }
 
+#[derive(Clone, Debug, Encode, Decode, DecodeWithMemTracking, TypeInfo, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub enum FeeAccountStateUpdateAction {
+    FeeAccountRegistration {
+        account: AccountPublicKey,
+        asset_id: AssetId,
+        amount: Balance,
+    },
+    FeeAccountTopup {
+        account: AccountPublicKey,
+        asset_id: AssetId,
+        amount: Balance,
+        nullifier: FeeAccountStateNullifier,
+    },
+    FeePayment {
+        asset_id: AssetId,
+        amount: Balance,
+        nullifier: FeeAccountStateNullifier,
+    },
+}
+
+impl FeeAccountStateUpdateAction {
+    /// Returns the nullifier associated with the update action, if any.
+    pub fn nullifier(&self) -> Option<&FeeAccountStateNullifier> {
+        match self {
+            FeeAccountStateUpdateAction::FeeAccountRegistration { .. } => None,
+            FeeAccountStateUpdateAction::FeeAccountTopup { nullifier, .. } => Some(nullifier),
+            FeeAccountStateUpdateAction::FeePayment { nullifier, .. } => Some(nullifier),
+        }
+    }
+}
+
 pub trait FeeAccountStateUpdate {
     fn account_state_commitment(&self) -> FeeAccountStateCommitment;
-    fn nullifier(&self) -> FeeAccountStateNullifier;
-    fn root_block(&self) -> BlockNumber;
+    fn update_action(&self) -> FeeAccountStateUpdateAction;
 }
 
 #[derive(Clone, Debug, Encode, Decode, DecodeWithMemTracking, PartialEq, Eq)]
@@ -404,6 +435,20 @@ impl<T: DartLimits> FeeAccountRegistrationProof<T> {
     }
 }
 
+impl<T: DartLimits> FeeAccountStateUpdate for FeeAccountRegistrationProof<T> {
+    fn account_state_commitment(&self) -> FeeAccountStateCommitment {
+        self.account_state_commitment
+    }
+
+    fn update_action(&self) -> FeeAccountStateUpdateAction {
+        FeeAccountStateUpdateAction::FeeAccountRegistration {
+            account: self.account,
+            asset_id: self.asset_id,
+            amount: self.amount,
+        }
+    }
+}
+
 /// A batch of Fee account registration proofs.
 #[derive(Clone, Encode, Decode, DecodeWithMemTracking, Debug, TypeInfo, PartialEq, Eq)]
 #[scale_info(skip_type_params(T))]
@@ -630,6 +675,30 @@ impl<
             rmc,
         )?;
         Ok(tuples)
+    }
+}
+
+impl<
+    T: DartLimits,
+    C: CurveTreeConfig<
+            F0 = <PallasParameters as CurveConfig>::ScalarField,
+            F1 = <VestaParameters as CurveConfig>::ScalarField,
+            P0 = PallasParameters,
+            P1 = VestaParameters,
+        >,
+> FeeAccountStateUpdate for FeeAccountTopupProof<T, C>
+{
+    fn account_state_commitment(&self) -> FeeAccountStateCommitment {
+        self.updated_account_state_commitment
+    }
+
+    fn update_action(&self) -> FeeAccountStateUpdateAction {
+        FeeAccountStateUpdateAction::FeeAccountTopup {
+            account: self.account,
+            asset_id: self.asset_id,
+            amount: self.amount,
+            nullifier: self.nullifier,
+        }
     }
 }
 
@@ -1129,6 +1198,29 @@ impl<
         )?;
 
         Ok(())
+    }
+}
+
+impl<
+    T: DartLimits,
+    C: CurveTreeConfig<
+            F0 = <PallasParameters as CurveConfig>::ScalarField,
+            F1 = <VestaParameters as CurveConfig>::ScalarField,
+            P0 = PallasParameters,
+            P1 = VestaParameters,
+        >,
+> FeeAccountStateUpdate for FeeAccountPaymentProof<T, C>
+{
+    fn account_state_commitment(&self) -> FeeAccountStateCommitment {
+        self.updated_account_state_commitment
+    }
+
+    fn update_action(&self) -> FeeAccountStateUpdateAction {
+        FeeAccountStateUpdateAction::FeePayment {
+            asset_id: self.asset_id,
+            amount: self.amount,
+            nullifier: self.nullifier,
+        }
     }
 }
 

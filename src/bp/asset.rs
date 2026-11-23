@@ -392,4 +392,13 @@ impl<T: DartLimits, C: CurveTreeConfig> AccountStateUpdate for AssetMintingProof
     fn root_block(&self) -> BlockNumber {
         self.root_block
     }
+
+    fn update_action(&self) -> AccountStateUpdateAction {
+        AccountStateUpdateAction::AssetMinting {
+            account: self.pk,
+            asset_id: self.asset_id,
+            amount: self.amount,
+            nullifier: self.nullifier,
+        }
+    }
 }
