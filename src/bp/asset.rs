@@ -397,6 +397,7 @@ impl<T: DartLimits, C: CurveTreeConfig> AccountStateUpdate for AssetMintingProof
         AccountStateUpdateAction::AssetMinting {
             account: self.pk,
             asset_id: self.asset_id,
+            amount: self.amount,
             nullifier: self.nullifier,
         }
     }

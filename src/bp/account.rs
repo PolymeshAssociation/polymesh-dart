@@ -51,6 +51,7 @@ pub enum AccountStateUpdateAction {
     AssetMinting {
         account: AccountPublicKey,
         asset_id: AssetId,
+        amount: Balance,
         nullifier: AccountStateNullifier,
     },
     SenderAffirmation {
