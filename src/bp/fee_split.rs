@@ -1,3 +1,4 @@
+use ark_std::string::ToString;
 use bulletproofs::r1cs::ConstraintSystem;
 use rand_core::{CryptoRng, RngCore};
 
