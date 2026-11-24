@@ -500,7 +500,7 @@ mod tests {
                 pk_enc.0,
                 asset_id,
                 counter,
-                poseidon_params.clone(),
+                poseidon_params,
             )
             .unwrap();
             let account_comm = account.commit(account_comm_key.clone()).unwrap();

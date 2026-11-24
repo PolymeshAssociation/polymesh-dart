@@ -185,7 +185,7 @@ where
         pk_enc: G,
         asset_id: AssetId,
         counter: NullifierSkGenCounter,
-        poseidon_config: Poseidon2Params<G::ScalarField>,
+        poseidon_config: &Poseidon2Params<G::ScalarField>,
     ) -> Result<(Self, G::ScalarField)> {
         let randomness = G::ScalarField::rand(rng);
         let rho_randomness = G::ScalarField::rand(rng);
@@ -211,7 +211,7 @@ where
         counter: NullifierSkGenCounter,
         randomness: G::ScalarField,
         rho_randomness: G::ScalarField,
-        poseidon_config: Poseidon2Params<G::ScalarField>,
+        poseidon_config: &Poseidon2Params<G::ScalarField>,
     ) -> Result<Self> {
         #[cfg(not(feature = "ignore_prover_input_sanitation"))]
         if asset_id > MAX_ASSET_ID {

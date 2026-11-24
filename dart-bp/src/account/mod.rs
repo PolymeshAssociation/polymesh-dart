@@ -1,7 +1,7 @@
 pub mod common;
 pub mod mint;
 pub mod pob;
-pub mod state;
+pub use crate::auth_proofs::account_state as state;
 pub mod state_transition;
 pub mod state_transition_multi;
 /// PoC: chunked MAST proof for evaluating the verifier-first chunking optimization.

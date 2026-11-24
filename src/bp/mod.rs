@@ -1,7 +1,6 @@
 use ark_ec::AffineRepr;
 #[cfg(feature = "host_proofs")]
 use ark_ec::{CurveConfig, CurveGroup};
-#[cfg(feature = "host_proofs")]
 use ark_ff::{
     PrimeField,
     field_hashers::{DefaultFieldHasher, HashToField},
@@ -11,7 +10,6 @@ use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 #[cfg(feature = "host_proofs")]
 use ark_std::vec::Vec;
 
-#[cfg(feature = "host_proofs")]
 use blake2::Blake2b512;
 use bounded_collections::Get;
 #[cfg(feature = "host_proofs")]
@@ -21,7 +19,7 @@ use codec::{Decode, DecodeWithMemTracking, Encode};
 use digest::Digest;
 #[cfg(feature = "host_proofs")]
 use polymesh_dart_bp::poseidon_impls::poseidon_2::{
-    Poseidon2Params, params::pallas::get_poseidon2_params_for_2_1_hashing,
+    Poseidon2Params, params::pallas::new_poseidon2_params_for_2_1_hashing,
 };
 use polymesh_dart_common::{
     MAX_ACCOUNT_ASSET_REG_PROOFS, MAX_ASSET_AUDITORS, MAX_ASSET_ENC_KEYS, MAX_ASSET_MEDIATORS,
@@ -254,9 +252,7 @@ pub type VestaA = ark_vesta::Affine;
 #[cfg(feature = "host_proofs")]
 pub type VestaScalar = <VestaA as AffineRepr>::ScalarField;
 
-#[cfg(feature = "host_proofs")]
 pub const ACCOUNT_IDENTITY_LABEL: &[u8; 16] = b"account-identity";
-#[cfg(feature = "host_proofs")]
 pub(crate) fn hash_identity<F: PrimeField>(did: &[u8]) -> F {
     let hasher = <DefaultFieldHasher<Blake2b512> as HashToField<F>>::new(ACCOUNT_IDENTITY_LABEL);
     let r = hasher.hash_to_field::<1>(&did);
@@ -382,7 +378,7 @@ pub struct PoseidonParameters {
 impl PoseidonParameters {
     pub fn new() -> Result<Self, Error> {
         Ok(Self {
-            params: get_poseidon2_params_for_2_1_hashing()?,
+            params: new_poseidon2_params_for_2_1_hashing()?,
         })
     }
 }
@@ -568,12 +564,21 @@ mod tests {
         SenderCounterUpdateHostProtocol, SenderRevertAffirmationHostProtocol,
     };
     use crate::auth_proofs::{
-        create_affirmation_auth_proof, create_fee_account_auth_proof,
-        create_fee_account_registration_auth_proof, create_fee_payment_auth_proof,
+        AuthSigningKey, AuthSigningKeys, create_affirmation_auth_proof,
+        create_fee_account_auth_proof, create_fee_account_registration_auth_proof,
+        create_fee_account_registration_auth_proof_given_randomness, create_fee_payment_auth_proof,
         create_mint_auth_proof, create_registration_auth_proof,
+        create_registration_auth_proof_given_randomness, derive_account_randomness,
+        derive_fee_account_randomness,
     };
     use crate::curve_tree::ProverCurveTree;
     use crate::fee_split::{FeePaymentHostProtocol, FeeRegHostProtocol, FeeTopupHostProtocol};
+    use crate::split_types::{
+        AccountRandomnessDeviceRequest, AccountRandomnessDeviceResponse,
+        FeeAccountRandomnessDeviceResponse,
+    };
+    use ark_std::UniformRand;
+    use polymesh_dart_bp::auth_proofs::keys::MasterSeed as BPMasterSeed;
 
     #[test]
     fn context_composition_preserves_operation_binding() {
@@ -593,6 +598,10 @@ mod tests {
             compose_ctx(b"batch-b", b"operation")
         );
     }
+    use crate::device::{
+        DeviceGenerators, account_state_from_pubkeys, account_state_from_pubkeys_given_randomness,
+        fee_account_state_from_pubkey_given_randomness,
+    };
     use crate::key_distribution_proof::KeyDistributionProof;
     use crate::mint_split::MintHostProtocol;
     use crate::split_types::{AffirmationDeviceRequest, AffirmationDeviceResponse};
@@ -1108,11 +1117,17 @@ mod tests {
             FeeAccountAssetState::new(&mut rng, &keys.acct.public, asset_id, balance).unwrap();
 
         let (protocol, device_request) =
-            FeeRegHostProtocol::init(&mut rng, &keys.acct.public, &account_state, ctx).unwrap();
+            FeeRegHostProtocol::init(&mut rng, &keys.acct.public, &account_state, 0, ctx).unwrap();
 
-        let device_response = create_fee_account_registration_auth_proof(
+        let device_response = create_fee_account_registration_auth_proof_given_randomness(
             &mut rng,
             &(&keys.acct).into(),
+            account_state.current_state.initial_rho.decode().unwrap(),
+            account_state
+                .current_state
+                .initial_randomness
+                .decode()
+                .unwrap(),
             &device_request,
             &crate::device::DeviceGenerators::from_host(),
         )
@@ -1320,17 +1335,167 @@ mod tests {
         .unwrap();
 
         let gens = crate::device::DeviceGenerators::from_host();
-        let device_response =
-            create_registration_auth_proof(&mut rng, &(&keys).into(), &device_request, &gens)
-                .unwrap();
+        let device_response = create_registration_auth_proof_given_randomness(
+            &mut rng,
+            &(&keys).into(),
+            account_state.bp_current_state().unwrap().0.randomness(),
+            rho_randomness,
+            &device_request,
+            &gens,
+        )
+        .unwrap();
 
         let proof: AccountAssetRegistrationProof<()> = protocol
-            .finish(&mut rng, &device_response, counter, tree_params)
+            .finish(&mut rng, &device_response, tree_params)
             .unwrap();
 
         proof
             .verify(ctx, tree_params, &mut rng, &AssetPkTLookup::default())
             .unwrap();
+    }
+
+    #[test]
+    fn account_reg_split_binds_device_account() {
+        // A split registration proof verifies only for the account the device computes from its seed,
+        // not for a commitment the host registers with other randomness.
+
+        let mut rng = rand::thread_rng();
+        let ctx = b"test-account-reg-split";
+        let asset_id: AssetId = 1;
+        let counter: NullifierSkGenCounter = 0;
+        let tree_params = AccountTreeConfig::parameters();
+        let seed = BPMasterSeed::new(b"account-reg-split-seed".repeat(2));
+        let keys = AuthSigningKeys::from_master_seed(&seed, b"", 0).unwrap();
+        let pk_aff = (dart_gens().sig_key_gen() * keys.sk_aff).into_affine();
+        let pk_enc = (dart_gens().enc_key_gen() * keys.sk_enc).into_affine();
+        let device_randomness = derive_account_randomness(
+            &seed,
+            b"",
+            0,
+            &AccountRandomnessDeviceRequest { asset_id, counter },
+        )
+        .unwrap();
+
+        let prove_and_verify = |account_state: &AccountAssetState, rho_randomness| {
+            let mut rng = rand::thread_rng();
+            let (protocol, device_request) = AccountRegHostProtocol::init(
+                &mut rng,
+                account_state,
+                rho_randomness,
+                counter,
+                ctx,
+                None,
+            )
+            .unwrap();
+            let device_response = create_registration_auth_proof(
+                &mut rng,
+                &keys,
+                &seed,
+                b"",
+                0,
+                &device_request,
+                &DeviceGenerators::from_host(),
+            )
+            .unwrap();
+            let proof: AccountAssetRegistrationProof<()> = protocol
+                .finish(&mut rng, &device_response, tree_params)
+                .unwrap();
+            proof.verify(ctx, tree_params, &mut rng, &AssetPkTLookup::default())
+        };
+
+        let (seed_state, seed_rho_randomness) = account_state_from_pubkeys_given_randomness(
+            pk_aff,
+            pk_enc,
+            asset_id,
+            counter,
+            ctx,
+            &device_randomness,
+        )
+        .unwrap();
+        prove_and_verify(&seed_state, seed_rho_randomness).unwrap();
+
+        // Host-chosen randomness.
+        let (host_state, host_rho_randomness) =
+            account_state_from_pubkeys(&mut rng, pk_aff, pk_enc, asset_id, counter, ctx).unwrap();
+        assert!(prove_and_verify(&host_state, host_rho_randomness).is_err());
+
+        // Seed randomness with a host-chosen `rho_randomness`.
+        let host_rho = AccountRandomnessDeviceResponse {
+            randomness: device_randomness.randomness.clone(),
+            rho_randomness: WrappedCanonical::wrap(&PallasScalar::rand(&mut rng)).unwrap(),
+        };
+        let (host_rho_state, host_rho_randomness) = account_state_from_pubkeys_given_randomness(
+            pk_aff, pk_enc, asset_id, counter, ctx, &host_rho,
+        )
+        .unwrap();
+        assert!(prove_and_verify(&host_rho_state, host_rho_randomness).is_err());
+    }
+
+    #[test]
+    fn fee_reg_split_binds_device_account() {
+        // A split fee registration proof verifies only for the fee account the device computes from
+        // its seed, not for a commitment the host registers with other randomness.
+
+        let ctx = b"test-fee-account-reg-split";
+        let asset_id: AssetId = 0;
+        let balance: Balance = 1000;
+        let counter: NullifierSkGenCounter = 0;
+        let seed = BPMasterSeed::new(b"fee-reg-split-seed".repeat(2));
+        let key = AuthSigningKey {
+            sk: AuthSigningKeys::from_master_seed(&seed, b"", 0)
+                .unwrap()
+                .sk_aff,
+        };
+        let pk = AccountPublicKey::from_affine((dart_gens().sig_key_gen() * key.sk).into_affine())
+            .unwrap();
+        let device_randomness = derive_fee_account_randomness(
+            &seed,
+            b"",
+            0,
+            &AccountRandomnessDeviceRequest { asset_id, counter },
+        )
+        .unwrap();
+
+        let prove_and_verify = |randomness: &FeeAccountRandomnessDeviceResponse| {
+            let mut rng = rand::thread_rng();
+            let account_state =
+                fee_account_state_from_pubkey_given_randomness(&pk, asset_id, balance, randomness)
+                    .unwrap();
+            let (protocol, device_request) =
+                FeeRegHostProtocol::init(&mut rng, &pk, &account_state, counter, ctx).unwrap();
+            let device_response = create_fee_account_registration_auth_proof(
+                &mut rng,
+                &key,
+                &seed,
+                b"",
+                0,
+                &device_request,
+                &DeviceGenerators::from_host(),
+            )
+            .unwrap();
+            protocol.finish::<()>(&device_response).unwrap().verify(ctx)
+        };
+
+        prove_and_verify(&device_randomness).unwrap();
+
+        // Host-chosen randomness, or one of the seed's two values replaced.
+        let host_value = || WrappedCanonical::wrap(&PallasScalar::rand(&mut rand::thread_rng()));
+        for randomness in [
+            FeeAccountRandomnessDeviceResponse {
+                initial_rho: host_value().unwrap(),
+                initial_randomness: host_value().unwrap(),
+            },
+            FeeAccountRandomnessDeviceResponse {
+                initial_rho: device_randomness.initial_rho.clone(),
+                initial_randomness: host_value().unwrap(),
+            },
+            FeeAccountRandomnessDeviceResponse {
+                initial_rho: host_value().unwrap(),
+                initial_randomness: device_randomness.initial_randomness.clone(),
+            },
+        ] {
+            assert!(prove_and_verify(&randomness).is_err());
+        }
     }
 
     #[test]
@@ -1370,18 +1535,30 @@ mod tests {
         .unwrap();
 
         let gens = crate::device::DeviceGenerators::from_host();
-        let device_response1 =
-            create_registration_auth_proof(&mut rng, &(&keys1).into(), &device_request1, &gens)
-                .unwrap();
-        let device_response2 =
-            create_registration_auth_proof(&mut rng, &(&keys2).into(), &device_request2, &gens)
-                .unwrap();
+        let device_response1 = create_registration_auth_proof_given_randomness(
+            &mut rng,
+            &(&keys1).into(),
+            account_state1.bp_current_state().unwrap().0.randomness(),
+            rho_randomness1,
+            &device_request1,
+            &gens,
+        )
+        .unwrap();
+        let device_response2 = create_registration_auth_proof_given_randomness(
+            &mut rng,
+            &(&keys2).into(),
+            account_state2.bp_current_state().unwrap().0.randomness(),
+            rho_randomness2,
+            &device_request2,
+            &gens,
+        )
+        .unwrap();
 
         let proof1 = protocol1
-            .finish(&mut rng, &device_response1, counter, tree_params)
+            .finish(&mut rng, &device_response1, tree_params)
             .unwrap();
         let proof2 = protocol2
-            .finish(&mut rng, &device_response2, counter, tree_params)
+            .finish(&mut rng, &device_response2, tree_params)
             .unwrap();
 
         let batched: BatchedAccountAssetRegistrationProof = BatchedAccountAssetRegistrationProof {

@@ -142,17 +142,6 @@ impl Device {
         }
     }
 
-    /// Builds a device holding `keys`, loaded by the caller from the target's own key storage.
-    /// Without a master seed it rejects account randomness requests.
-    #[cfg(not(feature = "std"))]
-    pub fn with_keys(keys: AuthSigningKeys) -> Self {
-        Self {
-            generators: None,
-            seed: None,
-            keys: Some(keys),
-        }
-    }
-
     /// Builds a device holding `seed`, loaded by the caller from the target's own key storage.
     #[cfg(not(feature = "std"))]
     pub fn with_master_seed(seed: BPMasterSeed) -> Result<Self, Error> {
@@ -217,7 +206,15 @@ impl Device {
             DeviceRequest::RegistrationProof(request) => {
                 let g = self.gens()?;
                 let keys = self.signing_keys()?;
-                let response = create_registration_auth_proof(rng, keys, &request, &g)?;
+                let response = create_registration_auth_proof(
+                    rng,
+                    keys,
+                    self.master_seed()?,
+                    SEED_PATH,
+                    SEED_COUNTER,
+                    &request,
+                    &g,
+                )?;
                 Ok(DeviceResponse::Registration(response))
             }
             DeviceRequest::MintProof(request) => {
@@ -235,7 +232,15 @@ impl Device {
             DeviceRequest::FeeRegistrationProof(request) => {
                 let g = self.gens()?;
                 let key = self.fee_signing_key()?;
-                let response = create_fee_account_registration_auth_proof(rng, &key, &request, &g)?;
+                let response = create_fee_account_registration_auth_proof(
+                    rng,
+                    &key,
+                    self.master_seed()?,
+                    SEED_PATH,
+                    SEED_COUNTER,
+                    &request,
+                    &g,
+                )?;
                 Ok(DeviceResponse::FeeRegistration(response))
             }
             DeviceRequest::FeeTopupProof(request) => {
@@ -467,7 +472,7 @@ pub fn account_state_from_pubkeys<R: CryptoRngCore>(
         pk_enc,
         asset_id,
         counter,
-        poseidon_params().params.clone(),
+        &poseidon_params().params,
     )?;
     let current_state: AccountState = bp_state.try_into()?;
     Ok((
@@ -499,7 +504,7 @@ pub fn account_state_from_pubkeys_given_randomness(
         counter,
         randomness.randomness.decode()?,
         rho_randomness,
-        poseidon_params().params.clone(),
+        &poseidon_params().params,
     )?;
     let current_state: AccountState = bp_state.try_into()?;
     Ok((

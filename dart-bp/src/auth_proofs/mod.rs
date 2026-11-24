@@ -1,5 +1,17 @@
+//! Proofs the device creates in W2/W3 split proving. The device holds `sk`, `sk_enc` and the master
+//! seed, the host holds every other opening of the account state. The host can learn and leak every
+//! state, nullifier and balance of the account and can refuse to prove. It can't create a proof
+//! without the device, use a device proof for another operation, get a leg approved with a different
+//! amount or asset-id than the device was shown, leave a term only it can open in a new state, or
+//! choose the registration randomness. The device blocks these by absorbing `DeviceTxnType`,
+//! checking the leg plaintexts and the new state openings, and deriving the registration randomness
+//! itself, all with its own copy of the generators. These checks are prover-side, except the anchor
+//! of the new state randomness and the registration commitment the device computes, which the
+//! verifier checks. See "Host trust model" in `docs/1.md`.
+
 pub mod account;
 pub mod account_comm_key;
+pub mod account_state;
 pub mod fee_account;
 pub mod helpers;
 pub mod keys;
@@ -8,7 +20,7 @@ pub mod transparent;
 
 use crate::{
     ACCOUNT_COMMITMENT_LABEL, NONCE_LABEL, PK_ENC_LABEL, PK_LABEL, TXN_CHALLENGE_LABEL, dst,
-    error::Result,
+    error::{Error, Result},
 };
 use ark_ec::AffineRepr;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
@@ -217,17 +229,56 @@ impl<G: AffineRepr> AuthProofOnlySks<G> {
         sk_aff_gen: &G,
         sk_enc_gen: &G,
     ) -> Result<Self> {
+        if let DeviceTxnType::AccountRegistration { .. } = txn_type {
+            return Err(Error::ProofGenerationError(
+                MISSING_ACCOUNT_COMMITMENT.into(),
+            ));
+        }
         let mut transcript = MerlinTranscript::new(AUTH_TXN_LABEL);
+        add_to_transcript!(transcript, NONCE_LABEL, nonce);
+        Self::new_with_given_transcript(
+            rng, sk_aff, sk_enc, pk_aff, pk_enc, txn_type, sk_aff_gen, sk_enc_gen, transcript,
+        )
+    }
 
+    /// Same as `Self::new` but also binds `account_commitment`, the commitment the device computed.
+    pub fn new_with_account_commitment<R: CryptoRngCore>(
+        rng: &mut R,
+        sk_aff: G::ScalarField,
+        sk_enc: G::ScalarField,
+        pk_aff: G,
+        pk_enc: G,
+        account_commitment: &G,
+        nonce: &[u8],
+        txn_type: &DeviceTxnType,
+        sk_aff_gen: &G,
+        sk_enc_gen: &G,
+    ) -> Result<Self> {
+        let mut transcript = MerlinTranscript::new(AUTH_TXN_LABEL);
         add_to_transcript!(
             transcript,
             NONCE_LABEL,
             nonce,
-            PK_LABEL,
-            pk_aff,
-            PK_ENC_LABEL,
-            pk_enc,
+            ACCOUNT_COMMITMENT_LABEL,
+            account_commitment
         );
+        Self::new_with_given_transcript(
+            rng, sk_aff, sk_enc, pk_aff, pk_enc, txn_type, sk_aff_gen, sk_enc_gen, transcript,
+        )
+    }
+
+    fn new_with_given_transcript<R: CryptoRngCore>(
+        rng: &mut R,
+        sk_aff: G::ScalarField,
+        sk_enc: G::ScalarField,
+        pk_aff: G,
+        pk_enc: G,
+        txn_type: &DeviceTxnType,
+        sk_aff_gen: &G,
+        sk_enc_gen: &G,
+        mut transcript: MerlinTranscript,
+    ) -> Result<Self> {
+        add_to_transcript!(transcript, PK_LABEL, pk_aff, PK_ENC_LABEL, pk_enc);
         txn_type.add_to_transcript(&mut transcript)?;
 
         let proto = AuthProofOnlySksProtocol::init(
@@ -255,17 +306,54 @@ impl<G: AffineRepr> AuthProofOnlySks<G> {
         sk_enc_gen: &G,
         rmc: Option<&mut RandomizedMultChecker<G>>,
     ) -> Result<()> {
+        if let DeviceTxnType::AccountRegistration { .. } = txn_type {
+            return Err(Error::ProofVerificationError(
+                MISSING_ACCOUNT_COMMITMENT.into(),
+            ));
+        }
         let mut transcript = MerlinTranscript::new(AUTH_TXN_LABEL);
+        add_to_transcript!(transcript, NONCE_LABEL, nonce);
+        self.verify_with_given_transcript(
+            pk_aff, pk_enc, txn_type, sk_aff_gen, sk_enc_gen, transcript, rmc,
+        )
+    }
 
+    /// Verifies a proof created by `Self::new_with_account_commitment`.
+    pub fn verify_with_account_commitment(
+        &self,
+        pk_aff: G,
+        pk_enc: G,
+        account_commitment: &G,
+        nonce: &[u8],
+        txn_type: &DeviceTxnType,
+        sk_aff_gen: &G,
+        sk_enc_gen: &G,
+        rmc: Option<&mut RandomizedMultChecker<G>>,
+    ) -> Result<()> {
+        let mut transcript = MerlinTranscript::new(AUTH_TXN_LABEL);
         add_to_transcript!(
             transcript,
             NONCE_LABEL,
             nonce,
-            PK_LABEL,
-            pk_aff,
-            PK_ENC_LABEL,
-            pk_enc,
+            ACCOUNT_COMMITMENT_LABEL,
+            account_commitment
         );
+        self.verify_with_given_transcript(
+            pk_aff, pk_enc, txn_type, sk_aff_gen, sk_enc_gen, transcript, rmc,
+        )
+    }
+
+    fn verify_with_given_transcript(
+        &self,
+        pk_aff: G,
+        pk_enc: G,
+        txn_type: &DeviceTxnType,
+        sk_aff_gen: &G,
+        sk_enc_gen: &G,
+        mut transcript: MerlinTranscript,
+        rmc: Option<&mut RandomizedMultChecker<G>>,
+    ) -> Result<()> {
+        add_to_transcript!(transcript, PK_LABEL, pk_aff, PK_ENC_LABEL, pk_enc);
         txn_type.add_to_transcript(&mut transcript)?;
 
         self.challenge_contribution(&pk_aff, &pk_enc, sk_aff_gen, sk_enc_gen, &mut transcript)?;
@@ -322,6 +410,8 @@ impl<G: AffineRepr> AuthProofOnlySks<G> {
     }
 }
 
+const MISSING_ACCOUNT_COMMITMENT: &str = "Registration auth proof must bind the account commitment";
+
 impl<G: AffineRepr> AuthProofOnlySkProtocol<G> {
     pub fn init<R: CryptoRngCore>(
         rng: &mut R,
@@ -351,6 +441,11 @@ impl<G: AffineRepr> AuthProofOnlySk<G> {
         txn_type: &DeviceTxnType,
         sk_gen: &G,
     ) -> Result<Self> {
+        if let DeviceTxnType::FeeAccountRegistration { .. } = txn_type {
+            return Err(Error::ProofGenerationError(
+                MISSING_ACCOUNT_COMMITMENT.into(),
+            ));
+        }
         let mut transcript = MerlinTranscript::new(AUTH_TXN_LABEL);
         add_to_transcript!(transcript, NONCE_LABEL, nonce);
         Self::new_with_given_transcript(rng, sk, pk, txn_type, sk_gen, transcript)
@@ -399,6 +494,11 @@ impl<G: AffineRepr> AuthProofOnlySk<G> {
         sk_gen: &G,
         rmc: Option<&mut RandomizedMultChecker<G>>,
     ) -> Result<()> {
+        if let DeviceTxnType::FeeAccountRegistration { .. } = txn_type {
+            return Err(Error::ProofVerificationError(
+                MISSING_ACCOUNT_COMMITMENT.into(),
+            ));
+        }
         let mut transcript = MerlinTranscript::new(AUTH_TXN_LABEL);
         add_to_transcript!(transcript, NONCE_LABEL, nonce);
         self.verify_with_given_transcript(pk, txn_type, sk_gen, transcript, rmc)
@@ -506,61 +606,84 @@ pub mod tests {
 
         // Proof done by device
         let nonce = b"test-nonce";
+        let txn_type = DeviceTxnType::AccountRegistration { asset_id: 1 };
+        let account_commitment = (account_comm_key.sk_gen() * Fr::rand(&mut rng)).into_affine();
+        let other_commitment = (account_comm_key.sk_gen() * Fr::rand(&mut rng)).into_affine();
 
-        let proof = AuthProofOnlySks::new(
+        let proof = AuthProofOnlySks::new_with_account_commitment(
             &mut rng,
             sk_aff.0,
             sk_enc.0,
             pk_aff.0,
             pk_enc.0,
+            &account_commitment,
             nonce,
-            &DeviceTxnType::AccountRegistration { asset_id: 1 },
+            &txn_type,
             &account_comm_key.sk_gen(),
             &account_comm_key.sk_enc_gen(),
         )
         .unwrap();
 
-        proof
-            .verify(
+        let verify = |commitment: &PallasA, txn_type: &DeviceTxnType| {
+            proof.verify_with_account_commitment(
                 pk_aff.0,
                 pk_enc.0,
+                commitment,
                 nonce,
-                &DeviceTxnType::AccountRegistration { asset_id: 1 },
+                txn_type,
                 &account_comm_key.sk_gen(),
                 &account_comm_key.sk_enc_gen(),
                 None,
             )
-            .unwrap();
+        };
 
+        verify(&account_commitment, &txn_type).unwrap();
+        assert!(verify(&other_commitment, &txn_type).is_err());
+        assert!(
+            verify(
+                &account_commitment,
+                &DeviceTxnType::Mint {
+                    asset_id: 1,
+                    amount: 10,
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            verify(
+                &account_commitment,
+                &DeviceTxnType::AccountRegistration { asset_id: 2 }
+            )
+            .is_err()
+        );
+
+        // Without the account commitment, registration is rejected on both sides
         assert!(
             proof
                 .verify(
                     pk_aff.0,
                     pk_enc.0,
                     nonce,
-                    &DeviceTxnType::Mint {
-                        asset_id: 1,
-                        amount: 10,
-                    },
+                    &txn_type,
                     &account_comm_key.sk_gen(),
                     &account_comm_key.sk_enc_gen(),
                     None,
                 )
                 .is_err()
         );
-
         assert!(
-            proof
-                .verify(
-                    pk_aff.0,
-                    pk_enc.0,
-                    nonce,
-                    &DeviceTxnType::AccountRegistration { asset_id: 2 },
-                    &account_comm_key.sk_gen(),
-                    &account_comm_key.sk_enc_gen(),
-                    None,
-                )
-                .is_err()
+            AuthProofOnlySks::new(
+                &mut rng,
+                sk_aff.0,
+                sk_enc.0,
+                pk_aff.0,
+                pk_enc.0,
+                nonce,
+                &txn_type,
+                &account_comm_key.sk_gen(),
+                &account_comm_key.sk_enc_gen(),
+            )
+            .is_err()
         );
     }
 
