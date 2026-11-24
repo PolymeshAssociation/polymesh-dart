@@ -420,14 +420,8 @@ impl DartUserAccountInner {
         // Create the mediator affirmation proof. A leg with a revealed asset-id has no mediator
         // entry, so the mediator proves knowledge of its affirmation key instead.
         log::info!("Mediator generate affirmation proof");
-        let proof = if leg_data.enc.is_asset_id_revealed()? {
-            MediatorAffirmationProof::new_revealed(rng, leg_ref, &self.keys, 0, accept)?
-        } else {
-            let med_enc = leg_data.enc.mediator_encryption(0).map_err(|_| {
-                anyhow!("Failed to get mediator encryption for mediator affirmation")
-            })?;
-            MediatorAffirmationProof::new(rng, leg_ref, &med_enc, &self.keys, 0, accept)?
-        };
+        let proof =
+            MediatorAffirmationProof::new(rng, leg_ref, &leg_data.enc, &self.keys, 0, accept)?;
         log::info!("Mediator affirms");
         chain.mediator_affirmation(&self.address, proof)?;
         Ok(())
@@ -1135,33 +1129,18 @@ impl DartSettlementLeg {
 
         // Verify the proof. A leg with a revealed asset-id has no mediator entry, so the
         // affirmation is checked against the asset's registered mediator key.
-        if self.enc.is_asset_id_revealed()? {
-            let asset_id = self
-                .enc
-                .decode()?
-                .asset_id()
-                .ok_or_else(|| anyhow!("Revealed asset-id leg must have a public asset_id"))?;
-            let med_keys = asset_lookup
-                .get(&asset_id)
-                .ok_or_else(|| anyhow!("Asset {} not found", asset_id))?
-                .mediators
-                .iter()
-                .copied()
-                .collect::<Vec<_>>();
-            let mediator_pk = med_keys
-                .get(mediator_id as usize)
-                .ok_or_else(|| anyhow!("Invalid mediator key index for this leg"))?;
-            proof
-                .verify_revealed(mediator_pk)
-                .context("Invalid mediator affirmation proof")?;
-        } else {
-            let med_enc = self.enc.mediator_encryption(mediator_id).map_err(|_| {
-                anyhow!("Failed to get mediator encryption for mediator affirmation")
-            })?;
-            proof
-                .verify(&med_enc)
-                .context("Invalid mediator affirmation proof")?;
-        }
+        proof
+            .verify(&self.enc, |asset_id, id| {
+                asset_lookup
+                    .get(&asset_id)
+                    .ok_or(Error::AssetNotFound(asset_id))?
+                    .mediators
+                    .iter()
+                    .nth(id as usize)
+                    .copied()
+                    .ok_or(Error::MediatorNotFound(id))
+            })
+            .context("Invalid mediator affirmation proof")?;
 
         // Update the leg's mediator status based on the proof.
         *mediator_status = new_status;

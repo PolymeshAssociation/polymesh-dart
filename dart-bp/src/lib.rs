@@ -59,6 +59,7 @@ pub const ID_LABEL: &'static [u8; 2] = b"id";
 pub const LEG_ENC_LABEL: &'static [u8; 7] = b"leg_enc";
 pub const ASSET_KEY_COUNTS_LABEL: &'static [u8; 16] = b"asset_key_counts";
 pub const PARTY_EPH_PK_LABEL: &'static [u8; 12] = b"party_eph_pk";
+pub const ENC_KEYS_EPH_PK_LABEL: &'static [u8; 15] = b"enc_keys_eph_pk";
 pub const LEG_ACTION_LABEL: &'static [u8; 10] = b"leg_action";
 pub const RE_RANDOMIZED_PATH_LABEL: &'static [u8; 18] = b"re_randomized_path";
 pub const ROOT_LABEL: &'static [u8; 4] = b"root";

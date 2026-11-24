@@ -91,8 +91,8 @@ fn verify_v1_mediator_encryption() {
     med_enc.decode().unwrap();
 }
 
-/// Create a leg and return the encryption of mediator's affirmation public key and the affirmation keypair
-fn mediator_proof_inputs() -> (MediatorEncryption, AccountKeys) {
+/// Create a leg and return its encryption and the mediator's keys
+fn mediator_proof_inputs() -> (LegEncrypted, AccountKeys) {
     let mut rng = default_rng();
     let sender_keys = alice_keys();
     let receiver_keys = bob_keys();
@@ -116,18 +116,17 @@ fn mediator_proof_inputs() -> (MediatorEncryption, AccountKeys) {
             vec![],
         )
         .unwrap();
-    let med_enc = leg_enc.mediator_encryption(0).unwrap().clone();
-    (med_enc, mediator_keys)
+    (leg_enc, mediator_keys)
 }
 
 pub fn gen_mediator_proof() {
     let mut rng = default_rng();
-    let (med_enc, mediator_keys) = mediator_proof_inputs();
+    let (leg_enc, mediator_keys) = mediator_proof_inputs();
     let leg_ref = LegRef::new(SettlementRef([7u8; 32]), 0);
     let proof = MediatorAffirmationProof::<()>::new(
         &mut rng,
         &leg_ref,
-        &med_enc,
+        &leg_enc,
         &mediator_keys,
         0,    // key_index
         true, // accept
@@ -138,9 +137,11 @@ pub fn gen_mediator_proof() {
 
 #[test]
 fn verify_v1_mediator_proof() {
-    let (med_enc, _) = mediator_proof_inputs();
+    let (leg_enc, _) = mediator_proof_inputs();
     let proof: MediatorAffirmationProof = load_scale_v1(MEDIATOR_PROOF);
-    proof.verify(&med_enc).unwrap();
+    proof
+        .verify(&leg_enc, |_, id| Err(Error::MediatorNotFound(id)))
+        .unwrap();
 }
 
 /// Verify a settlement proof loaded from disk.
