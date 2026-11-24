@@ -1,5 +1,3 @@
-#[cfg(feature = "host_proofs")]
-use crate::poseidon_impls::utils::{mat_inverse, mat_vec_mul};
 use crate::{Error, error::Result};
 use ark_ff::PrimeField;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
@@ -39,8 +37,9 @@ impl<F: PrimeField> Poseidon2Params<F> {
         let r = rounds_f / 2;
         let rounds = rounds_f + rounds_p;
         if round_constants.len() != rounds {
-            return Err(Error::IncorrectRoundConstantsForPoseidon2(
-                round_constants.len().min(rounds),
+            return Err(Error::IncorrectNumberOfRoundConstantsForPoseidon2(
+                rounds,
+                round_constants.len(),
             ));
         }
         for (i, rc) in round_constants.iter().enumerate() {
@@ -75,34 +74,6 @@ impl<F: PrimeField> Poseidon2Params<F> {
             .collect();
 
         Self::new(state_size, degree, rounds_f, rounds_p, round_constants)
-    }
-
-    #[cfg(feature = "host_proofs")]
-    #[allow(dead_code)]
-    pub fn equivalent_round_constants(
-        round_constants: &[Vec<F>],
-        mat_internal: &[Vec<F>],
-        rounds_f_beginning: usize,
-        rounds_p: usize,
-    ) -> Vec<Vec<F>> {
-        let mut opt = vec![Vec::new(); rounds_p + 1];
-        let mat_internal_inv = mat_inverse(mat_internal);
-
-        let p_end = rounds_f_beginning + rounds_p - 1;
-        let mut tmp = round_constants[p_end].clone();
-        for i in (0..rounds_p - 1).rev() {
-            let inv_cip = mat_vec_mul(&mat_internal_inv, &tmp);
-            opt[i + 1] = vec![inv_cip[0]];
-            tmp = round_constants[rounds_f_beginning + i].clone();
-            tmp.resize(inv_cip.len(), F::zero());
-            for i in 1..inv_cip.len() {
-                tmp[i] += inv_cip[i];
-            }
-        }
-        opt[0] = tmp;
-        opt[rounds_p] = vec![F::zero(); opt[0].len()]; // opt[0].len() = t
-
-        opt
     }
 }
 

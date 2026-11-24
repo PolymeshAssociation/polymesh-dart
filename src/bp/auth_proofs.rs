@@ -15,6 +15,9 @@ use polymesh_dart_bp::auth_proofs::{
     account::AuthProofAffirmation as BPAuthProofAffirmation,
     fee_account::AuthProofFeePayment as BPAuthProofFeePayment,
 };
+#[cfg(feature = "std")]
+use polymesh_dart_bp::poseidon_impls::poseidon_2::params::pallas::get_poseidon2_params_for_2_1_hashing;
+#[cfg(not(feature = "std"))]
 use polymesh_dart_bp::poseidon_impls::poseidon_2::params::pallas::new_poseidon2_params_for_2_1_hashing;
 use polymesh_dart_common::{AssetId, Balance, SkGenCounter};
 
@@ -230,7 +233,7 @@ fn registration_txn_type(txn_type: DeviceTxnType) -> Result<AssetId, Error> {
 
 /// Create `AuthProofOnlySks` for account registration (2 keys), bound to the commitment to a new
 /// account with the `(randomness, rho_randomness)` of `derive_account_randomness` for `seed`, `path`,
-/// `counter_s` and the request's asset id and counter. Rejects a `randomness` of small order.
+/// `counter_s` and the request's asset id and counter. Rejects a `randomness` or `rho` of small order.
 pub fn create_registration_auth_proof<R: RngCore + CryptoRng>(
     rng: &mut R,
     keys: &AuthSigningKeys,
@@ -272,6 +275,13 @@ fn registration_auth_proof<R: RngCore + CryptoRng>(
     let nonce = ledger_nonce(&request.challenge_h_bytes, &request.nonce);
     let pk_aff = PallasA::try_from(&request.pk_aff)?;
     let pk_enc = PallasA::try_from(&request.pk_enc)?;
+
+    // Without `std` the parameters are built per call and freed after.
+    #[cfg(feature = "std")]
+    let poseidon_params = get_poseidon2_params_for_2_1_hashing()?;
+    #[cfg(not(feature = "std"))]
+    let poseidon_params = &new_poseidon2_params_for_2_1_hashing()?;
+
     let account_commitment = registration_account_commitment(
         hash_identity::<PallasScalar>(&request.nonce),
         pk_aff,
@@ -280,7 +290,7 @@ fn registration_auth_proof<R: RngCore + CryptoRng>(
         request.counter,
         randomness,
         rho_randomness,
-        &new_poseidon2_params_for_2_1_hashing()?,
+        poseidon_params,
         &PALLAS_FR_SMOOTH_ORDER,
         gens.account_comm_key,
     )?;

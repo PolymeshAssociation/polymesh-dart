@@ -682,7 +682,7 @@ impl<T: DartLimits> AccountAssetRegistrationProof<T> {
             &DeviceGenerators::from_host_given_pc_gens(tree_params.even_parameters.pc_gens()),
         )?;
 
-        let proof = protocol.finish(rng, &device_response, counter, tree_params)?;
+        let proof = protocol.finish(rng, &device_response, tree_params)?;
         Ok((proof, account_state))
     }
 

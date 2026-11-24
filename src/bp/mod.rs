@@ -1346,7 +1346,7 @@ mod tests {
         .unwrap();
 
         let proof: AccountAssetRegistrationProof<()> = protocol
-            .finish(&mut rng, &device_response, counter, tree_params)
+            .finish(&mut rng, &device_response, tree_params)
             .unwrap();
 
         proof
@@ -1398,7 +1398,7 @@ mod tests {
             )
             .unwrap();
             let proof: AccountAssetRegistrationProof<()> = protocol
-                .finish(&mut rng, &device_response, counter, tree_params)
+                .finish(&mut rng, &device_response, tree_params)
                 .unwrap();
             proof.verify(ctx, tree_params, &mut rng, &AssetPkTLookup::default())
         };
@@ -1555,10 +1555,10 @@ mod tests {
         .unwrap();
 
         let proof1 = protocol1
-            .finish(&mut rng, &device_response1, counter, tree_params)
+            .finish(&mut rng, &device_response1, tree_params)
             .unwrap();
         let proof2 = protocol2
-            .finish(&mut rng, &device_response2, counter, tree_params)
+            .finish(&mut rng, &device_response2, tree_params)
             .unwrap();
 
         let batched: BatchedAccountAssetRegistrationProof = BatchedAccountAssetRegistrationProof {

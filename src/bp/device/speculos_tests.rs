@@ -306,12 +306,7 @@ fn speculos_account_asset_registration() {
     let response = AccountRegistrationDeviceResponse::decode(&mut &payload(&data)[..]).unwrap();
 
     let proof = protocol
-        .finish::<_, ()>(
-            &mut rng,
-            &response,
-            COUNTER,
-            AccountTreeConfig::parameters(),
-        )
+        .finish::<_, ()>(&mut rng, &response, AccountTreeConfig::parameters())
         .unwrap();
     proof
         .verify(

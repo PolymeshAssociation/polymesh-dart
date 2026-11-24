@@ -23,6 +23,7 @@ type BPRegTxnWithoutSkProtocol =
 
 pub struct AccountRegHostProtocol {
     account_state: AccountAssetState,
+    counter: NullifierSkGenCounter,
     protocol: BPRegTxnWithoutSkProtocol,
     prover: bulletproofs::r1cs::Prover<'static, MerlinTranscript, PallasA>,
 }
@@ -93,6 +94,7 @@ impl AccountRegHostProtocol {
         Ok((
             Self {
                 account_state: account_state.clone(),
+                counter,
                 protocol,
                 prover,
             },
@@ -104,7 +106,6 @@ impl AccountRegHostProtocol {
         mut self,
         rng: &mut R,
         device_response: &AccountRegistrationDeviceResponse,
-        counter: NullifierSkGenCounter,
         tree_params: &CurveTreeParameters<AccountTreeConfig>,
     ) -> Result<AccountAssetRegistrationProof<T>, Error> {
         let auth_proof = device_response.0.0.decode()?;
@@ -130,7 +131,7 @@ impl AccountRegHostProtocol {
                 enc: self.account_state.pk_enc(),
             },
             asset_id: self.account_state.asset_id(),
-            counter,
+            counter: self.counter,
             account_state_commitment: self.account_state.current_commitment()?,
             inner: BoundedCanonical::wrap(&bp_proof)?,
         })

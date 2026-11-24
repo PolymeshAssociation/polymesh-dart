@@ -110,12 +110,7 @@ pub fn run_register_mint_affirm<D: AuthDevice>(device: &mut D) {
     .unwrap();
     let response = device.registration_proof(request).unwrap();
     let reg_proof = protocol
-        .finish::<_, ()>(
-            &mut rng,
-            &response,
-            counter,
-            AccountTreeConfig::parameters(),
-        )
+        .finish::<_, ()>(&mut rng, &response, AccountTreeConfig::parameters())
         .unwrap();
     reg_proof
         .verify(

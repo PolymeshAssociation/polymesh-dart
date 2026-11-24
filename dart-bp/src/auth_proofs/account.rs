@@ -24,7 +24,7 @@ use ark_std::string::ToString;
 use ark_std::{UniformRand, format, vec, vec::Vec};
 use dock_crypto_utils::randomized_mult_checker::RandomizedMultChecker;
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
-use polymesh_dart_common::AssetId;
+use polymesh_dart_common::{AssetId, NullifierSkGenCounter};
 use rand_core::CryptoRngCore;
 use schnorr_pok::SchnorrResponse;
 use schnorr_pok::discrete_log::{
@@ -1072,16 +1072,16 @@ mod serialization {
     }
 }
 
-/// Commitment to the new account `AccountState::new_given_randomness` builds. Rejects a `randomness`
-/// without `has_large_multiplicative_order`. The device computes it from the `randomness` and
-/// `rho_randomness` it derives and binds it to its auth proof.
+/// Commitment to the new account `AccountState::new_given_randomness` builds. Rejects unless both
+/// `randomness` and `rho` have `has_large_multiplicative_order`. The device computes it from the
+/// `randomness` and `rho_randomness` it derives and binds it to its auth proof.
 #[allow(clippy::too_many_arguments)]
 pub fn registration_account_commitment<G: AffineRepr>(
     id: G::ScalarField,
     pk_aff: G,
     pk_enc: G,
     asset_id: AssetId,
-    counter: polymesh_dart_common::NullifierSkGenCounter,
+    counter: NullifierSkGenCounter,
     randomness: G::ScalarField,
     rho_randomness: G::ScalarField,
     poseidon_params: &Poseidon2Params<G::ScalarField>,
@@ -1097,7 +1097,7 @@ pub fn registration_account_commitment<G: AffineRepr>(
     #[cfg(feature = "ignore_prover_input_sanitation")]
     let _ = smooth_order;
 
-    AccountState::new_given_randomness(
+    let state = AccountState::new_given_randomness(
         id,
         pk_aff,
         pk_enc,
@@ -1106,8 +1106,15 @@ pub fn registration_account_commitment<G: AffineRepr>(
         randomness,
         rho_randomness,
         poseidon_params,
-    )?
-    .commit(account_comm_key)
+    )?;
+
+    #[cfg(not(feature = "ignore_prover_input_sanitation"))]
+    if !has_large_multiplicative_order(state.rho, smooth_order) {
+        return Err(Error::ProofGenerationError(
+            "rho has small multiplicative order".to_string(),
+        ));
+    }
+    state.commit(account_comm_key)
 }
 
 #[cfg(all(test, feature = "host_proofs"))]

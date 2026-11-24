@@ -331,12 +331,7 @@ fn ledger_account_asset_registration_roundtrip() {
 
     // Host completes and verifies.
     let proof = protocol
-        .finish::<_, ()>(
-            &mut rng,
-            &response,
-            COUNTER,
-            AccountTreeConfig::parameters(),
-        )
+        .finish::<_, ()>(&mut rng, &response, AccountTreeConfig::parameters())
         .unwrap();
     proof
         .verify(

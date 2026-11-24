@@ -178,12 +178,7 @@ fn key_persists_across_restart() {
     .unwrap();
     let response = device.registration_proof(request).unwrap();
     let proof = protocol
-        .finish::<_, ()>(
-            &mut rng,
-            &response,
-            counter,
-            AccountTreeConfig::parameters(),
-        )
+        .finish::<_, ()>(&mut rng, &response, AccountTreeConfig::parameters())
         .unwrap();
     proof
         .verify(
@@ -220,12 +215,7 @@ fn registration_rejects_host_chosen_randomness() {
     .unwrap();
     let response = device.registration_proof(request).unwrap();
     let verified = protocol
-        .finish::<_, ()>(
-            &mut rng,
-            &response,
-            counter,
-            AccountTreeConfig::parameters(),
-        )
+        .finish::<_, ()>(&mut rng, &response, AccountTreeConfig::parameters())
         .and_then(|proof| {
             proof.verify(
                 identity,

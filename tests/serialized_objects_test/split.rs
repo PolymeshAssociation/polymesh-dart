@@ -304,7 +304,7 @@ pub fn gen_account_reg_split() {
 
     let res: AccountRegistrationDeviceResponse = load_scale_v1(ACCOUNT_REG_SPLIT_RESPONSE);
     let proof = protocol
-        .finish::<_, ()>(&mut rng, &res, counter, AccountTreeConfig::parameters())
+        .finish::<_, ()>(&mut rng, &res, AccountTreeConfig::parameters())
         .unwrap();
     save_scale_v1(ACCOUNT_REG_SPLIT_PROOF, &proof);
 }
