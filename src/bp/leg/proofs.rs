@@ -129,11 +129,12 @@ pub struct MediatorAffirmationProof<T: DartLimits = ()> {
 }
 
 impl<T: DartLimits> MediatorAffirmationProof<T> {
-    /// Affirm a leg whose asset-id is hidden.
+    /// Affirm or reject a leg. Uses the ring affirmation when the leg's asset-id is hidden and the
+    /// proof of knowledge of the affirmation key when it is revealed.
     pub fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
         leg_ref: &LegRef,
-        leg_enc: &MediatorEncryption,
+        leg_enc: &LegEncrypted,
         mediator_keys: &AccountKeys,
         key_index: MediatorId,
         accept: bool,
@@ -145,76 +146,57 @@ impl<T: DartLimits> MediatorAffirmationProof<T> {
         rng: &mut R,
         leg_ref: &LegRef,
         ctx: &[u8],
-        leg_enc: &MediatorEncryption,
+        leg_enc: &LegEncrypted,
         mediator_keys: &AccountKeys,
         key_index: MediatorId,
         accept: bool,
     ) -> Result<Self, Error> {
         let ctx = compose_ctx(ctx, &leg_ref.context());
-        let med = leg_enc.decode()?;
-        // The mediator's encryption key is one of the asset's and its index is found by trial
-        // decryption. The ring hides it so it must not be stored or sent anywhere.
-        let i = med.find_key_index(
-            &mediator_keys.enc.secret.0.0,
-            &mediator_keys.acct.public.get_affine()?,
-        )?;
-        let proof = mediator::MediatorTxnProof::new(
-            rng,
-            mediator_keys.acct.secret.0.0,
-            mediator_keys.enc.secret.0.0,
-            key_index as usize,
-            i,
-            accept,
-            &ctx,
-            &med,
-            dart_gens().sig_key_gen(),
-        )?;
+        let leg_enc = leg_enc.decode()?;
+        let core = &leg_enc.leg_enc_core_and_eph_keys.core;
+        let inner = if core.is_asset_id_revealed() {
+            let proof = mediator::PublicAssetMediatorTxnProof::new(
+                rng,
+                mediator_keys.acct.secret.0.0,
+                key_index as usize,
+                accept,
+                &ctx,
+                core,
+                &leg_enc.eph_pk_enc_keys,
+                &mediator_keys.acct.public.get_affine()?,
+                &dart_gens().sig_key_gen(),
+            )?;
+            MediatorAffirmationInner::Revealed(BoundedCanonical::wrap(&proof)?)
+        } else {
+            let med = leg_enc.mediator_encryption(key_index as usize)?;
+            // The mediator's encryption key is one of the asset's and its index is found by trial
+            // decryption. The ring hides it so it must not be stored or sent anywhere.
+            let i = med.find_key_index(
+                &mediator_keys.enc.secret.0.0,
+                &mediator_keys.acct.public.get_affine()?,
+            )?;
+            let proof = mediator::MediatorTxnProof::new(
+                rng,
+                mediator_keys.acct.secret.0.0,
+                mediator_keys.enc.secret.0.0,
+                key_index as usize,
+                i,
+                accept,
+                &ctx,
+                core,
+                &leg_enc.eph_pk_enc_keys,
+                med,
+                dart_gens().sig_key_gen(),
+            )?;
+            MediatorAffirmationInner::Hidden(BoundedCanonical::wrap(&proof)?)
+        };
 
         Ok(Self {
             leg_ref: leg_ref.clone(),
             accept,
             key_index,
 
-            inner: MediatorAffirmationInner::Hidden(BoundedCanonical::wrap(&proof)?),
-        })
-    }
-
-    /// Affirm a leg whose asset-id is revealed. `key_index` is the mediator's position in the
-    /// asset's registered mediators.
-    pub fn new_revealed<R: RngCore + CryptoRng>(
-        rng: &mut R,
-        leg_ref: &LegRef,
-        mediator_keys: &AccountKeys,
-        key_index: MediatorId,
-        accept: bool,
-    ) -> Result<Self, Error> {
-        Self::new_revealed_with_context(rng, leg_ref, &[], mediator_keys, key_index, accept)
-    }
-
-    pub fn new_revealed_with_context<R: RngCore + CryptoRng>(
-        rng: &mut R,
-        leg_ref: &LegRef,
-        ctx: &[u8],
-        mediator_keys: &AccountKeys,
-        key_index: MediatorId,
-        accept: bool,
-    ) -> Result<Self, Error> {
-        let ctx = compose_ctx(ctx, &leg_ref.context());
-        let proof = mediator::PublicAssetMediatorTxnProof::new(
-            rng,
-            mediator_keys.acct.secret.0.0,
-            accept,
-            &ctx,
-            &mediator_keys.acct.public.get_affine()?,
-            &dart_gens().sig_key_gen(),
-        )?;
-
-        Ok(Self {
-            leg_ref: leg_ref.clone(),
-            accept,
-            key_index,
-
-            inner: MediatorAffirmationInner::Revealed(BoundedCanonical::wrap(&proof)?),
+            inner,
         })
     }
 
@@ -223,55 +205,52 @@ impl<T: DartLimits> MediatorAffirmationProof<T> {
         matches!(self.inner, MediatorAffirmationInner::Revealed(_))
     }
 
-    /// Verify a leg whose asset-id is hidden.
-    pub fn verify(&self, leg_enc: &MediatorEncryption) -> Result<(), Error> {
-        self.verify_with_context(&[], leg_enc)
+    /// Verify against the leg. `lookup` returns the asset's registered mediator key at the given
+    /// position and is called only when the leg's asset-id is revealed.
+    pub fn verify(
+        &self,
+        leg_enc: &LegEncrypted,
+        lookup: impl FnOnce(AssetId, MediatorId) -> Result<AccountPublicKey, Error>,
+    ) -> Result<(), Error> {
+        self.verify_with_context(&[], leg_enc, lookup)
     }
 
     pub fn verify_with_context(
         &self,
         ctx: &[u8],
-        leg_enc: &MediatorEncryption,
+        leg_enc: &LegEncrypted,
+        lookup: impl FnOnce(AssetId, MediatorId) -> Result<AccountPublicKey, Error>,
     ) -> Result<(), Error> {
         let ctx = compose_ctx(ctx, &self.leg_ref.context());
-        match &self.inner {
-            MediatorAffirmationInner::Hidden(inner) => {
+        let leg_enc = leg_enc.decode()?;
+        let core = &leg_enc.leg_enc_core_and_eph_keys.core;
+        match (&self.inner, core.asset_id()) {
+            (MediatorAffirmationInner::Hidden(inner), None) => {
                 inner.decode()?.verify(
                     self.key_index as usize,
                     self.accept,
                     &ctx,
-                    &leg_enc.decode()?,
+                    core,
+                    &leg_enc.eph_pk_enc_keys,
+                    leg_enc.mediator_encryption(self.key_index as usize)?,
                     dart_gens().sig_key_gen(),
                 )?;
-                Ok(())
             }
-            _ => Err(Error::InvalidProofType),
-        }
-    }
-
-    /// Verify a leg whose asset-id is revealed.
-    pub fn verify_revealed(&self, mediator_pk: &AccountPublicKey) -> Result<(), Error> {
-        self.verify_revealed_with_context(&[], mediator_pk)
-    }
-
-    pub fn verify_revealed_with_context(
-        &self,
-        ctx: &[u8],
-        mediator_pk: &AccountPublicKey,
-    ) -> Result<(), Error> {
-        let ctx = compose_ctx(ctx, &self.leg_ref.context());
-        match &self.inner {
-            MediatorAffirmationInner::Revealed(inner) => {
+            (MediatorAffirmationInner::Revealed(inner), Some(asset_id)) => {
+                let mediator_pk = lookup(asset_id, self.key_index)?;
                 inner.decode()?.verify(
+                    self.key_index as usize,
                     self.accept,
                     &ctx,
+                    core,
+                    &leg_enc.eph_pk_enc_keys,
                     &mediator_pk.get_affine()?,
                     &dart_gens().sig_key_gen(),
                     None,
                 )?;
-                Ok(())
             }
-            _ => Err(Error::InvalidProofType),
+            _ => return Err(Error::InvalidProofType),
         }
+        Ok(())
     }
 }

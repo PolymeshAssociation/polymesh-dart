@@ -1,5 +1,7 @@
-use crate::leg::MediatorEncryption;
-use crate::{Error, NONCE_LABEL, dst, error::Result};
+use crate::leg::{EphemeralPublicKey, LegEncryptionCore, MediatorEncryption};
+use crate::{
+    ENC_KEYS_EPH_PK_LABEL, Error, LEG_ENC_LABEL, NONCE_LABEL, add_to_transcript, dst, error::Result,
+};
 use ark_ec::AffineRepr;
 use ark_ec::CurveGroup;
 use ark_ec::scalar_mul::BatchMulPreprocessing;
@@ -142,12 +144,15 @@ impl<G: AffineRepr> CdsOr<G> {
 
 /// This is the proof for mediator affirm/reject. A CDS ring over the mediator entry:
 /// `ct_med = eph_pk_med_keys[k] * sk_enc^{-1} + sig_key_gen * sk_aff` for the mediator's own encryption-key index `k`.
+/// The transcript binds the leg's [`LegEncryptionCore`] and `eph_pk_enc_keys`.
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct MediatorTxnProof<G: AffineRepr>(pub CdsOr<G>);
 
 impl<G: AffineRepr> MediatorTxnProof<G> {
     /// `med_index` is the mediator's index in the leg encryption and `enc_key_index` is the index of its encryption
     /// key in [`MediatorEncryption::eph_pk_med_keys`]. `enc_key_index` is hidden by the ring and must not be revealed.
+    /// `core`, `eph_pk_enc_keys` and `med` are the leg encryption's core, the ephemeral public keys of all its asset
+    /// encryption keys and its mediator entry at `med_index`.
     pub fn new<R: CryptoRngCore>(
         rng: &mut R,
         mediator_sk: G::ScalarField,
@@ -156,6 +161,8 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
         enc_key_index: usize,
         accept: bool,
         nonce: &[u8],
+        core: &LegEncryptionCore<G>,
+        eph_pk_enc_keys: &[EphemeralPublicKey<G>],
         med: &MediatorEncryption<G>,
         sig_key_gen: G,
     ) -> Result<Self> {
@@ -168,6 +175,8 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
             enc_key_index,
             accept,
             nonce,
+            core,
+            eph_pk_enc_keys,
             med,
             sig_key_gen,
             &mut transcript,
@@ -182,11 +191,18 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
         enc_key_index: usize,
         accept: bool,
         nonce: &[u8],
+        core: &LegEncryptionCore<G>,
+        eph_pk_enc_keys: &[EphemeralPublicKey<G>],
         med: &MediatorEncryption<G>,
         sig_key_gen: G,
         transcript: &mut MerlinTranscript,
     ) -> Result<Self> {
-        Self::add_to_transcript(transcript, accept, med_index, nonce);
+        if core.is_asset_id_revealed() {
+            return Err(Error::ProofGenerationError(
+                "Leg asset-id is revealed".to_string(),
+            ));
+        }
+        Self::add_to_transcript(transcript, accept, med_index, nonce, core, eph_pk_enc_keys)?;
         let enc_sk_inv = enc_sk.inverse().ok_or(Error::InvertingZero)?;
         Zeroize::zeroize(&mut enc_sk);
         // One ring branch per encryption key, sharing `sig_key_gen` and the ciphertext `ct_med`.
@@ -207,6 +223,8 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
         med_index: usize,
         accept: bool,
         nonce: &[u8],
+        core: &LegEncryptionCore<G>,
+        eph_pk_enc_keys: &[EphemeralPublicKey<G>],
         med: &MediatorEncryption<G>,
         sig_key_gen: G,
     ) -> Result<()> {
@@ -215,6 +233,8 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
             med_index,
             accept,
             nonce,
+            core,
+            eph_pk_enc_keys,
             med,
             sig_key_gen,
             &mut transcript,
@@ -226,27 +246,38 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
         med_index: usize,
         accept: bool,
         nonce: &[u8],
+        core: &LegEncryptionCore<G>,
+        eph_pk_enc_keys: &[EphemeralPublicKey<G>],
         med: &MediatorEncryption<G>,
         sig_key_gen: G,
         transcript: &mut MerlinTranscript,
     ) -> Result<()> {
+        if core.is_asset_id_revealed() {
+            return Err(Error::ProofVerificationError(
+                "Leg asset-id is revealed".to_string(),
+            ));
+        }
         // The ring's extractor needs `mu_j != 0` to force the affirmer's encryption secret.
         if med.ct_med.is_zero() || med.eph_pk_med_keys.iter().any(|e| e.is_zero()) {
             return Err(Error::ProofVerificationError(
                 "ct_med or eph_pk_med_keys is identity".to_string(),
             ));
         }
-        Self::add_to_transcript(transcript, accept, med_index, nonce);
+        Self::add_to_transcript(transcript, accept, med_index, nonce, core, eph_pk_enc_keys)?;
         self.0
             .verify(med.ct_med, &med.eph_pk_med_keys, sig_key_gen, transcript)
     }
 
+    /// Appends the decision, mediator index, nonce, leg core and the ephemeral public keys of the
+    /// leg's asset encryption keys.
     fn add_to_transcript(
         transcript: &mut MerlinTranscript,
         accept: bool,
         med_index: usize,
         nonce: &[u8],
-    ) {
+        core: &LegEncryptionCore<G>,
+        eph_pk_enc_keys: &[EphemeralPublicKey<G>],
+    ) -> Result<()> {
         if accept {
             transcript.append_message(MEDIATOR_TXN_RESPONSE_LABEL, MEDIATOR_TXN_ACCEPT_RESPONSE);
         } else {
@@ -254,20 +285,34 @@ impl<G: AffineRepr> MediatorTxnProof<G> {
         }
         transcript.append_message(MEDIATOR_INDEX_LABEL, &(med_index as u32).to_le_bytes());
         transcript.append_message(NONCE_LABEL, nonce);
+        add_to_transcript!(
+            transcript,
+            LEG_ENC_LABEL,
+            core,
+            ENC_KEYS_EPH_PK_LABEL,
+            eph_pk_enc_keys
+        );
+        Ok(())
     }
 }
 
 /// This is the proof for mediator affirm/reject when asset-id is revealed. Since the mediator's
 /// affirmation key is known to the verifier, this is a proof of knowledge of its secret key.
+/// The transcript binds the leg's [`LegEncryptionCore`] and `eph_pk_enc_keys`.
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct PublicAssetMediatorTxnProof<G: AffineRepr>(pub PokDiscreteLog<G>);
 
 impl<G: AffineRepr> PublicAssetMediatorTxnProof<G> {
+    /// `med_index` is the mediator's position in the asset's mediators. `core` and `eph_pk_enc_keys`
+    /// are the leg's core and the ephemeral public keys of all its asset encryption keys.
     pub fn new<R: CryptoRngCore>(
         rng: &mut R,
         mediator_sk: G::ScalarField,
+        med_index: usize,
         accept: bool,
         nonce: &[u8],
+        core: &LegEncryptionCore<G>,
+        eph_pk_enc_keys: &[EphemeralPublicKey<G>],
         mediator_pk: &G,
         sig_key_gen: &G,
     ) -> Result<Self> {
@@ -275,8 +320,11 @@ impl<G: AffineRepr> PublicAssetMediatorTxnProof<G> {
         Self::new_with_given_transcript(
             rng,
             mediator_sk,
+            med_index,
             accept,
             nonce,
+            core,
+            eph_pk_enc_keys,
             mediator_pk,
             sig_key_gen,
             &mut transcript,
@@ -286,13 +334,28 @@ impl<G: AffineRepr> PublicAssetMediatorTxnProof<G> {
     pub fn new_with_given_transcript<R: CryptoRngCore>(
         rng: &mut R,
         mut mediator_sk: G::ScalarField,
+        med_index: usize,
         accept: bool,
         nonce: &[u8],
+        core: &LegEncryptionCore<G>,
+        eph_pk_enc_keys: &[EphemeralPublicKey<G>],
         mediator_pk: &G,
         sig_key_gen: &G,
         transcript: &mut MerlinTranscript,
     ) -> Result<Self> {
-        add_to_transcript(transcript, accept, nonce);
+        if !core.is_asset_id_revealed() {
+            return Err(Error::ProofGenerationError(
+                "Leg asset-id is not revealed".to_string(),
+            ));
+        }
+        MediatorTxnProof::<G>::add_to_transcript(
+            transcript,
+            accept,
+            med_index,
+            nonce,
+            core,
+            eph_pk_enc_keys,
+        )?;
         let proto =
             PokDiscreteLogProtocol::init(mediator_sk, G::ScalarField::rand(rng), sig_key_gen);
         Zeroize::zeroize(&mut mediator_sk);
@@ -308,16 +371,22 @@ impl<G: AffineRepr> PublicAssetMediatorTxnProof<G> {
 
     pub fn verify(
         &self,
+        med_index: usize,
         accept: bool,
         nonce: &[u8],
+        core: &LegEncryptionCore<G>,
+        eph_pk_enc_keys: &[EphemeralPublicKey<G>],
         mediator_pk: &G,
         sig_key_gen: &G,
         rmc: Option<&mut RandomizedMultChecker<G>>,
     ) -> Result<()> {
         let mut transcript = MerlinTranscript::new(PUBLIC_MEDIATOR_TXN_LABEL);
         self.verify_with_given_transcript(
+            med_index,
             accept,
             nonce,
+            core,
+            eph_pk_enc_keys,
             mediator_pk,
             sig_key_gen,
             &mut transcript,
@@ -327,14 +396,29 @@ impl<G: AffineRepr> PublicAssetMediatorTxnProof<G> {
 
     pub fn verify_with_given_transcript(
         &self,
+        med_index: usize,
         accept: bool,
         nonce: &[u8],
+        core: &LegEncryptionCore<G>,
+        eph_pk_enc_keys: &[EphemeralPublicKey<G>],
         mediator_pk: &G,
         sig_key_gen: &G,
         transcript: &mut MerlinTranscript,
         rmc: Option<&mut RandomizedMultChecker<G>>,
     ) -> Result<()> {
-        add_to_transcript(transcript, accept, nonce);
+        if !core.is_asset_id_revealed() {
+            return Err(Error::ProofVerificationError(
+                "Leg asset-id is not revealed".to_string(),
+            ));
+        }
+        MediatorTxnProof::<G>::add_to_transcript(
+            transcript,
+            accept,
+            med_index,
+            nonce,
+            core,
+            eph_pk_enc_keys,
+        )?;
         self.0.challenge_contribution(
             sig_key_gen,
             mediator_pk,
@@ -364,18 +448,10 @@ impl<G: AffineRepr> PublicAssetMediatorTxnProof<G> {
     }
 }
 
-fn add_to_transcript(transcript: &mut MerlinTranscript, accept: bool, nonce: &[u8]) {
-    if accept {
-        transcript.append_message(MEDIATOR_TXN_RESPONSE_LABEL, MEDIATOR_TXN_ACCEPT_RESPONSE);
-    } else {
-        transcript.append_message(MEDIATOR_TXN_RESPONSE_LABEL, MEDIATOR_TXN_REJECT_RESPONSE);
-    }
-    transcript.append_message(NONCE_LABEL, nonce);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::leg::{Leg, LegEncConfig, LegEncryption, PartyVisibility};
     use ark_serialize::CanonicalSerialize;
     use bulletproofs::hash_to_curve_pasta::hash_to_pallas;
     use std::time::Instant;
@@ -388,45 +464,119 @@ mod tests {
         (sk, (base * sk).into_affine())
     }
 
-    fn encrypt_mediator<G: AffineRepr>(
-        g: G,
-        enc_keys: &[G],
-        r: G::ScalarField,
-        pk_aff: G,
-    ) -> MediatorEncryption<G> {
-        let mut proj = Vec::with_capacity(1 + enc_keys.len());
-        proj.push(g * r + pk_aff);
-        proj.extend(enc_keys.iter().map(|e| *e * r));
-        let aff = G::Group::normalize_batch(&proj);
-        MediatorEncryption {
-            ct_med: aff[0],
-            eph_pk_med_keys: aff[1..].to_vec(),
-        }
+    /// `(enc_key_gen, sig_key_gen, enc_gen)`
+    fn gens() -> (PallasA, PallasA, PallasA) {
+        (
+            hash_to_pallas(b"test", b"enc-key-gen").into_affine(),
+            hash_to_pallas(b"test", b"sig-key-gen").into_affine(),
+            hash_to_pallas(b"test", b"enc-gen").into_affine(),
+        )
+    }
+
+    /// Leg between fresh sender and receiver, encrypted to `enc_keys` with mediator affirmation keys `med_keys`.
+    fn encrypt_leg<R: CryptoRngCore>(
+        rng: &mut R,
+        enc_keys: &[PallasA],
+        med_keys: &[PallasA],
+        reveal_asset_id: bool,
+    ) -> LegEncryption<PallasA> {
+        let (g, _, enc_gen) = gens();
+        let (_, pk_s) = keygen(rng, g);
+        let (_, pk_r) = keygen(rng, g);
+        let leg = Leg::new(
+            pk_s,
+            pk_r,
+            100,
+            5,
+            enc_keys.to_vec(),
+            med_keys.to_vec(),
+            vec![],
+        )
+        .unwrap();
+        let config = LegEncConfig {
+            visibility: PartyVisibility::FullVisibility,
+            reveal_asset_id,
+        };
+        leg.encrypt(rng, config, g, enc_gen).unwrap().0
+    }
+
+    fn core(leg: &LegEncryption<PallasA>) -> &LegEncryptionCore<PallasA> {
+        &leg.leg_enc_core_and_eph_keys.core
     }
 
     #[test]
     fn mediator_ring() {
         let mut rng = rand::thread_rng();
-        let g = hash_to_pallas(b"test", b"enc-key-gen").into_affine();
-        let h = hash_to_pallas(b"test", b"sig-key-gen").into_affine();
+        let (g, h, _) = gens();
         let n = 5usize;
         let enc: Vec<(Fr, PallasA)> = (0..n).map(|_| keygen(&mut rng, g)).collect();
         let enc_keys: Vec<PallasA> = enc.iter().map(|(_, p)| *p).collect();
+        let (_, other_pk_aff) = keygen(&mut rng, h);
         let (sigma, pk_aff) = keygen(&mut rng, h);
-        let mu = Fr::rand(&mut rng);
-        let med = encrypt_mediator(g, &enc_keys, mu, pk_aff);
+        let leg = encrypt_leg(&mut rng, &enc_keys, &[other_pk_aff, pk_aff], false);
+        let other_leg = encrypt_leg(&mut rng, &enc_keys, &[other_pk_aff, pk_aff], false);
 
         // Ring affirms from the real key at 2 for the mediator at slot 1.
         let k_ = 2;
         let slot = 1;
         let nonce = b"leg-nonce";
-        let pr = MediatorTxnProof::new(&mut rng, sigma, enc[k_].0, slot, k_, true, nonce, &med, h)
-            .unwrap();
-        assert!(pr.verify(slot, true, nonce, &med, h).is_ok());
+        let med = leg.mediator_encryption(slot).unwrap();
+        assert_eq!(med.find_key_index(&enc[k_].0, &pk_aff).unwrap(), k_);
+        let eph = &leg.eph_pk_enc_keys;
+        let pr = MediatorTxnProof::new(
+            &mut rng,
+            sigma,
+            enc[k_].0,
+            slot,
+            k_,
+            true,
+            nonce,
+            core(&leg),
+            eph,
+            med,
+            h,
+        )
+        .unwrap();
+        assert!(
+            pr.verify(slot, true, nonce, core(&leg), eph, med, h)
+                .is_ok()
+        );
         // An accept proof must not verify as a reject, under a different nonce, nor at another slot.
-        assert!(pr.verify(slot, false, nonce, &med, h).is_err());
-        assert!(pr.verify(slot, true, b"other-nonce", &med, h).is_err());
-        assert!(pr.verify(slot + 1, true, nonce, &med, h).is_err());
+        assert!(
+            pr.verify(slot, false, nonce, core(&leg), eph, med, h)
+                .is_err()
+        );
+        assert!(
+            pr.verify(slot, true, b"other-nonce", core(&leg), eph, med, h)
+                .is_err()
+        );
+        assert!(
+            pr.verify(slot - 1, true, nonce, core(&leg), eph, med, h)
+                .is_err()
+        );
+
+        // Any piece taken from another leg must fail.
+        let other_med = other_leg.mediator_encryption(slot).unwrap();
+        assert!(
+            pr.verify(slot, true, nonce, core(&other_leg), eph, med, h)
+                .is_err()
+        );
+        assert!(
+            pr.verify(
+                slot,
+                true,
+                nonce,
+                core(&leg),
+                &other_leg.eph_pk_enc_keys,
+                med,
+                h
+            )
+            .is_err()
+        );
+        assert!(
+            pr.verify(slot, true, nonce, core(&leg), eph, other_med, h)
+                .is_err()
+        );
 
         // Wrong affirmation secret must fail.
         let wrong_med_sk = Fr::rand(&mut rng);
@@ -438,65 +588,244 @@ mod tests {
             k_,
             true,
             nonce,
-            &med,
+            core(&leg),
+            eph,
+            med,
             h,
         )
         .unwrap();
-        assert!(bad.verify(slot, true, nonce, &med, h).is_err());
+        assert!(
+            bad.verify(slot, true, nonce, core(&leg), eph, med, h)
+                .is_err()
+        );
         // Affirming from a key the mediator does not hold must fail.
         let wrong_enc_sk = Fr::rand(&mut rng);
-        let bad2 =
-            MediatorTxnProof::new(&mut rng, sigma, wrong_enc_sk, slot, 0, true, nonce, &med, h)
-                .unwrap();
-        assert!(bad2.verify(slot, true, nonce, &med, h).is_err());
+        let bad2 = MediatorTxnProof::new(
+            &mut rng,
+            sigma,
+            wrong_enc_sk,
+            slot,
+            0,
+            true,
+            nonce,
+            core(&leg),
+            eph,
+            med,
+            h,
+        )
+        .unwrap();
+        assert!(
+            bad2.verify(slot, true, nonce, core(&leg), eph, med, h)
+                .is_err()
+        );
 
         // Identity not allowed
         let mut identity_med = med.clone();
         identity_med.eph_pk_med_keys[0] = PallasA::zero();
-        assert!(pr.verify(slot, true, nonce, &identity_med, h).is_err());
+        assert!(
+            pr.verify(slot, true, nonce, core(&leg), eph, &identity_med, h)
+                .is_err()
+        );
+
+        // A leg with revealed asset-id is rejected by both prover and verifier.
+        let revealed_leg = encrypt_leg(&mut rng, &enc_keys, &[other_pk_aff, pk_aff], true);
+        let revealed_core = core(&revealed_leg);
+        let revealed_eph = &revealed_leg.eph_pk_enc_keys;
+        assert!(
+            MediatorTxnProof::new(
+                &mut rng,
+                sigma,
+                enc[k_].0,
+                slot,
+                k_,
+                true,
+                nonce,
+                revealed_core,
+                revealed_eph,
+                med,
+                h,
+            )
+            .is_err()
+        );
+        assert!(
+            pr.verify(slot, true, nonce, revealed_core, revealed_eph, med, h)
+                .is_err()
+        );
     }
 
     #[test]
     fn public_asset_mediator_action() {
         let mut rng = rand::thread_rng();
-        let h = hash_to_pallas(b"test", b"sig-key-gen").into_affine();
+        let (g, h, _) = gens();
         let nonce = b"test-nonce";
+        let enc_keys: Vec<PallasA> = (0..2).map(|_| keygen(&mut rng, g).1).collect();
+        let (_, other_pk_aff) = keygen(&mut rng, h);
         let (sigma, pk_aff) = keygen(&mut rng, h);
+        let leg = encrypt_leg(&mut rng, &enc_keys, &[other_pk_aff, pk_aff], true);
+        let other_leg = encrypt_leg(&mut rng, &enc_keys, &[other_pk_aff, pk_aff], true);
+        assert!(leg.mediators.is_none());
+        let eph = &leg.eph_pk_enc_keys;
+        let slot = 1;
 
         for accept in [true, false] {
-            let pr = PublicAssetMediatorTxnProof::new(&mut rng, sigma, accept, nonce, &pk_aff, &h)
-                .unwrap();
-            assert!(pr.verify(accept, nonce, &pk_aff, &h, None).is_ok());
+            let pr = PublicAssetMediatorTxnProof::new(
+                &mut rng,
+                sigma,
+                slot,
+                accept,
+                nonce,
+                core(&leg),
+                eph,
+                &pk_aff,
+                &h,
+            )
+            .unwrap();
+            assert!(
+                pr.verify(slot, accept, nonce, core(&leg), eph, &pk_aff, &h, None)
+                    .is_ok()
+            );
 
             let mut rmc = RandomizedMultChecker::new(Fr::rand(&mut rng));
             assert!(
-                pr.verify(accept, nonce, &pk_aff, &h, Some(&mut rmc))
-                    .is_ok()
+                pr.verify(
+                    slot,
+                    accept,
+                    nonce,
+                    core(&leg),
+                    eph,
+                    &pk_aff,
+                    &h,
+                    Some(&mut rmc)
+                )
+                .is_ok()
             );
             assert!(rmc.verify().is_ok());
 
-            // Must not verify as the opposite decision, under a different nonce, nor for another key.
-            assert!(pr.verify(!accept, nonce, &pk_aff, &h, None).is_err());
+            // Must not verify as the opposite decision, under a different nonce, at another slot, nor for another key.
             assert!(
-                pr.verify(accept, b"other-nonce", &pk_aff, &h, None)
+                pr.verify(slot, !accept, nonce, core(&leg), eph, &pk_aff, &h, None)
+                    .is_err()
+            );
+            assert!(
+                pr.verify(
+                    slot,
+                    accept,
+                    b"other-nonce",
+                    core(&leg),
+                    eph,
+                    &pk_aff,
+                    &h,
+                    None
+                )
+                .is_err()
+            );
+            assert!(
+                pr.verify(slot - 1, accept, nonce, core(&leg), eph, &pk_aff, &h, None)
                     .is_err()
             );
             let (_, other_pk) = keygen(&mut rng, h);
-            assert!(pr.verify(accept, nonce, &other_pk, &h, None).is_err());
+            assert!(
+                pr.verify(slot, accept, nonce, core(&leg), eph, &other_pk, &h, None)
+                    .is_err()
+            );
+
+            // Anything taken from another leg must fail.
+            assert!(
+                pr.verify(
+                    slot,
+                    accept,
+                    nonce,
+                    core(&other_leg),
+                    eph,
+                    &pk_aff,
+                    &h,
+                    None
+                )
+                .is_err()
+            );
+            assert!(
+                pr.verify(
+                    slot,
+                    accept,
+                    nonce,
+                    core(&leg),
+                    &other_leg.eph_pk_enc_keys,
+                    &pk_aff,
+                    &h,
+                    None
+                )
+                .is_err()
+            );
         }
 
         // Wrong secret key must fail.
         let wrong_sk = Fr::rand(&mut rng);
-        let bad =
-            PublicAssetMediatorTxnProof::new(&mut rng, wrong_sk, true, nonce, &pk_aff, &h).unwrap();
-        assert!(bad.verify(true, nonce, &pk_aff, &h, None).is_err());
+        let bad = PublicAssetMediatorTxnProof::new(
+            &mut rng,
+            wrong_sk,
+            slot,
+            true,
+            nonce,
+            core(&leg),
+            eph,
+            &pk_aff,
+            &h,
+        )
+        .unwrap();
+        assert!(
+            bad.verify(slot, true, nonce, core(&leg), eph, &pk_aff, &h, None)
+                .is_err()
+        );
+
+        // A leg with hidden asset-id is rejected by both prover and verifier.
+        let pr = PublicAssetMediatorTxnProof::new(
+            &mut rng,
+            sigma,
+            slot,
+            true,
+            nonce,
+            core(&leg),
+            eph,
+            &pk_aff,
+            &h,
+        )
+        .unwrap();
+        let hidden_leg = encrypt_leg(&mut rng, &enc_keys, &[other_pk_aff, pk_aff], false);
+        let hidden_core = core(&hidden_leg);
+        let hidden_eph = &hidden_leg.eph_pk_enc_keys;
+        assert!(
+            PublicAssetMediatorTxnProof::new(
+                &mut rng,
+                sigma,
+                slot,
+                true,
+                nonce,
+                hidden_core,
+                hidden_eph,
+                &pk_aff,
+                &h,
+            )
+            .is_err()
+        );
+        assert!(
+            pr.verify(
+                slot,
+                true,
+                nonce,
+                hidden_core,
+                hidden_eph,
+                &pk_aff,
+                &h,
+                None
+            )
+            .is_err()
+        );
     }
 
     #[test]
     fn mediator_ring_verification() {
         let mut rng = rand::thread_rng();
-        let g = hash_to_pallas(b"test", b"enc-key-gen").into_affine();
-        let h = hash_to_pallas(b"test", b"sig-key-gen").into_affine();
+        let (g, h, _) = gens();
         let nonce = b"test-nonce";
 
         println!(" ring_n  m_med | proof bytes | prove us | verify us");
@@ -504,10 +833,9 @@ mod tests {
             let enc: Vec<(Fr, PallasA)> = (0..n).map(|_| keygen(&mut rng, g)).collect();
             let enc_keys: Vec<PallasA> = enc.iter().map(|(_, p)| *p).collect();
             let meds: Vec<(Fr, PallasA)> = (0..m).map(|_| keygen(&mut rng, h)).collect();
-            let mus: Vec<Fr> = (0..m).map(|_| Fr::rand(&mut rng)).collect();
-            let entries: Vec<MediatorEncryption<PallasA>> = (0..m)
-                .map(|j| encrypt_mediator(g, &enc_keys, mus[j], meds[j].1))
-                .collect();
+            let med_keys: Vec<PallasA> = meds.iter().map(|(_, p)| *p).collect();
+            let leg = encrypt_leg(&mut rng, &enc_keys, &med_keys, false);
+            let eph = &leg.eph_pk_enc_keys;
 
             let clock = Instant::now();
             let proofs: Vec<MediatorTxnProof<PallasA>> = (0..m)
@@ -521,7 +849,9 @@ mod tests {
                         k_star,
                         true,
                         nonce,
-                        &entries[j],
+                        core(&leg),
+                        eph,
+                        leg.mediator_encryption(j).unwrap(),
                         h,
                     )
                     .unwrap()
@@ -531,7 +861,17 @@ mod tests {
 
             let clock = Instant::now();
             for j in 0..m {
-                proofs[j].verify(j, true, nonce, &entries[j], h).unwrap();
+                proofs[j]
+                    .verify(
+                        j,
+                        true,
+                        nonce,
+                        core(&leg),
+                        eph,
+                        leg.mediator_encryption(j).unwrap(),
+                        h,
+                    )
+                    .unwrap();
             }
             let verify_us = clock.elapsed().as_micros();
 

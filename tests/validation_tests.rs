@@ -140,12 +140,11 @@ fn build_instant_proof(
                 .iter()
                 .enumerate()
                 .map(|(idx, acct)| {
-                    let med_enc = s.leg_enc.mediator_encryption(idx as MediatorId)?;
                     let mediator_keys = acct.keys();
                     MediatorAffirmationProof::new(
                         rng,
                         &s.leg_ref,
-                        &med_enc,
+                        &s.leg_enc,
                         &mediator_keys,
                         idx as MediatorId,
                         true,
