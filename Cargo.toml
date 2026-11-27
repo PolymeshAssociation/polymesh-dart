@@ -150,7 +150,7 @@ scale-info = { workspace = true, default-features = false, features = [
 # `scale-codec` gives BoundedVec its Encode/Decode + TypeInfo impls (used in bp/encode.rs). In the
 # std build this comes in transitively; the minimal no_std/embedded build needs it enabled here.
 bounded-collections = { workspace = true, default-features = false, features = ["scale-codec"] }
-sp-io = { git = "https://github.com/PolymeshAssociation/polkadot-sdk", branch = "polymesh-v8-stable2603-7", default-features = false, optional = true }
+sp-io = { git = "https://github.com/PolymeshAssociation/polkadot-sdk", branch = "polymesh-v8-stable2609-2-polymesh-changes", default-features = false, optional = true }
 
 # serde support
 serde = { workspace = true, default-features = false, features = [
